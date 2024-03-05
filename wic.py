@@ -30,27 +30,29 @@ def ISetLastError(e):
   return e
 
 def GUID(*g):
-  return struct.pack('@LHH8B', *(struct.unpack('>LHH8B', bytes.fromhex(g[0].replace('-', ''))) if len(g) == 1 else g))
+  return struct.pack('=LHH8B', *(struct.unpack('>LHH8B', bytes.fromhex(g[0].replace('-', ''))) if len(g) == 1 else g))
 def GUID_S(g):
-  return '%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x' % struct.unpack('@LHH8B', g)
+  return '%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x' % struct.unpack('=LHH8B', g)
+
+class _IUtil:
+  @staticmethod
+  def _errcheck(r, f, a):
+    ISetLastError(r)
+    if r:
+      return None
+    return True if f._nout == 0 else (next if f._nout == 1 else tuple)(getattr(a[o], 'value', a[o]) if not isinstance(a[o], (ctypes.c_void_p, ctypes.Structure)) else a[o] for o in range(len(a) - f._nout, len(a)))
 
 class _IMeta(type):
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
     kwds['_protos'] = {**getattr(bases[0], '_protos', {})} if len(bases) > 0 else {}
     return kwds
-  @staticmethod
-  def errcheck(r, f, a):
-    ISetLastError(r)
-    if r:
-      return None
-    return True if f._nout == 0 else (next if f._nout == 1 else tuple)(getattr(a[o], 'value', a[o]) if not isinstance(a[o], (ctypes.c_void_p, ctypes.Structure)) else a[o] for o in range(len(a) - f._nout, len(a)))
   def __init__(cls, *args, **kwargs):
     super().__init__(*args, **kwargs)
     for n, (p, i, o) in tuple((n, pro) for n, pro in cls._protos.items() if isinstance(pro, tuple)):
       cls._protos[n] = ctypes.WINFUNCTYPE(wintypes.ULONG, *i, *o)(p, n, (*((1,) for _i in i), *((2,) for _o in o)))
       cls._protos[n]._nout = len(o)
-      cls._protos[n].errcheck = _IMeta.errcheck
+      cls._protos[n].errcheck = _IUtil._errcheck
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -299,29 +301,51 @@ class IWICStream(IStream):
   def CreateInMemory(cls, *args, **kwargs):
     raise AttributeError('type object %s has no attribute \'CreateInMemory\'' % cls.__name__)
 
-class _Resolve_NG:
+class _BGUID:
   @classmethod
   def name_guid(cls, n):
-    return cls._tab.get(n.lower(), cls._def)
-  @classmethod
-  def from_param(cls, obj):
-    return obj if isinstance(obj, cls) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) else ctypes.c_char_p(cls.name_guid(obj) if isinstance(obj, str) else obj))
-  @classmethod
-  def create_from(cls, obj):
-    if isinstance(obj, str):
-      obj = cls.name_guid(obj)
-    return ctypes.cast(ctypes.c_void_p(None), cls) if obj is None else cls(cls.__bases__[1]._type_(*obj))
-
-class _Resolve_GN:
+    return cls._tab_ng.get(n.lower(), cls._def) if isinstance(n, str) else n
   @classmethod
   def guid_name(cls, g):
-    return cls._tab.get(g, GUID_S(g))
+    return cls._tab_gn.get(g, GUID_S(g))
   @property
   def value(self):
-    return self.raw, self.guid_name(self.raw)
+    return self
   @value.setter
   def value(self, val):
-    self.raw = val
+    self.raw = val.raw
+  @property
+  def guid(self):
+    return self.raw
+  @guid.setter
+  def guid(self, val):
+    self.raw = (val or (b'\x00' * 16))
+  @property
+  def name(self):
+    return self.__class__.guid_name(self.raw)
+  @name.setter
+  def name(self, val):
+    self.raw = (self.__class__.name_guid(val) or (b'\x00' * 16))
+  def __init__(self, val=None):
+    if val is None:
+      self.__class__.__bases__[1].__init__(self)
+    else:
+      self.__class__.__bases__[1].__init__(self, *(self.__class__.name_guid(val) or (b'\x00' * 16)))
+  def __eq__(self, other):
+    return self.guid == (other.guid if isinstance(other, _BGUID) else self.__class__.name_guid(other))
+  def __str__(self):
+    return '<b\'\\x%s\': %s>' % ('\\x'.join(b.hex() for b in self), self.__class__.guid_name(self.raw))
+  def __repr__(self):
+    return str(self)
+
+class _BPGUID:
+  @classmethod
+  def from_param(cls, obj):
+    return obj if isinstance(obj, cls) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+  @classmethod
+  def create_from(cls, obj):
+    obj = cls._type_.name_guid(obj)
+    return ctypes.cast(ctypes.c_void_p(None), cls) if obj is None else cls(cls._type_(obj))
 
 class _GMeta(wintypes.GUID.__class__):
   def __init__(cls, *args, **kwargs):
@@ -348,16 +372,16 @@ WICContainerFormat = {
   'Dng': GUID(0xf3ff6d0d, 0x38c0, 0x41c4, 0xb1, 0xfe, 0x1f, 0x38, 0x24, 0xf1, 0x7b, 0x84),
   'Adng': GUID(0xf3ff6d0d, 0x38c0, 0x41c4, 0xb1, 0xfe, 0x1f, 0x38, 0x24, 0xf1, 0x7b, 0x84)
 }
-WICCONTAINERFORMAT = _GMeta('WICCONTAINERFORMAT', (_Resolve_GN, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab': {g: n for n, g in WICContainerFormat.items()}})
-WICPCONTAINERFORMAT = type('WICPCONTAINERFORMAT', (_Resolve_NG, ctypes.POINTER(WICCONTAINERFORMAT)), {'_type_': WICCONTAINERFORMAT, '_tab': {n.lower(): g for n, g in WICContainerFormat.items()}, '_def': None})
+WICCONTAINERFORMAT = _GMeta('WICCONTAINERFORMAT', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICContainerFormat.items()}, '_tab_gn': {g: n for n, g in WICContainerFormat.items()}, '_def': None})
+WICPCONTAINERFORMAT = type('WICPCONTAINERFORMAT', (_BPGUID, ctypes.POINTER(WICCONTAINERFORMAT)), {'_type_': WICCONTAINERFORMAT})
 
 WICVendorIdentification = {
   'Microsoft_': GUID(0x69fd0fdc, 0xa866, 0x4108, 0xb3, 0xb2, 0x98, 0x44, 0x7f, 0xa9, 0xed, 0xd4),
   'Microsoft': GUID(0xf0e749ca, 0xedef, 0x4589, 0xa7, 0x3a, 0xee, 0x0e, 0x62, 0x6a, 0x2a, 0x2b),
   'MicrosoftBuiltin': GUID(0x257a30fd, 0x6b6, 0x462b, 0xae, 0xa4, 0x63, 0xf7, 0xb, 0x86, 0xe5, 0x33)
 }
-WICVENDORIDENTIFICATION = _GMeta('WICVENDORIDENTIFICATION', (_Resolve_GN, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab': {g: n for n, g in WICVendorIdentification.items()}})
-WICPVENDORIDENTIFICATION = type('WICPVENDORIDENTIFICATION', (_Resolve_NG, ctypes.POINTER(WICVENDORIDENTIFICATION)), {'_type_': WICVENDORIDENTIFICATION, '_tab': {n.lower(): g for n, g in WICVendorIdentification.items()}, '_def': None})
+WICVENDORIDENTIFICATION = _GMeta('WICVENDORIDENTIFICATION', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICVendorIdentification.items()}, '_tab_gn': {g: n for n, g in WICVendorIdentification.items()}, '_def': None})
+WICPVENDORIDENTIFICATION = type('WICPVENDORIDENTIFICATION', (_BPGUID, ctypes.POINTER(WICVENDORIDENTIFICATION)), {'_type_': WICVENDORIDENTIFICATION})
 
 WICMetadataHandler = {
   'Unknown': GUID(0xa45e592f, 0x9078, 0x4a7c, 0xad, 0xb5, 0x4e, 0xdc, 0x4f, 0xd6, 0x1b, 0x1f),
@@ -405,8 +429,8 @@ WICMetadataHandler = {
   'DdsRoot': GUID(0x4a064603, 0x8c33, 0x4e60, 0x9c, 0x29, 0x13, 0x62, 0x31, 0x70, 0x2d, 0x08),
   **WICContainerFormat
 }
-WICMETADATAHANDLER = _GMeta('WICMETADATAHANDLER', (_Resolve_GN, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab': {g: n for n, g in WICMetadataHandler.items()}})
-WICPMETADATAHANDLER = type('WICPMETADATAHANDLER', (_Resolve_NG, ctypes.POINTER(WICMETADATAHANDLER)), {'_type_': WICMETADATAHANDLER, '_tab': {n.lower(): g for n, g in WICMetadataHandler.items()}, '_def': None})
+WICMETADATAHANDLER = _GMeta('WICMETADATAHANDLER', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICMetadataHandler.items()}, '_tab_gn': {g: n for n, g in WICMetadataHandler.items()}, '_def': None})
+WICPMETADATAHANDLER = type('WICPMETADATAHANDLER', (_BPGUID, ctypes.POINTER(WICMETADATAHANDLER)), {'_type_': WICMETADATAHANDLER})
 
 WICPixelFormat = {
  'DontCare': GUID(0x6fddc324 ,0x4e03 ,0x4bfe ,0xb1 ,0x85 ,0x3d ,0x77 ,0x76 ,0x8d ,0xc9 ,0x00),
@@ -501,8 +525,8 @@ WICPixelFormat = {
  '72bpp8ChannelsAlpha': GUID(0x6fddc324, 0x4e03, 0x4bfe, 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x33),
  '144bpp8ChannelsAlpha': GUID(0x6fddc324, 0x4e03, 0x4bfe, 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x39)
 }
-WICPIXELFORMAT = _GMeta('WICPIXELFORMAT', (_Resolve_GN, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab': {g: n for n, g in WICPixelFormat.items()}})
-WICPPIXELFORMAT = type('WICPPIXELFORMAT', (_Resolve_NG, ctypes.POINTER(WICPIXELFORMAT)), {'_type_': WICPIXELFORMAT, '_tab': {n.lower(): g for n, g in WICPixelFormat.items()}, '_def': None})
+WICPIXELFORMAT = _GMeta('WICPIXELFORMAT', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICPixelFormat.items()}, '_tab_gn': {g: n for n, g in WICPixelFormat.items()}, '_def': None})
+WICPPIXELFORMAT = type('WICPPIXELFORMAT', (_BPGUID, ctypes.POINTER(WICPIXELFORMAT)), {'_type_': WICPIXELFORMAT})
 
 WICComponent = {
   'BmpDecoder': GUID(0x6b462062, 0x7cbf, 0x400d, 0x9f, 0xdb, 0x81, 0x3d, 0xd1, 0xf, 0x27, 0x78),
@@ -621,10 +645,10 @@ WICComponent = {
   'DdsMetadataReader': GUID(0x276c88ca, 0x7533, 0x4a86, 0xb6, 0x76, 0x66, 0xb3, 0x60, 0x80, 0xd4, 0x84),
   'DdsMetadataWriter': GUID(0xfd688bbd, 0x31ed, 0x4db7, 0xa7, 0x23, 0x93, 0x49, 0x27, 0xd3, 0x83, 0x67)
 }
-WICCOMPONENT = _GMeta('WICCOMPONENT', (_Resolve_GN, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab': {g: n for n, g in WICComponent.items()}})
-WICPCOMPONENT = type('WICPCOMPONENT', (_Resolve_NG, ctypes.POINTER(WICCOMPONENT)), {'_type_': WICCOMPONENT, '_tab': {n.lower(): g for n, g in WICComponent.items()}, '_def': None})
+WICCOMPONENT = _GMeta('WICCOMPONENT', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICComponent.items()}, '_tab_gn': {g: n for n, g in WICComponent.items()}, '_def': None})
+WICPCOMPONENT = type('WICPCOMPONENT', (_BPGUID, ctypes.POINTER(WICCOMPONENT)), {'_type_': WICCOMPONENT})
 
-class _Resolve:
+class _BCode:
   @classmethod
   def name_code(cls, n):
     return cls._tab_nc.get(n.lower(), cls._def) if isinstance(n, str) else n
@@ -636,13 +660,36 @@ class _Resolve:
     return obj if isinstance(obj, cls.__bases__[1]) else cls.__bases__[1](cls.name_code(obj))
   @property
   def value(self):
-    v = self.__class__.__bases__[1].value.__get__(self)
-    return v, self.code_name(v)
+    return self
   @value.setter
   def value(self, val):
+    self.__class__.__bases__[1].value.__set__(self, val.__class__.__bases__[1].value.__get__(self))
+  @property
+  def code(self):
+    return self.__class__.__bases__[1].value.__get__(self)
+  @code.setter
+  def code(self, val):
     self.__class__.__bases__[1].value.__set__(self, val)
+  @property
+  def name(self):
+    return self.__class__.code_name(self.__class__.__bases__[1].value.__get__(self))
+  @name.setter
+  def name(self, val):
+    self.__class__.__bases__[1].value.__set__(self, self.__class__.name_code(val))
+  def __init__(self, val=None):
+    if val is None:
+      self.__class__.__bases__[1].__init__(self)
+    else:
+      self.__class__.__bases__[1].__init__(self, self.__class__.name_code(val))
+  def __eq__(self, other):
+    return self.code == (other.code if isinstance(other, _BCode) else self.__class__.name_code(other))
+  def __str__(self):
+    c = self.__class__.__bases__[1].value.__get__(self)
+    return '<%d: %s>' % (c, self.__class__.code_name(c))
+  def __repr__(self):
+    return str(self)
 
-class _ResolveOr(_Resolve):
+class _BCodeOr(_BCode):
   @classmethod
   def name_code(cls, n):
     if not isinstance(n, str):
@@ -653,9 +700,30 @@ class _ResolveOr(_Resolve):
     return c
   @classmethod
   def code_name(cls, c):
-    return ' | '.join((n_ for c_, n_ in cls._tab_cn.items() if c_ == 0) if c == 0 else (n_ for c_, n_ in cls._tab_cn.items() if c_ & c))
+    return ' | '.join((n_ for c_, n_ in cls._tab_cn.items() if c_ == 0) if c == 0 else (n_ for c_, n_ in cls._tab_cn.items() if c_ & c == c_ and c_ != 0))
+  def __or__(self, other):
+    return self.__class__(self.code | (other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other)))
+  def __ror__(self, other):
+    return self.__class__((other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other)) | self.code)
+  def __ior__(self, other):
+    self.code |= (other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other))
+    return self
+  def __and__(self, other):
+    return self.__class__(self.code & (other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other)))
+  def __rand__(self, other):
+    return self.__class__((other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other)) & self.code)
+  def __iand__(self, other):
+    self.code &= (other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other))
+    return self
+  def __xor__(self, other):
+    return self.__class__(self.code ^ (other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other)))
+  def __rxor__(self, other):
+    return self.__class__((other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other)) ^ self.code)
+  def __ixor__(self, other):
+    self.code ^= (other.code if isinstance(other, _BCodeOr) else self.__class__.name_code(other))
+    return self
 
-class _ResolveT(_ResolveOr):
+class _BCodeT(_BCodeOr):
   @classmethod
   def code_name(cls, c):
     n = []
@@ -667,47 +735,47 @@ class _ResolveT(_ResolveOr):
     return ' | '.join(n)
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
-WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_Resolve, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
+WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
 WICPCOLORCONTEXTTYPE = ctypes.POINTER(WICCOLORCONTEXTTYPE)
 
 WICEXIFColorSpace = {'sRGB': 1, 'AdobeRGB': 2, 'Adobe RGB': 2, 'Uncalibrated': 65535}
-WICEXIFCOLORSPACE = type('WICEXIFCOLORSPACE', (_Resolve, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WICEXIFColorSpace.items()}, '_tab_cn': {c: n for n, c in WICEXIFColorSpace.items()}, '_def': 1})
+WICEXIFCOLORSPACE = type('WICEXIFCOLORSPACE', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WICEXIFColorSpace.items()}, '_tab_cn': {c: n for n, c in WICEXIFColorSpace.items()}, '_def': 1})
 WICPEXIFCOLORSPACE = ctypes.POINTER(WICEXIFCOLORSPACE)
 
 WICPaletteType = {'Custom': 0, 'MedianCut': 1, 'FixedBW': 2, 'FixedHalftone8': 3, 'FixedHalftone27': 4, 'FixedHalftone64': 5, 'FixedHalftone125': 6, 'FixedHalftone216': 7, 'FixedHalftone252': 8, 'FixedHalftone256': 9, 'FixedGray4': 10, 'FixedGray16': 11, 'FixedGray256': 12}
-WICPALETTETYPE = type('WICPALETTETYPE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPaletteType.items()}, '_tab_cn': {c: n for n, c in WICPaletteType.items()}, '_def': 0})
+WICPALETTETYPE = type('WICPALETTETYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPaletteType.items()}, '_tab_cn': {c: n for n, c in WICPaletteType.items()}, '_def': 0})
 WICPPALETTETYPE = ctypes.POINTER(WICPALETTETYPE)
 
-WICDecoderCapabilities = {'SameEncoder': 1, 'CanDecodeAllImages': 2, 'CanDecodeSomeImages': 4, 'CanEnumerateMetadata': 8, 'CanDecodeThumbnail': 16}
-WICDECODERCAPABILITIES = type('WICDECODERCAPABILITIES', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecoderCapabilities.items()}, '_tab_cn': {c: n for n, c in WICDecoderCapabilities.items()}, '_def': 0})
+WICDecoderCapabilities = {'None': 0, 'SameEncoder': 1, 'CanDecodeAllImages': 2, 'CanDecodeSomeImages': 4, 'CanEnumerateMetadata': 8, 'CanDecodeThumbnail': 16}
+WICDECODERCAPABILITIES = type('WICDECODERCAPABILITIES', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecoderCapabilities.items()}, '_tab_cn': {c: n for n, c in WICDecoderCapabilities.items()}, '_def': 0})
 WICPDECODERCAPABILITIES = ctypes.POINTER(WICDECODERCAPABILITIES)
 
 WICDecodeOption = {'Demand': 0, 'OnDemand': 0, 'Load': 1, 'OnLoad': 1}
-WICDECODEOPTION = type('WICDECODEOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecodeOption.items()}, '_tab_cn': {c: n for n, c in WICDecodeOption.items()}, '_def': 0})
+WICDECODEOPTION = type('WICDECODEOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecodeOption.items()}, '_tab_cn': {c: n for n, c in WICDecodeOption.items()}, '_def': 0})
 
 WICBitmapEncoderCacheOption = {'InMemory': 0, 'TempFile': 1, 'None': 2, 'No': 2}
-WICBITMAPENCODERCACHEOPTION = type('WICBITMAPENCODERCACHEOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICBitmapEncoderCacheOption.items()}, '_tab_cn': {c: n for n, c in WICBitmapEncoderCacheOption.items()}, '_def': 2})
+WICBITMAPENCODERCACHEOPTION = type('WICBITMAPENCODERCACHEOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICBitmapEncoderCacheOption.items()}, '_tab_cn': {c: n for n, c in WICBitmapEncoderCacheOption.items()}, '_def': 2})
 
 WICJpegYCrCbSubsamplingOption = {'Default': 0, '420': 1, '422': 2, '444': 3, '440': 4}
-WICJPEGYCRCBSUBSAMPLINGOPTION = type('WICJPEGYCRCBSUBSAMPLINGOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegYCrCbSubsamplingOption.items()}, '_tab_cn': {c: n for n, c in WICJpegYCrCbSubsamplingOption.items()}, '_def': 0})
+WICJPEGYCRCBSUBSAMPLINGOPTION = type('WICJPEGYCRCBSUBSAMPLINGOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegYCrCbSubsamplingOption.items()}, '_tab_cn': {c: n for n, c in WICJpegYCrCbSubsamplingOption.items()}, '_def': 0})
 
 WICJpegIndexingOption = {'Demand': 0, 'OnDemand': 0, 'Load': 1, 'OnLoad': 1}
-WICJPEGINDEXINGOPTION = type('WICJPEGINDEXINGOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegIndexingOption.items()}, '_tab_cn': {c: n for n, c in WICJpegIndexingOption.items()}, '_def': 0})
+WICJPEGINDEXINGOPTION = type('WICJPEGINDEXINGOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegIndexingOption.items()}, '_tab_cn': {c: n for n, c in WICJpegIndexingOption.items()}, '_def': 0})
 
 WICJpegTransferMatrix = {'Identity': 0, 'BT601': 1}
-WICJPEGTRANSFERMATRIX = type('WICJPEGTRANSFERMATRIX', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegTransferMatrix.items()}, '_tab_cn': {c: n for n, c in WICJpegTransferMatrix.items()}, '_def': 0})
+WICJPEGTRANSFERMATRIX = type('WICJPEGTRANSFERMATRIX', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegTransferMatrix.items()}, '_tab_cn': {c: n for n, c in WICJpegTransferMatrix.items()}, '_def': 0})
 
 WICJpegScanType = {'Interleaved': 0, 'PlanarComponents': 1, 'Progressive': 2}
-WICJPEGSCANTYPE = type('WICJPEGSCANTYPE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegScanType.items()}, '_tab_cn': {c: n for n, c in WICJpegScanType.items()}, '_def': 0})
+WICJPEGSCANTYPE = type('WICJPEGSCANTYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegScanType.items()}, '_tab_cn': {c: n for n, c in WICJpegScanType.items()}, '_def': 0})
 
 WICJpegSampleFactors = {'One': 0x11, 'Three_420': 0x111122, 'Three_422': 0x111121, 'Three_440': 0x111112, 'Three_444': 0x111111}
-WICJPEGSAMPLEFACTORS = type('WICJPEGSAMPLEFACTORS', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegSampleFactors.items()}, '_tab_cn': {c: n for n, c in WICJpegSampleFactors.items()}, '_def': 0x111122})
+WICJPEGSAMPLEFACTORS = type('WICJPEGSAMPLEFACTORS', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegSampleFactors.items()}, '_tab_cn': {c: n for n, c in WICJpegSampleFactors.items()}, '_def': 0x111122})
 
 WICJpegQuantizationBaseline = {'One': 0x0, 'Three': 0x10100}
-WICJPEGQUANTIZATIONBASELINE = type('WICJPEGQUANTIZATIONBASELINE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegQuantizationBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegQuantizationBaseline.items()}, '_def': 0x10100})
+WICJPEGQUANTIZATIONBASELINE = type('WICJPEGQUANTIZATIONBASELINE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegQuantizationBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegQuantizationBaseline.items()}, '_def': 0x10100})
 
 WICJpegHuffmanBaseline = {'One': 0x0, 'Three': 0x111100}
-WICJPEGHUFFMANBASELINE = type('WICJPEGHUFFMANBASELINE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegHuffmanBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegHuffmanBaseline.items()}, '_def': 0x111100})
+WICJPEGHUFFMANBASELINE = type('WICJPEGHUFFMANBASELINE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegHuffmanBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegHuffmanBaseline.items()}, '_def': 0x111100})
 
 class WICJPEGFRAMEHEADER(ctypes.Structure):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('TransferMatrix', WICJPEGTRANSFERMATRIX), ('ScanType', WICJPEGSCANTYPE), ('cComponents', wintypes.UINT), ('ComponentIdentifiers', wintypes.DWORD), ('SampleFactors', WICJPEGSAMPLEFACTORS), ('QuantizationTableIndices', WICJPEGQUANTIZATIONBASELINE)]
@@ -730,49 +798,49 @@ class WICJPEGSCANHEADER(ctypes.Structure):
 WICPJPEGSCANHEADER = ctypes.POINTER(WICJPEGSCANHEADER)
 
 WICPngFilterOption = {'Unspecified': 0, 'None': 1, 'Sub': 2, 'Up': 3, 'Average': 4, 'Paeth': 5, 'Adaptive': 6}
-WICPNGFILTEROPTION = type('WICPNGFILTEROPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPngFilterOption.items()}, '_tab_cn': {c: n for n, c in WICPngFilterOption.items()}, '_def': 0})
+WICPNGFILTEROPTION = type('WICPNGFILTEROPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPngFilterOption.items()}, '_tab_cn': {c: n for n, c in WICPngFilterOption.items()}, '_def': 0})
 
 WICTiffCompressionOption = {'DontCare': 0, 'None': 1, 'CCITT3': 2, 'CCITT4': 3, 'LZW': 4, 'RLE': 5, 'ZIP': 6, 'Differencing': 7}
-WICTIFFCOMPRESSIONOPTION = type('WICTIFFCOMPRESSIONOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTiffCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICTiffCompressionOption.items()}, '_def': 0})
+WICTIFFCOMPRESSIONOPTION = type('WICTIFFCOMPRESSIONOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTiffCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICTiffCompressionOption.items()}, '_def': 0})
 
 WICHeifCompressionOption = {'DontCare': 0, 'None': 1, 'HEVC': 2, 'AV1': 3}
-WICHEIFCOMPRESSIONOPTION = type('WICHEIFCOMPRESSIONOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICHeifCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICHeifCompressionOption.items()}, '_def': 0})
+WICHEIFCOMPRESSIONOPTION = type('WICHEIFCOMPRESSIONOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICHeifCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICHeifCompressionOption.items()}, '_def': 0})
 
 WICCreateCacheOption = {'None': 0, 'No': 0, 'Demand': 1, 'OnDemand': 1, 'Load': 2, 'OnLoad': 2}
-WICCREATECACHEOPTION = type('WICCREATECACHEOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICCreateCacheOption.items()}, '_tab_cn': {c: n for n, c in WICCreateCacheOption.items()}, '_def': 0})
+WICCREATECACHEOPTION = type('WICCREATECACHEOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICCreateCacheOption.items()}, '_tab_cn': {c: n for n, c in WICCreateCacheOption.items()}, '_def': 0})
 
 WICPersistOptions = {'Default': 0, 'LittleEndian': 0, 'BigEndian': 1, 'StrictFormat': 2, 'NoCacheStream': 4, 'PreferUTF8': 8}
-WICPERSISTOPTIONS = type('WICPERSISTOPTIONS', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPersistOptions.items()}, '_tab_cn': {c: n for n, c in WICPersistOptions.items()}, '_def': 0})
+WICPERSISTOPTIONS = type('WICPERSISTOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPersistOptions.items()}, '_tab_cn': {c: n for n, c in WICPersistOptions.items()}, '_def': 0})
 WICPPERSISTOPTIONS = ctypes.POINTER(WICPERSISTOPTIONS)
 
 WICMetadataCreationOptions = {**WICPersistOptions, 'Default': 0x0, 'AllowUnknown': 0x0, 'FailUnknown': 0x10000}
-WICMETADATACREATIONOPTIONS = type('WICMETADATACREATIONOPTIONS', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICMetadataCreationOptions.items()}, '_tab_cn': {c: n for n, c in WICMetadataCreationOptions.items()}, '_def': 0})
+WICMETADATACREATIONOPTIONS = type('WICMETADATACREATIONOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICMetadataCreationOptions.items()}, '_tab_cn': {c: n for n, c in WICMetadataCreationOptions.items()}, '_def': 0})
 
 WICDitherType = {'None': 0, 'Solid': 0, 'Ordered4x4': 1, 'Ordered8x8': 2, 'Ordered16x16': 3, 'Spiral4x4': 4, 'Spiral8x8': 5, 'DualSpiral4x4': 6, 'DualSpiral8x8': 7, 'ErrorDiffusion': 8}
-WICDITHERTYPE = type('WICDITHERTYPE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDitherType.items()}, '_tab_cn': {c: n for n, c in WICDitherType.items()}, '_def': 0})
+WICDITHERTYPE = type('WICDITHERTYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDitherType.items()}, '_tab_cn': {c: n for n, c in WICDitherType.items()}, '_def': 0})
 
 WICInterpolationMode = {'Nearest': 0, 'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'Fant': 3, 'HighQualityCubic': 4}
-WICINTERPOLATIONMODE = type('WICINTERPOLATIONMODE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICInterpolationMode.items()}, '_tab_cn': {c: n for n, c in WICInterpolationMode.items()}, '_def': 3})
+WICINTERPOLATIONMODE = type('WICINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICInterpolationMode.items()}, '_tab_cn': {c: n for n, c in WICInterpolationMode.items()}, '_def': 3})
 
 WICTransformOptions = {'Rotate0': 0, 'Rotate90': 1, 'Rotate180': 2, 'Rotate270': 3, 'FlipHorizontal': 8, 'FlipVertical': 16}
-WICTRANSFORMOPTIONS = type('WICTRANSFORMOPTIONS', (_ResolveT, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTransformOptions.items()}, '_tab_cn': {c: n for n, c in WICTransformOptions.items()}, '_def': 0})
+WICTRANSFORMOPTIONS = type('WICTRANSFORMOPTIONS', (_BCodeT, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTransformOptions.items()}, '_tab_cn': {c: n for n, c in WICTransformOptions.items()}, '_def': 0})
 
 WICComponentType = {'BitmapDecoder': 0x1, 'Decoder': 0x1, 'BitmapEncoder': 0x2, 'Encoder': 0x2, 'FormatConverter': 0x4 , 'PixelFormatConverter': 0x4, 'MetadataReader': 0x8, 'MetadataWriter': 0x10, 'PixelFormat': 0x20, 'Component': 0x3f, 'AllComponents': 0x3f}
-WICCOMPONENTTYPE = type('WICCOMPONENTTYPE', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentType.items()}, '_tab_cn': {c: n for n, c in WICComponentType.items()}, '_def': 0x3f})
+WICCOMPONENTTYPE = type('WICCOMPONENTTYPE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentType.items()}, '_tab_cn': {c: n for n, c in WICComponentType.items()}, '_def': 0x3f})
 WICPCOMPONENTTYPE = ctypes.POINTER(WICCOMPONENTTYPE)
 
 WICComponentSigning = {'Signed': 0x1, 'Unsigned': 0x2, 'Safe': 0x4, 'Disabled': 0x80000000}
-WICCOMPONENTSIGNING = type('WICCOMPONENTSIGNING', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentSigning.items()}, '_tab_cn': {c: n for n, c in WICComponentSigning.items()}, '_def': 0x4})
+WICCOMPONENTSIGNING = type('WICCOMPONENTSIGNING', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentSigning.items()}, '_tab_cn': {c: n for n, c in WICComponentSigning.items()}, '_def': 0x4})
 WICPCOMPONENTSIGNING = ctypes.POINTER(WICCOMPONENTSIGNING)
 
 WICComponentEnumerateOptions = {'Default': 0x0, 'Refresh': 0x1, 'Disabled': 0x80000000, 'Unsigned': 0x40000000, 'BuiltInOnly': 0x20000000}
-WICCOMPONENTENUMERATEOPTIONS = type('WICCOMPONENTENUMERATEOPTIONS', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentEnumerateOptions.items()}, '_tab_cn': {c: n for n, c in WICComponentEnumerateOptions.items()}, '_def': 0x0})
+WICCOMPONENTENUMERATEOPTIONS = type('WICCOMPONENTENUMERATEOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentEnumerateOptions.items()}, '_tab_cn': {c: n for n, c in WICComponentEnumerateOptions.items()}, '_def': 0x0})
 
 class WICBITMAPPATTERN(ctypes.Structure):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Pattern', wintypes.LPVOID), ('Mask', wintypes.LPVOID), ('EndOfStream', wintypes.BOOLE)]
 
 WICPixelFormatNumericRepresentation = {'Unspecified': 0, 'Indexed': 1, 'UnsignedInteger': 2, 'SignedInteger': 3, 'Fixed': 4, 'Float': 5}
-WICPIXELFORMATNUMERICREPRESENTATION = type('WICPIXELFORMATNUMERICREPRESENTATION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPixelFormatNumericRepresentation.items()}, '_tab_cn': {c: n for n, c in WICPixelFormatNumericRepresentation.items()}, '_def': 0})
+WICPIXELFORMATNUMERICREPRESENTATION = type('WICPIXELFORMATNUMERICREPRESENTATION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPixelFormatNumericRepresentation.items()}, '_tab_cn': {c: n for n, c in WICPixelFormatNumericRepresentation.items()}, '_def': 0})
 WICPPIXELFORMATNUMERICREPRESENTATION = ctypes.POINTER(WICPIXELFORMATNUMERICREPRESENTATION)
 
 class WICMETADATAPATTERN(ctypes.Structure):
@@ -1058,15 +1126,65 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
       oleauto32.SafeArrayDestroy(self.psafearray)
       self.psafearray = None
 
-class _BVMeta(ctypes.Structure.__class__):
+class _BVType(int):
+  @classmethod
+  def vtype_code(cls, vt):
+    return cls._vcls.vt_co(vt) if isinstance(vt, str) else int(vt)
+  @classmethod
+  def code_vtype(cls, co):
+    return cls._vcls.co_vt(co) or str(co)
+  @property
+  def code(self):
+    return int(self)
+  @property
+  def vtype(self):
+    return self.__class__.code_vtype(int(self))
+  def __new__(cls, val=None):
+    if val is None:
+      self = int.__new__(cls)
+    else:
+      c = cls.vtype_code(val)
+      self = None if c is None else int.__new__(cls, c)
+    return self
+  def __eq__(self, other):
+    return int(self) == self.__class__.vtype_code(other)
+  def __str__(self):
+    c = int(self)
+    return '<%d: %s>' % (c, self.__class__.code_vtype(c))
+  def __repr__(self):
+    return str(self)
+  def __or__(self, other):
+    return self.__class__(int(self) | c) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __ror__(self, other):
+    return self.__class__(c | int(self)) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __ior__(self, other):
+    return self.__class__(int(self) | c) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __and__(self, other):
+    return self.__class__(int(self) & c) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __rand__(self, other):
+    return self.__class__(c & int(self)) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __iand__(self, other):
+    return self.__class__(int(self) & c) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __xor__(self, other):
+    return self.__class__(int(self) ^ c) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __rxor__(self, other):
+    return self.__class__(c ^ int(self)) if (c := self.__class__.vtype_code(other)) is not None else None
+  def __ixor__(self, other):
+    return self.__class__(int(self) ^ c) if (c := self.__class__.vtype_code(other)) is not None else None
+
+class VariantType(_BVType):
+  pass
+
+class PropVariantType(_BVType):
+  pass
+
+class _BVUtil:
   @staticmethod
-  def _adel(self):
-    if getattr(self, '_needsclear', False):
-      for s in self:
+  def _adel(arr):
+    if getattr(arr, '_needsclear', False):
+      for s in arr:
         s.__class__._clear(ctypes.byref(s))
-    getattr(self.__class__.__bases__[0], '__del__', id)(self)
-  def __mul__(bcls, size):
-    return type('VARIANT_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__del__': bcls.__class__._adel})
+    getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
   @staticmethod
   def _idup(addr, icls):
     i = icls(wintypes.LPVOID(addr))
@@ -1077,13 +1195,19 @@ class _BVMeta(ctypes.Structure.__class__):
   def _padup(parr):
     return parr._type_.from_buffer_copy(parr.contents) if parr else None
   @staticmethod
+  def _adup(arr):
+    return arr.__class__.from_buffer_copy(arr)
+  @staticmethod
   def _ptie(addr, bvar):
     p = wintypes.LPVOID(addr)
     p._bvariant = bvar
     return p
+
+class _BVMeta(ctypes.Structure.__class__):
+  def __mul__(bcls, size):
+    return type('VARIANT_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__del__': _BVUtil._adel})
   def __new__(mcls, name, bases, namespace, **kwds):
-    code_name = namespace.get('code_name')
-    if code_name is not None:
+    if (code_name := namespace.get('code_name')) is not None:
       cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for na, co in {na: co for co, na in code_name.items() if co != 14}.items()), ('pad', wintypes.BYTES16)]})
       cls_i = ctypes.Structure.__class__(name + '_I', (ctypes.Structure, ), {'_anonymous_' : ('vn',), '_fields_': [('vt', ctypes.c_ushort), ('wReserved1', wintypes.WORD), ('wReserved2', wintypes.WORD), ('wReserved3', wintypes.WORD), ('vn', cls_iu)]})
       cls_ou = ctypes.Union.__class__(name + '_OU', (ctypes.Union, ), {'_anonymous_' : ('vn',), '_fields_': [('vn', cls_i), ('decVal', wintypes.BYTES16)]})
@@ -1092,9 +1216,14 @@ class _BVMeta(ctypes.Structure.__class__):
     if name == 'VARIANT':
       _BVARIANT.code_ctype[12] = cls
       cls.code_ctype[12] = cls
+    if (vtype := namespace.get('_vtype')) is not None:
+      vtype._vcls = cls
     return cls
   def __init__(cls, *args, **kwargs):
     super(_BVMeta, _BVMeta).__init__(cls, *args, **kwargs)
+    if hasattr(cls, 'vt'):
+      cls._vt = cls.vt
+      cls.vt = property(lambda s: cls._vtype(s._vt), lambda s, v: setattr(s, '_vt', cls._vtype.vtype_code(v) or 0), cls._vt.__delete__)
     if hasattr(cls, 'blob'):
       cls._blob = cls.blob
       cls.blob = property(lambda s: s._blob.content, lambda s, v: setattr(s, '_blob', BLOB(v)), cls._blob.__delete__)
@@ -1107,34 +1236,33 @@ class _BVMeta(ctypes.Structure.__class__):
     for n in ('punkVal', 'pdispVal', 'pStorage', 'pStream'):
       if hasattr(cls, n):
         setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property(lambda s, _n='_'+n: cls.__class__._idup(getattr(s, _n), IStream if _n == '_pStream' else IUnknown), lambda s, v, _n='_'+n: setattr(s, _n, v.pI if isinstance(v, IUnknown) else v), getattr(cls, '_' + n, '__delete__')))
+        setattr(cls, n, property(lambda s, _n='_'+n: _BVUtil._idup(getattr(s, _n), IStream if _n == '_pStream' else IUnknown), lambda s, v, _n='_'+n: setattr(s, _n, v.pI if isinstance(v, IUnknown) else v), getattr(cls, '_' + n, '__delete__')))
     if hasattr(cls, 'pclipdata'):
       cls._pclipdata = cls.pclipdata
-      cls.pclipdata = property(lambda s: cls.__class__._padup(s._pclipdata), lambda s, v: setattr(s, '_pclipdata', v if isinstance(v, wintypes.PBYTES16) else ((ctypes.pointer(v) if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16)))), cls._pclipdata.__delete__)
+      cls.pclipdata = property(lambda s: _BVUtil._padup(s._pclipdata), lambda s, v: setattr(s, '_pclipdata', v if isinstance(v, wintypes.PBYTES16) else ((ctypes.pointer(v) if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16)))), cls._pclipdata.__delete__)
     if hasattr(cls, 'puuid'):
       cls._puuid = cls.puuid
-      cls.puuid = property(lambda s: cls.__class__._padup(s._puuid), lambda s, v: setattr(s, '_puuid', v if isinstance(v, wintypes.PGUID) else ((ctypes.pointer(v) if isinstance(v, wintypes.GUID) else ctypes.cast(ctypes.c_char_p(v), wintypes.PGUID)))), cls._puuid.__delete__)
+      cls.puuid = property(lambda s: _BVUtil._padup(s._puuid), lambda s, v: setattr(s, '_puuid', v if isinstance(v, wintypes.PGUID) else ((ctypes.pointer(v) if isinstance(v, wintypes.GUID) else ctypes.cast(ctypes.c_char_p(v), wintypes.PGUID)))), cls._puuid.__delete__)
     if hasattr(cls, 'pad'):
       cls._pad = cls.pad
-      cls.pad = property(lambda s: wintypes.BYTES16.from_buffer_copy(s._pad), lambda s, v: setattr(s, '_pad', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._pad.__delete__)
+      cls.pad = property(lambda s: _BVUtil._adup(s._pad), lambda s, v: setattr(s, '_pad', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._pad.__delete__)
     if hasattr(cls, 'decVal'):
       cls._decVal = cls.decVal
-      cls.decVal = property(lambda s: wintypes.BYTES16.from_buffer_copy(s._decVal), lambda s, v: setattr(s, '_decVal', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._decVal.__delete__)
+      cls.decVal = property(lambda s: _BVUtil._adup(s._decVal), lambda s, v: setattr(s, '_decVal', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._decVal.__delete__)
     if hasattr(cls, 'pVersionedStream'):
       cls._pVersionedStream = cls.pVersionedStream
-      cls.pVersionedStream = property(lambda s: cls.__class__._ptie(s._pVersionedStream, s), cls._pVersionedStream.__set__, cls._pVersionedStream.__delete__)
+      cls.pVersionedStream = property(lambda s: _BVUtil._ptie(s._pVersionedStream, s), cls._pVersionedStream.__set__, cls._pVersionedStream.__delete__)
 
 class _BVARIANT(metaclass=_BVMeta):
   vtype_code = {'VT_EMPTY': 0, 'VT_NULL': 1, 'VT_I1': 16, 'VT_UI1': 17, 'VT_I2': 2, 'VT_UI2': 18, 'VT_I4': 3, 'VT_UI4': 19, 'VT_INT': 22, 'VT_UINT': 23, 'VT_I8': 20, 'VT_UI8': 21, 'VT_R4': 4, 'VT_R8': 5, 'VT_BOOL': 11, 'VT_ERROR': 10, 'VT_CY': 6, 'VT_DATE': 7, 'VT_FILETIME': 64, 'VT_CLSID': 72, 'VT_CF': 71, 'VT_BSTR': 8, 'VT_BLOB': 65, 'VT_BLOBOBJECT': 70, 'VT_LPSTR': 30, 'VT_LPWSTR': 31, 'VT_UNKNOWN': 13, 'VT_DISPATCH': 9, 'VT_STREAM': 66, 'VT_STREAMED_OBJECT': 68, 'VT_STORAGE': 67, 'VT_STORED_OBJECT': 69, 'VT_VERSIONED_STREAM': 73, 'VT_DECIMAL': 14, 'VT_VECTOR': 4096, 'VT_ARRAY': 8192, 'VT_BYREF': 16384, 'VT_VARIANT': 12}
   code_vtype = {co: vt for vt, co in vtype_code.items()}
   code_ctype = {16: wintypes.CHAR, 17: wintypes.BYTE, 2: wintypes.SHORT, 18: wintypes.USHORT, 3: wintypes.LONG, 19: wintypes.ULONG, 22: wintypes.INT, 23: wintypes.UINT, 20: wintypes.LARGE_INTEGER, 21: wintypes.ULARGE_INTEGER, 4: wintypes.FLOAT, 5: wintypes.DOUBLE, 11: wintypes.VARIANT_BOOL, 10: wintypes.ULONG, 6: wintypes.LARGE_INTEGER, 7: wintypes.DOUBLE, 64: wintypes.FILETIME, 72: wintypes.PGUID, 71: wintypes.PBYTES16, 8: BSTR, 65: BLOB, 70: BLOB, 30: wintypes.LPSTR, 31: wintypes.LPWSTR, 13: wintypes.LPVOID, 9: wintypes.LPVOID, 66: wintypes.LPVOID, 68: wintypes.LPVOID, 67: wintypes.LPVOID, 69: wintypes.LPVOID, 73: wintypes.LPVOID, 14: wintypes.BYTES16, 12: None, 4096: CA, 8192: wintypes.LPVOID, 16384: wintypes.LPVOID}
+  _vtype = _BVType
   @classmethod
   def vt_co(cls, vt):
-    vt = vt.upper().replace(' ', '|').split('|')
     co = 0
-    for t in filter(None, vt):
-      c = cls.vtype_code.get(t)
-      if c is None:
+    for t in filter(None, vt.upper().replace(' ', '|').replace('+', '|').split('|')):
+      if (c := cls.vtype_code.get(t)) is None:
         return None
       co |= c
     return co
@@ -1144,15 +1272,16 @@ class _BVARIANT(metaclass=_BVMeta):
   @property
   def value(self):
     cls = self.__class__
-    if self.vt & 4095 <= 1:
+    vt = self.vt.code
+    if vt & 4095 <= 1:
       return None
-    if self.vt < 4096:
-      n = cls.code_name.get(self.vt, 'pad')
+    if vt < 4096:
+      n = cls.code_name.get(vt, 'pad')
       return getattr(self, n)
-    elif self.vt > 4096 and self.vt < 8192:
+    elif vt > 4096 and vt < 8192:
       if 'VT_VECTOR' not in cls.vtype_code:
         return None
-      vt = self.vt ^ 4096
+      vt ^= 4096
       if (t := cls.code_ctype.get(vt)) is None:
         return None
       if (v := self.ca.content(t)) is None:
@@ -1160,8 +1289,8 @@ class _BVARIANT(metaclass=_BVMeta):
       if issubclass(t, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, VARIANT)):
         v._bvariant = self
       return v
-    elif self.vt > 8192 and self.vt < 16384:
-      vt = self.vt ^ 8192
+    elif vt > 8192 and vt < 16384:
+      vt ^= 8192
       if (t := cls.code_ctype.get(vt)) is None:
         return None
       if (v := PSAFEARRAY(wintypes.LPVOID(self.parray))) is None:
@@ -1171,55 +1300,54 @@ class _BVARIANT(metaclass=_BVMeta):
       if issubclass(t, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, VARIANT)):
         v._bvariant = self
       return v
-    elif self.vt > 16384:
-      vt = self.vt ^ 16384
+    elif vt > 16384:
+      vt ^= 16384
       if (t := cls.code_ctype.get(vt & 4095)) is None:
         return None
       v = ctypes.cast(wintypes.LPVOID(self.byref), ctypes.POINTER(wintypes.LPVOID if vt > 8192 else t))
       v._bvariant = self
       return v
-  def set(self, dtype=None, data=None):
+  def set(self, vtype=None, data=None):
     cls = self.__class__
-    if isinstance(dtype, str):
-      dtype = cls.vt_co(dtype)
-    if dtype is None:
+    vtype = cls._vtype.vtype_code(vtype)
+    if vtype is None:
       return False
     if getattr(self, '_needsclear', False):
-      if dtype in (0, 1):
+      if vtype in (0, 1):
         self.__class__._clear(ctypes.byref(self))
       else:
         return False
-    if dtype in (0, 1):
+    if vtype in (0, 1):
       ctypes.memset(ctypes.addressof(self), 0, ctypes.sizeof(cls))
-      self.vt = dtype
+      self._vt = vtype
       return True
-    if (dtype & 4095) not in cls.code_ctype or dtype == 12:
+    if (vtype & 4095) not in cls.code_ctype or vtype == 12:
       return False
-    self.vt = dtype
-    if dtype < 4096:
-      setattr(self, cls.code_name[dtype], data)
-    elif dtype > 4096 and dtype < 8192:
+    self._vt = vtype
+    if vtype < 4096:
+      setattr(self, cls.code_name[vtype], data)
+    elif vtype > 4096 and vtype < 8192:
       if 'VT_ARRAY' not in cls.vtype_code:
         return False
-      t = cls.code_ctype[dtype ^ 4096]
+      t = cls.code_ctype[vtype ^ 4096]
       self.ca = CA(t, data)
-    elif dtype > 8192 and dtype < 16384:
-      if (psafearray := PSAFEARRAY(dtype ^ 8192, data)) is None:
+    elif vtype > 8192 and vtype < 16384:
+      if (psafearray := PSAFEARRAY(vtype ^ 8192, data)) is None:
         return False
       self.parray = psafearray.psafearray
-    elif dtype > 16384:
+    elif vtype > 16384:
       self.byref = ctypes.cast(data, wintypes.LPVOID)
     return True
   @value.setter
   def value(self, val):
     if val is not None:
       self.set(*val)
-  def __new__(cls, dtype=None, data=None):
+  def __new__(cls, vtype=None, data=None):
     self = ctypes.Structure.__new__(cls)
-    if dtype is not None and not cls.set(self, dtype, data):
+    if vtype is not None and not cls.set(self, vtype, data):
       return None
     return self
-  def __init__(self, dtype=None, data=None):
+  def __init__(self, vtype=None, data=None):
     ctypes.Structure.__init__(self)
   def __del__(self):
     if getattr(self, '_needsclear', False):
@@ -1228,16 +1356,36 @@ class _BVARIANT(metaclass=_BVMeta):
 
 class VARIANT(_BVARIANT, ctypes.Structure):
   code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
+  _vtype = VariantType
   _clear = oleauto32.VariantClear
 PVARIANT = ctypes.POINTER(VARIANT)
 
 class PROPVARIANT(_BVARIANT, ctypes.Structure):
   code_name = {16: 'cVal', 17: 'bVal', 2: 'iVal',  18: 'uiVal', 3: 'lVal', 19: 'ulVal', 22: 'intVal', 23: 'uintVal', 20: 'hVal', 21: 'uhVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 64: 'filetime', 72: 'puuid', 71: 'pclipdata', 8: 'bstrVal', 65: 'blob', 70: 'blob', 30: 'pszVal', 31: 'pwszVal', 13: 'punkVal', 9: 'pdispVal', 66: 'pStream', 68: 'pStream', 67: 'pStorage', 69: 'pStorage', 73: 'pVersionedStream', 14: 'decVal', 4096: 'ca', 8192: 'parray', 16384: 'byref'}
+  _vtype = PropVariantType
   _clear = ole32.PropVariantClear
 PPROPVARIANT = ctypes.POINTER(PROPVARIANT)
 
 class PROPBAG2(ctypes.Structure):
-  _fields_ = [('dwType', wintypes.DWORD), ('vt', ctypes.c_ushort), ('cfType', wintypes.DWORD), ('dwHint', wintypes.DWORD), ('pstrName', wintypes.LPOLESTR), ('clsid', wintypes.GUID)]
+  _fields_ = [('dwType', wintypes.DWORD), ('_vt', ctypes.c_ushort), ('cfType', wintypes.DWORD), ('dwHint', wintypes.DWORD), ('pstrName', wintypes.LPOLESTR), ('clsid', wintypes.GUID)]
+  @property
+  def vt(self):
+    return VariantType(self._vt)
+  @vt.setter
+  def vt(self, value):
+    self._vt = VariantType.vtype_code(value) or 0
+  @vt.deleter
+  def vt(self):
+    self.__class__._vt.__delete__(self)
+  def set(self, name, vtype, hint=0):
+    vtype = VariantType.vtype_code(vtype)
+    if vtype is None:
+      return False
+    self.dwType = 0
+    self.pstrName = wintypes.LPOLESTR(name)
+    self._vt = vtype
+    self.dwHint = hint
+    return True
 PPROPBAG2 = ctypes.POINTER(PROPBAG2)
 
 class IPropertyBag2(IUnknown):
@@ -1248,44 +1396,31 @@ class IPropertyBag2(IUnknown):
   _protos['GetPropertyInfo'] = 6, (wintypes.ULONG, wintypes.ULONG, PPROPBAG2), (wintypes.PULONG,)
   def CountProperties(self):
     return self.__class__._protos['CountProperties'](self.pI)
-  def GetPropertyInfo(self, first=0, number=None, code=False):
+  def GetPropertyInfo(self, first=0, number=None):
     if number is None:
       number = self.CountProperties() - first
     propbags = (PROPBAG2 * number)()
     n = self.__class__._protos['GetPropertyInfo'](self.pI, first, number, propbags)
-    return None if n is None else {pb.pstrName: ((pb.vt if code else VARIANT.co_vt(pb.vt)), pb.dwHint) for pb in propbags[:n]}
+    return None if n is None else {pb.pstrName: (pb.vt, pb.dwHint) for pb in propbags[:n]}
   def Read(self, property_infos):
     n = len(property_infos)
     propbags = (PROPBAG2 * n)()
     values = (VARIANT * n)()
     results = (wintypes.ULONG * n)()
     for pb, prop in zip(propbags, property_infos.items()):
-      pb.dwType = 0
-      pb.pstrName = wintypes.LPOLESTR(prop[0])
-      if isinstance(prop[1], (tuple, list)):
-        pb.vt = VARIANT.vt_co(prop[1][0]) if isinstance(prop[1][0], str) else prop[1][0]
-        pb.dwHint = prop[1][1]
-      else:
-        pb.vt = VARIANT.vt_co(prop[1]) if isinstance(prop[1], str) else prop[1]
-        pb.dwHint = 0
+      if not (pb.set(prop[0], *prop[1]) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1])):
+        ISetLastError(0x80070057)
+        return None
     if self.__class__._protos['Read'](self.pI, n, propbags, None, values, results) is None:
       return None
     values._needsclear = True
-    return {prop[0]: (((prop[1][0], prop[1][1]) if isinstance(prop[1], (tuple, list)) else prop[1]), val.value) for val, prop in zip(values, property_infos.items())}
+    return {pb.pstrName: ((pb.vt, pb.dwHint), val.value) for pb, val in zip(propbags, values)}
   def Write(self, properties):
     n = len(properties)
     propbags = (PROPBAG2 * n)()
     values = (VARIANT * n)()
     for pb, val, prop in zip(propbags, values, properties.items()):
-      pb.dwType = 0
-      pb.pstrName = wintypes.LPOLESTR(prop[0])
-      if isinstance(prop[1][0], (tuple, list)):
-        pb.vt = VARIANT.vt_co(prop[1][0][0]) if isinstance(prop[1][0][0], str) else prop[1][0][0]
-        pb.dwHint = prop[1][0][1]
-      else:
-        pb.vt = VARIANT.vt_co(prop[1][0]) if isinstance(prop[1][0], str) else prop[1][0]
-        pb.dwHint = 0
-      if not val.set(pb.vt, prop[1][1]):
+      if not (pb.set(prop[0], *prop[1][0]) if isinstance(prop[1][0], (tuple, list)) else pb.set(prop[0], prop[1][0])) or not val.set(pb.vt, prop[1][1]):
         ISetLastError(0x80070057)
         return None
     if self.__class__._protos['Write'](self.pI, n, propbags, values) is None:
@@ -1316,6 +1451,20 @@ class IPropertyBag2(IUnknown):
       properties[n] = (property_infos[n], v)
     return self.Write(properties)
 
+class _WICEncoderOption:
+  def __set_name__(self, owner, name):
+    self.name = name
+    self.options = owner._options
+  def __get__(self, obj, cls=None):
+    n = self.name
+    o = self.options[n]
+    props = obj.Read({n: o[0]})
+    return None if props is None else (props[n][1] if (o[1] is None or props[n][1] is None) else o[1](props[n][1]))
+  def __set__(self, obj, value):
+    n = self.name
+    o = self.options[n]
+    obj.Write({n: ((0 if value is None else o[0]), (value if (o[2] is None or value is None) else o[2](value)))})
+
 class _IWICEPBMeta(_IMeta):
   _options = {
     'ImageQuality': ('VT_R4', None, None),
@@ -1336,34 +1485,21 @@ class _IWICEPBMeta(_IMeta):
     'HeifCompressionMethod': ('VT_UI1', WICHEIFCOMPRESSIONOPTION.code_name, WICHEIFCOMPRESSIONOPTION.name_code),
     'Lossless': ('VT_BOOL', None, None)
   }
-  class _encoder_option:
-    def __set_name__(self, owner, name):
-      self.name = name
-      self.options = owner._options
-    def __get__(self, obj, cls=None):
-      n = self.name
-      o = self.options[n]
-      props = obj.Read({n: o[0]})
-      return None if props is None else (props[n][1] if (o[1] is None or props[n][1] is None) else o[1](props[n][1]))
-    def __set__(self, obj, value):
-      n = self.name
-      o = self.options[n]
-      obj.Write({n: ((0 if value is None else o[0]), (value if (o[2] is None or value is None) else o[2](value)))})
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
     for n in mcls._options:
-      kwds[n] = mcls._encoder_option()
+      kwds[n] = _WICEncoderOption()
     return kwds
 
 class IWICEncoderPropertyBag(IPropertyBag2, metaclass=_IWICEPBMeta):
-  def GetPropertyInfo(self, first=0, number=None, code=False):
-    if first == 0 and number is None and code is False:
+  def GetPropertyInfo(self, first=0, number=None):
+    if first == 0 and number is None:
       property_infos = getattr(self, '_property_infos', None)
       if property_infos is None:
         if (property_infos := super().GetPropertyInfo()) is not None:
           setattr(self, '_property_infos', property_infos)
     else:
-      property_infos = super().GetPropertyInfo(first, number, code)
+      property_infos = super().GetPropertyInfo(first, number)
     return property_infos
   def GetProperties(self, property_infos=None):
     props = super().GetProperties(getattr(self, '_property_infos', None) if property_infos is None else property_infos)
@@ -1388,7 +1524,7 @@ class IWICEnumMetadataItem(IUnknown):
   _protos['Skip'] = ctypes.WINFUNCTYPE(wintypes.ULONG, wintypes.ULONG)(4, 'Skip')
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
-  WithTypeCode = None
+  WithType = False
   IClass = IUnknown
   def Reset(self):
     return self.__class__._protos['Reset'](self.pI)
@@ -1404,7 +1540,7 @@ class IWICEnumMetadataItem(IUnknown):
     schemas._needsclear = True
     idents._needsclear = True
     values._needsclear = True
-    return tuple((s.value, i.value, (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r))) if self.__class__.WithTypeCode is None else tuple((((s.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(s.vt)) , s.value), ((i.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(i.vt)), i.value), ((v.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(v.vt)), (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value))) for s, i, v, _r in zip(schemas, idents, values, range(r)))
+    return tuple((s.value, i.value, (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r))) if not self.__class__.WithType else tuple(((s.vt , s.value), (i.vt, i.value), (v.vt, (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value))) for s, i, v, _r in zip(schemas, idents, values, range(r)))
   def Skip(self, number):
     try:
       if self.__class__._protos['Skip'](self.pI, number) > 1:
@@ -1499,26 +1635,26 @@ class IWICMetadataQueryReader(IUnknown):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
     v._needsclear = True
-    return (v.vt, PROPVARIANT.co_vt(v.vt))
-  def GetMetadataWithTypeByName(self, name, code=False):
+    return v.vt
+  def GetMetadataWithTypeByName(self, name):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
     v._needsclear = True
-    return (v.vt if code else PROPVARIANT.co_vt(v.vt)), (v.value.QueryInterface(self.__class__, self.ties) if v.vt == 13 else v.value)
+    return v.vt, (v.value.QueryInterface(self.__class__, self.ties) if v.vt == 13 else v.value)
   @staticmethod
   def rational_float(r):
-    n, d = struct.unpack('@LL', struct.pack('@Q', r))
+    n, d = struct.unpack('=LL', struct.pack('=Q', r))
     return n / d
   @staticmethod
   def srational_float(r):
-    n, d = struct.unpack('@ll', struct.pack('@Q', r))
+    n, d = struct.unpack('=ll', struct.pack('=Q', r))
     return n / d
   @staticmethod
   def fraction_rational(n, d):
-    return struct.unpack('@Q', struct.pack('@LL', n, d))[0]
+    return struct.unpack('=Q', struct.pack('=LL', n, d))[0]
   @staticmethod
   def fraction_srational(r):
-    return struct.unpack('@Q', struct.pack('@ll', n, d))[0]
+    return struct.unpack('=Q', struct.pack('=ll', n, d))[0]
 
 class IWICMetadataReader(IUnknown):
   IID = GUID(0x9204fe99, 0xd8fc, 0x4fd5, 0xa0, 0x01, 0x95, 0x36, 0xb0, 0x67, 0xa8, 0x99)
@@ -1534,8 +1670,8 @@ class IWICMetadataReader(IUnknown):
     return self.__class__._protos['GetCount'](self.pI)
   def GetEnumerator(self):
     return IWICEnumMetadataItemReader(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
-  def GetEnumeratorWithType(self, code=False):
-    return (IWICEnumMetadataWithCTypeItemReader if code else IWICEnumMetadataWithVTypeItemReader)(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+  def GetEnumeratorWithType(self):
+    return IWICEnumMetadataWithTypeItemReader(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
   def GetValue(self, schema, ident):
     if isinstance(schema, (tuple, list)):
       schema = PROPVARIANT(*schema)
@@ -1550,11 +1686,11 @@ class IWICMetadataReader(IUnknown):
       return None
     siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
     return tuple(p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value for p in siv)
-  def GetValueWithTypeByIndex(self, index, code=False):
+  def GetValueWithTypeByIndex(self, index):
     if (siv := self.__class__._protos['GetValueByIndex'](self.pI, index)) is None:
       return None
     siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
-    return tuple(((p.vt if code else PROPVARIANT.co_vt(p.vt)), (p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value)) for p in siv)
+    return tuple((p.vt, (p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value)) for p in siv)
   def GetMetadataHandlerInfo(self):
     return IWICMetadataHandlerInfo(self.__class__._protos['GetMetadataHandlerInfo'](self.pI)).QueryInterface(IWICMetadataReaderInfo, {'IFactory': self.ties.get('IFactory'), 'IMetadataReader': self})
   def GetPersistStream(self):
@@ -1564,15 +1700,11 @@ class IWICMetadataReader(IUnknown):
 
 class IWICEnumMetadataItemReader(IWICEnumMetadataItem):
   IClass = IWICMetadataReader
-  WithTypeCode = None
+  WithType = False
 
-class IWICEnumMetadataWithVTypeItemReader(IWICEnumMetadataItem):
+class IWICEnumMetadataWithTypeItemReader(IWICEnumMetadataItem):
   IClass = IWICMetadataReader
-  WithTypeCode = False
-
-class IWICEnumMetadataWithCTypeItemReader(IWICEnumMetadataItem):
-  IClass = IWICMetadataReader
-  WithTypeCode = True
+  WithType = True
 
 class IEnumWICMetadataReader(IEnumUnknown):
   IClass = IWICMetadataReader
@@ -1640,7 +1772,7 @@ class IWICBitmapSourceTransform(IUnknown):
     if not (ppf := WICPPIXELFORMAT.create_from(pixel_format)):
       ISetLastError(0x80070057)
       return None
-    return None if self.__class__._protos['GetClosestPixelFormat'](self.pI, ppf) is None else ppf.contents.value
+    return None if self.__class__._protos['GetClosestPixelFormat'](self.pI, ppf) is None else ppf.contents
   def DoesSupportTransform(self, transform_options):
     return self.__class__._protos['DoesSupportTransform'](self.pI, transform_options)
   def CopyPixels(self, xywh, width, height, pixel_format, transform_options, stride, buffer):
@@ -1771,7 +1903,7 @@ class IWICMetadataWriter(IWICMetadataReader):
   def GetEnumerator(self):
     return IWICEnumMetadataItemWriter(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
   def GetEnumeratorWithType(self, code=False):
-    return (IWICEnumMetadataWithCTypeItemWriter if code else IWICEnumMetadataWithVTypeItemWriter)(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+    return IWICEnumMetadataWithTypeItemWriter(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
   def SetValue(self, schema, ident, value):
     if isinstance(schema, (tuple, list)):
       schema = PROPVARIANT(*schema)
@@ -1805,15 +1937,11 @@ class IWICMetadataWriter(IWICMetadataReader):
 
 class IWICEnumMetadataItemWriter(IWICEnumMetadataItem):
   IClass = IWICMetadataWriter
-  WithTypeCode = None
+  WithType = False
 
-class IWICEnumMetadataWithVTypeItemWriter(IWICEnumMetadataItem):
+class IWICEnumMetadataWithTypeItemWriter(IWICEnumMetadataItem):
   IClass = IWICMetadataWriter
-  WithTypeCode = False
-
-class IWICEnumMetadataWithCTypeItemWriter(IWICEnumMetadataItem):
-  IClass = IWICMetadataWriter
-  WithTypeCode = True
+  WithType = True
 
 class IEnumWICMetadataWriter(IEnumUnknown):
   IClass = IWICMetadataWriter
@@ -1873,7 +2001,7 @@ class IWICBitmapFrameEncode(IUnknown):
     if not (ppf := WICPPIXELFORMAT.create_from(pixel_format)):
       ISetLastError(0x80070057)
       return None
-    return None if self.__class__._protos['SetPixelFormat'](self.pI, ppf) is None else ppf.contents.value
+    return None if self.__class__._protos['SetPixelFormat'](self.pI, ppf) is None else ppf.contents
   def SetColorContexts(self, color_contexts):
     return None if self.__class__._protos['SetColorContexts'](self.pI, len(color_contexts), ctypes.byref((wintypes.LPVOID * len(color_contexts))(*(cc.pI for cc in color_contexts)) if isinstance(color_contexts, (tuple, list)) else color_contexts)) is None else len(color_contexts)
   def SetPalette(self, palette):
@@ -2022,8 +2150,7 @@ class IWICComponentInfo(IUnknown):
   _protos['GetSpecVersion'] = 9, (wintypes.UINT, wintypes.LPWSTR), (wintypes.PUINT,)
   _protos['GetFriendlyName'] = 10, (wintypes.UINT, wintypes.LPWSTR), (wintypes.PUINT,)
   def GetComponentType(self):
-    t = self.__class__._protos['GetComponentType'](self.pI)
-    return t[0], (t[1][:-16] if t[1].endswith(' | AllComponents') else t[1])
+    return self.__class__._protos['GetComponentType'](self.pI)
   def GetCLSID(self):
     return self.__class__._protos['GetCLSID'](self.pI)
   def GetSigningStatus(self):
@@ -2081,7 +2208,7 @@ class IWICBitmapCodecInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICPIXELFORMAT * ac)()
-    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p].value for p in range(ac))
+    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p] for p in range(ac))
   def GetDeviceManufacturer(self):
     if (al := self.__class__._protos['GetDeviceManufacturer'](self.pI, 0, None)) is None:
       return None
@@ -2162,7 +2289,7 @@ class IWICFormatConverterInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICPIXELFORMAT * ac)()
-    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p].value for p in range(ac))
+    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p] for p in range(ac))
   def CreateInstance(self):
     return IWICFormatConverter(self.__class__._protos['CreateInstance'](self.pI), {'IFactory': self.ties.get('IFactory')})
 
@@ -2213,7 +2340,7 @@ class IWICMetadataHandlerInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICMETADATAHANDLER * ac)()
-    return None if self.__class__._protos['GetContainerFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p].value for p in range(ac))
+    return None if self.__class__._protos['GetContainerFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p] for p in range(ac))
   def GetDeviceManufacturer(self):
     if (al := self.__class__._protos['GetDeviceManufacturer'](self.pI, 0, None)) is None:
       return None
@@ -2344,7 +2471,7 @@ class IWICImagingFactory(IUnknown):
   def CreateComponentInfo(self, clsid):
     if (ci := IWICComponentInfo(self.__class__._protos['CreateComponentInfo'](self.pI, clsid), {'IFactory': self})) is None:
       return None
-    c = ci.GetComponentType()[0]
+    c = ci.GetComponentType().code
     icls = globals().get('IWIC%sInfo' % next((n_ for n_, c_ in WICComponentType.items() if c_ == c), 'Component'), 'IWICComponentInfo')
     return ci.QueryInterface(icls)
   def CreateComponentEnumerator(self, types=0x3f, options=0):
@@ -2381,14 +2508,9 @@ class IWICComponentFactory(IWICImagingFactory):
     n = len(properties)
     propbags = (PROPBAG2 * n)()
     for pb, prop in zip(propbags, properties.items()):
-      pb.dwType = 0
-      pb.pstrName = wintypes.LPOLESTR(prop[0])
-      if isinstance(prop[1], (tuple, list)):
-        pb.vt = VARIANT.vt_co(prop[1][0]) if isinstance(prop[1][0], str) else prop[1][0]
-        pb.dwHint = prop[1][1]
-      else:
-        pb.vt = VARIANT.vt_co(prop[1]) if isinstance(prop[1], str) else prop[1]
-        pb.dwHint = 0
+      if not (pb.set(prop[0], *prop[1]) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1])):
+        ISetLastError(0x80070057)
+        return None
     return IWICEncoderPropertyBag(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n))
 
 if ISetLastError(ole32.CoInitializeEx(None, wintypes.DWORD(2))) in (0, 1):

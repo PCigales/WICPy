@@ -127,7 +127,7 @@ IDecoder.Release()
 IDecoder = IImagingFactory.CreateDecoderFromStream(IStream1, metadata_option='onload')
 #Retrieving format
 f = IDecoder.GetContainerFormat()
-print(GUID_S(f[0]), f[1], ' - ', IDecoder.GetFrameCount(), 'frame')
+print(GUID_S(f.guid), f, ' - ', IDecoder.GetFrameCount(), 'frame')
 #Releasing interfaces
 IDecoder.Release()
 IStream1.Release()
@@ -136,7 +136,7 @@ IStream1.Release()
 IDecoder = IImagingFactory.CreateDecoderFromFilename(p, metadata_option='onload')
 IBitmapFrame = IDecoder.GetFrame(0)
 #Retrieving size, resolution and pixel format
-print(IBitmapFrame.GetSize(), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat()[1])
+print(IBitmapFrame.GetSize(), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat())
 #Retrieving pixels in a 2d memoryview
 b = bytearray(7 * 5 * 3)
 m = memoryview(b).cast('B', (5, 7 * 3))
@@ -147,14 +147,14 @@ for l in range(5):
 IColorContexts = IBitmapFrame.GetColorContexts()
 for cc in IColorContexts:
   t = cc.GetType()
-  if t[1] == 'ExifColorSpace':
+  if t == 'ExifColorSpace':
     s = cc.GetExifColorSpace()
     print(t, s)
     cc2 = IImagingFactory.CreateColorContext()
-    cc2.InitializeFromExifColorSpace(s[1])
+    cc2.InitializeFromExifColorSpace(s)
     print(cc2.GetExifColorSpace() == s)
     cc2.Release()
-  elif t[1] == 'Profile':
+  elif t == 'Profile':
     b = cc.GetProfileBytes()
     print(t, b)
     cc2 = IImagingFactory.CreateColorContext()
@@ -177,10 +177,10 @@ e.Reset()
 print(*e)
 e.Release()
 #Retrieving root metadata infos
-print(IMetadataQueryReader.GetLocation(), IMetadataQueryReader.GetContainerFormat()[1], IMetadataQueryReader.GetMetadataNames())
+print(IMetadataQueryReader.GetLocation(), IMetadataQueryReader.GetContainerFormat().name, IMetadataQueryReader.GetMetadataNames())
 #Retrieving app1 metadata in a new reader
 IMetadataQueryReader2 = IMetadataQueryReader.GetMetadataByName('/app1')
-print(IMetadataQueryReader2.GetLocation(), IMetadataQueryReader2.GetContainerFormat()[1], IMetadataQueryReader2.GetMetadataNames())
+print(IMetadataQueryReader2.GetLocation(), IMetadataQueryReader2.GetContainerFormat().name, IMetadataQueryReader2.GetMetadataNames())
 #Retrieving nested metadata from the previous reader
 print(IMetadataQueryReader2.GetMetadataWithTypeByName('/ifd/exif/{ushort=36864}'))
 #Error handling
@@ -209,13 +209,13 @@ r = IMetadataQueryReader
 while True:
   n = next(stc[1], None)
   if n is not None:
-    m = r.GetMetadataWithTypeByName(n, True)
+    m = r.GetMetadataWithTypeByName(n)
     if m[0] == 13:
       r = m[1]
       stc = (r, r.GetEnumerator())
       st.append(stc)
     else:
-      print(r.GetLocation() + n, '(', PROPVARIANT.co_vt(m[0]), ',', m[1][:] if  m[0] & 4096 else m[1], ')')
+      print(r.GetLocation() + n, '(', m[0].vtype, ',', m[1][:] if  m[0] & 4096 else m[1], ')')
   else:
     st.pop()
     if st:
@@ -235,8 +235,9 @@ print(IBitmapCache.GetResolution())
 #Locking an area to access it
 IBitmapLock = IBitmapCache.Lock((0, 0, 7, 5), 'readwrite')
 s = IBitmapLock.GetStride()
+#Retrieving size and pixel format, and exploring the format and comparison possibilities of guid / code properties
 f = IBitmapLock.GetPixelFormat()
-print(IBitmapLock.GetSize(), f[1])
+print(IBitmapLock.GetSize(), f, f.guid, f.name, f == f.name, f== f.guid)
 #Reading the content in an array of bytes
 b = IBitmapLock.GetDataPointer()
 for l in range(5):
@@ -252,14 +253,14 @@ IBitmapCache2.CopyPixels((0, 0, 1, 1), 3, b2)
 print('(%d, %d, %d)' % tuple(b2))
 IBitmapCache2.Release()
 #Creation from an array of bytes
-IBitmapCache2 = IImagingFactory.CreateBitmapFromMemory(7, 5, f[0], s, b)
+IBitmapCache2 = IImagingFactory.CreateBitmapFromMemory(7, 5, f, s, b)
 #Retrieving the content in a bytearray
 b2 = bytearray(3)
 IBitmapCache2.CopyPixels((0, 0, 1, 1), 3, b2)
 print('(%d, %d, %d)' % tuple(b2))
 IBitmapCache2.Release()
 #Creation of an empty bitmap
-IBitmapCache2 = IImagingFactory.CreateBitmap(7, 5, f[0])
+IBitmapCache2 = IImagingFactory.CreateBitmap(7, 5, f)
 #Writing from a bytearray to the bitmap after locking the area
 IBitmapLock2 = IBitmapCache2.Lock((0, 0, 7, 5), 'write')
 s2 = IBitmapLock2.GetStride()
@@ -287,13 +288,16 @@ IEncoder.Initialize(IStream2)
 IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
 print(IEncoderOptions.CountProperties())
 #Retrieving available properties
-print(IEncoderOptions.GetPropertyInfo(code=True))
 properties = IEncoderOptions.GetPropertyInfo()
 print(properties)
 #Retrieving properties values
 print(IEncoderOptions.Read(properties))
+#or
+print(IEncoderOptions.GetProperties())
 #Setting simple properties values
 IEncoderOptions.Write({'ImageQuality': ('VT_R4', 0.95), 'JpegYCrCbSubsampling': ('VT_UI1', 3)})
+#or
+IEncoderOptions.SetProperties({'ImageQuality': 0.95, 'JpegYCrCbSubsampling': 3})
 print(IEncoderOptions.Read({'ImageQuality': 'VT_R4', 'JpegYCrCbSubsampling': 'VT_UI1'}))
 #Setting array properties values from a 2d memoryview on top an array (simulating)
 b = array.array('l', (16, 11, 10, 16, 24, 40, 51, 61,
@@ -315,7 +319,7 @@ l = memoryview(lu)
 l = l.cast('B').cast(l.format.lstrip('<>@'), (8,8))
 for i in range(8):
   print(', '.join(str(l[i,j]) for j in range(8)))
-#Setting array properties values from the right 1d array
+#Setting array property value from the right 1d array using the name as an object field
 IEncoderOptions.Luminance = b
 print(IEncoderOptions.Luminance[:])
 #Initializing the frame encoder with the options
@@ -393,7 +397,7 @@ tuple(map(IUnknown.Release, (IBitmapFrameEncode, IEncoderOptions, IFormatConvert
 #Fast metadata modification
 IDecoder2 = IImagingFactory.CreateDecoderFromFilename(p2,  desired_access='readwrite', metadata_option='ondemand')
 IBitmapFrame2 = IDecoder2.GetFrame(0)
-print(IBitmapFrame2.GetSize(), IBitmapFrame2.GetResolution(), tuple(map(IWICColorContext.GetType, IBitmapFrame2.GetColorContexts())), IBitmapFrame2.GetPixelFormat()[1])
+print(IBitmapFrame2.GetSize(), IBitmapFrame2.GetResolution(), tuple(map(IWICColorContext.GetType, IBitmapFrame2.GetColorContexts())), IBitmapFrame2.GetPixelFormat().name)
 IBitmapThumbnail = IBitmapFrame2.GetThumbnail()
 print(IBitmapThumbnail.GetSize())
 IBitmapThumbnail.Release()
@@ -418,9 +422,9 @@ tuple(map(IUnknown.Release, (IMetadataQueryReader2, IMetadataQueryReader, IBitma
 p = path + r'\test.png'
 IDecoder = IImagingFactory.CreateDecoderFromFilename(p, metadata_option='onload')
 f = IDecoder.GetContainerFormat()
-print(GUID_S(f[0]), f[1], ' - ', IDecoder.GetFrameCount(), 'frame')
+print(GUID_S(f.guid), f, ' - ', IDecoder.GetFrameCount(), 'frame')
 IBitmapFrame = IDecoder.GetFrame(0)
-print(IBitmapFrame.GetSize(), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat()[1])
+print(IBitmapFrame.GetSize(), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat().name)
 print(IBitmapFrame.GetColorContexts())
 #Retrieving the palette
 IPalette = IBitmapFrame.GetPalette()
@@ -444,7 +448,7 @@ print(*('%08X' % c for c in IPalette2.GetColors()), sep=', ')
 IPalette2.InitializePredefined('FixedGray256')
 #Converting the palette of the decoded frame
 IFormatConverter = IImagingFactory.CreateFormatConverter()
-IFormatConverter.Initialize(IBitmapFrame, IBitmapFrame.GetPixelFormat()[1], 'DualSpiral8x8', IPalette2, 1, 'FixedGray256')
+IFormatConverter.Initialize(IBitmapFrame, IBitmapFrame.GetPixelFormat().name, 'DualSpiral8x8', IPalette2, 1, 'FixedGray256')
 #Encoding the converted bitmap to a file
 p2 = path + r'\test-.png'
 IStream2 = IStream.CreateOnFile(p2, 'write')
@@ -469,10 +473,10 @@ tuple(map(IUnknown.Release, (IEncoder, IBitmapFrameEncode, IEncoderOptions, IFor
 p = path + r'\test.tif'
 IDecoder = IImagingFactory.CreateDecoderFromFilename(p)
 f = IDecoder.GetContainerFormat()
-print(GUID_S(f[0]), f[1], ' - ', IDecoder.GetFrameCount(), 'frame')
+print(GUID_S(f.guid), f.name, ' - ', IDecoder.GetFrameCount(), 'frame')
 IBitmapFrame = IDecoder.GetFrame(0)
 w, h = IBitmapFrame.GetSize()
-print('(%d, %d)' % (w, h), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat()[1])
+print('(%d, %d)' % (w, h), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat().name)
 #Retrieving metadata
 IMetadataQueryReader = IBitmapFrame.GetMetadataQueryReader()
 for c, n in {258: 'bits_per_sample', 259: 'compression' , 277: 'samples_per_pixel', 339: 'sample_format', 317: 'predictor', 256: 'image_width', 257: 'image_length'}.items():
@@ -552,13 +556,13 @@ IEncoder.Initialize(IStream2)
 IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
 print(IEncoderOptions.GetProperties())
 #Setting the tables accordingly to the decoded frame ones
-IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': IJpegFrameDecode.GetFrameHeader()['SampleFactors'][1][-3:], 'Luminance': IJpegFrameDecode.GetQuantizationTable(0, 0), 'Chrominance': IJpegFrameDecode.GetQuantizationTable(0, 1), 'JpegLumaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,0), 'JpegLumaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,0), 'JpegChromaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,1), 'JpegChromaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,1), 'SuppressApp0': True})
+IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': IJpegFrameDecode.GetFrameHeader()['SampleFactors'].name[-3:], 'Luminance': IJpegFrameDecode.GetQuantizationTable(0, 0), 'Chrominance': IJpegFrameDecode.GetQuantizationTable(0, 1), 'JpegLumaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,0), 'JpegLumaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,0), 'JpegChromaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,1), 'JpegChromaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,1), 'SuppressApp0': True})
 print('Luminance:', IEncoderOptions.Luminance[:])
 print('Chrominance:', tuple(IEncoderOptions.Read({'Chrominance': 'VT_ARRAY | VT_I4'}).values())[0][1][:])
 IBitmapFrameEncode.Initialize(IEncoderOptions)
 #Setting the sze and pixel format accordingly to the decoded frame
 IBitmapFrameEncode.SetSize(*IBitmapFrame.GetSize())
-print(IBitmapFrameEncode.SetPixelFormat(IBitmapFrame.GetPixelFormat()[1]))
+print(IBitmapFrameEncode.SetPixelFormat(IBitmapFrame.GetPixelFormat()))
 
 #Metadata handling through block rather than queries (write)
 #Creating the block writer for the frame to be encoded
@@ -578,7 +582,7 @@ print(v)
 #Setting a metadata value by its index
 IMetadataWriter.SetValueByIndex(0, *v[:2], (v[2][0],4000))
 print(IMetadataWriter.GetValueByIndex(0))
-IMetadataWriter.SetValueByIndex(0, *v[:2], v[2])
+IMetadataWriter.SetValueByIndex(0, *v)
 print(IMetadataWriter.GetValueByIndex(0))
 #Setting a metadata value by its schema and identifier
 for i in (2, 3):
@@ -646,35 +650,35 @@ p = path + r'\test.jpg'
 IStream = IStream.CreateOnFile(p)
 #Enumerating decoders
 for d in IComponentFactory.CreateComponentEnumerator('decoder'):
-  print(d.GetComponentType()[1], d.GetCLSID()[1], d.GetSigningStatus()[1], d.GetAuthor(), d.GetVendorGUID()[1], d.GetVersion(), d.GetSpecVersion(), d.GetFriendlyName(), d.GetContainerFormat()[1], tuple(f[1] for f in d.GetPixelFormats()), d.GetColorManagementVersion(), d.GetDeviceManufacturer(), d.GetDeviceModels(), d.GetMimeTypes(), d.GetFileExtensions(), d.DoesSupportAnimation(), d.DoesSupportChromaKey(), d.DoesSupportLossless(), d.DoesSupportMultiframe(), d.MatchesMimeType('image/jpeg'), d.GetPatterns(), d.MatchesPattern(IStream))
-  if d.GetCLSID()[1] == 'JpegDecoder':
+  print(d.GetComponentType().name, d.GetCLSID().name, d.GetSigningStatus().name, d.GetAuthor(), d.GetVendorGUID().name, d.GetVersion(), d.GetSpecVersion(), d.GetFriendlyName(), d.GetContainerFormat().name, tuple(f.name for f in d.GetPixelFormats()), d.GetColorManagementVersion(), d.GetDeviceManufacturer(), d.GetDeviceModels(), d.GetMimeTypes(), d.GetFileExtensions(), d.DoesSupportAnimation(), d.DoesSupportChromaKey(), d.DoesSupportLossless(), d.DoesSupportMultiframe(), d.MatchesMimeType('image/jpeg'), d.GetPatterns(), d.MatchesPattern(IStream))
+  if d.GetCLSID() == 'JpegDecoder':
     dj = d
 IStream.Release()
 #Creating a decoder instance from a decoder info
 print(dj.CreateInstance())
 #Enumerating encoders
 for e in IComponentFactory.CreateComponentEnumerator('encoder'):
-  print(e.GetComponentType()[1], e.GetCLSID()[1], e.GetSigningStatus()[1], e.GetAuthor(), e.GetVendorGUID()[1], e.GetVersion(), e.GetSpecVersion(), e.GetFriendlyName(), e.GetContainerFormat()[1], tuple(f[1] for f in e.GetPixelFormats()), e.GetColorManagementVersion(), e.GetDeviceManufacturer(), e.GetDeviceModels(), e.GetMimeTypes(), e.GetFileExtensions(), e.DoesSupportAnimation(), e.DoesSupportChromaKey(), e.DoesSupportLossless(), e.DoesSupportMultiframe(), e.MatchesMimeType('image/jpeg'), sep=' - ')
+  print(e.GetComponentType().name, e.GetCLSID().name, e.GetSigningStatus().name, e.GetAuthor(), e.GetVendorGUID().name, e.GetVersion(), e.GetSpecVersion(), e.GetFriendlyName(), e.GetContainerFormat().name, tuple(f.name for f in e.GetPixelFormats()), e.GetColorManagementVersion(), e.GetDeviceManufacturer(), e.GetDeviceModels(), e.GetMimeTypes(), e.GetFileExtensions(), e.DoesSupportAnimation(), e.DoesSupportChromaKey(), e.DoesSupportLossless(), e.DoesSupportMultiframe(), e.MatchesMimeType('image/jpeg'), sep=' - ')
 #Enumerating pixel format converters
 for c in IComponentFactory.CreateComponentEnumerator('PixelFormatConverter'):
-  print(c.GetComponentType()[1], c.GetCLSID()[1], c.GetSigningStatus()[1], c.GetAuthor(), c.GetVendorGUID()[1], c.GetVersion(), c.GetSpecVersion(), c.GetFriendlyName(), tuple(f[1] for f in c.GetPixelFormats()), sep=' - ')
+  print(c.GetComponentType().name, c.GetCLSID().name, c.GetSigningStatus().name, c.GetAuthor(), c.GetVendorGUID().name, c.GetVersion(), c.GetSpecVersion(), c.GetFriendlyName(), tuple(f.name for f in c.GetPixelFormats()), sep=' - ')
 #Enumerating pixel formats
 for f in IComponentFactory.CreateComponentEnumerator('PixelFormat'):
-  print(f.GetComponentType()[1], f.GetCLSID()[1], f.GetSigningStatus()[1], f.GetAuthor(), f.GetVendorGUID()[1], f.GetVersion(), f.GetSpecVersion(), f.GetFriendlyName(), f.GetFormatGUID()[1], f.GetBitsPerPixel(), f.GetChannelCount(), tuple(f.GetChannelMask(i) for i in range(f.GetChannelCount())), f.SupportsTransparency(), f.GetNumericRepresentation()[1], getattr(f.GetColorContext(), 'GetType', lambda : (None, None))()[1], sep=' - ')
+  print(f.GetComponentType().name, f.GetCLSID().name, f.GetSigningStatus().name, f.GetAuthor(), f.GetVendorGUID().name, f.GetVersion(), f.GetSpecVersion(), f.GetFriendlyName(), f.GetFormatGUID().name, f.GetBitsPerPixel(), f.GetChannelCount(), tuple(f.GetChannelMask(i) for i in range(f.GetChannelCount())), f.SupportsTransparency(), f.GetNumericRepresentation().name, getattr(f.GetColorContext(), 'GetType', lambda : None)(), sep=' - ')
 #Enumerating metadata readers
 for m in IComponentFactory.CreateComponentEnumerator('MetadataReader'):
-  print(m.GetComponentType()[1], m.GetCLSID()[1], m.GetSigningStatus()[1], m.GetAuthor(), m.GetVendorGUID()[1], m.GetVersion(), m.GetSpecVersion(), m.GetFriendlyName(), m.GetMetadataFormat()[1], tuple(f[1] for f in m.GetContainerFormats()), m.GetDeviceManufacturer(), m.GetDeviceModels(), m.DoesRequireFullStream(), m.DoesSupportPadding(), m.DoesRequireFixedSize(), tuple((f[1], m.GetPatterns(f[1])) for f in m.GetContainerFormats()), sep=' - ')
+  print(m.GetComponentType().name, m.GetCLSID().name, m.GetSigningStatus().name, m.GetAuthor(), m.GetVendorGUID().name, m.GetVersion(), m.GetSpecVersion(), m.GetFriendlyName(), m.GetMetadataFormat().name, tuple(f.name for f in m.GetContainerFormats()), m.GetDeviceManufacturer(), m.GetDeviceModels(), m.DoesRequireFullStream(), m.DoesSupportPadding(), m.DoesRequireFixedSize(), tuple((f.name, m.GetPatterns(f)) for f in m.GetContainerFormats()), sep=' - ')
 #Enumerating metadata writers
 for m in IComponentFactory.CreateComponentEnumerator('MetadataWriter'):
-  print(m.GetComponentType()[1], m.GetCLSID()[1], m.GetSigningStatus()[1], m.GetAuthor(), m.GetVendorGUID()[1], m.GetVersion(), m.GetSpecVersion(), m.GetFriendlyName(), m.GetMetadataFormat()[1], tuple(f[1] for f in m.GetContainerFormats()), m.GetDeviceManufacturer(), m.GetDeviceModels(), m.DoesRequireFullStream(), m.DoesSupportPadding(), m.DoesRequireFixedSize(), tuple((f[1], m.GetHeader(f[1])) for f in m.GetContainerFormats()), sep=' - ')
+  print(m.GetComponentType().name, m.GetCLSID().name, m.GetSigningStatus().name, m.GetAuthor(), m.GetVendorGUID().name, m.GetVersion(), m.GetSpecVersion(), m.GetFriendlyName(), m.GetMetadataFormat().name, tuple(f.name for f in m.GetContainerFormats()), m.GetDeviceManufacturer(), m.GetDeviceModels(), m.DoesRequireFullStream(), m.DoesSupportPadding(), m.DoesRequireFixedSize(), tuple((f.name, m.GetHeader(f)) for f in m.GetContainerFormats()), sep=' - ')
 #Creating a decoder from its type
 print(IComponentFactory.CreateComponentInfo('JpegDecoder').GetFriendlyName())
 IDecoder = IComponentFactory.CreateDecoder('jpeg', 'Microsoft')
-print(IDecoder.GetDecoderInfo().GetVendorGUID()[1])
+print(IDecoder.GetDecoderInfo().GetVendorGUID().name)
 IDecoder.Release()
 #Creating an encoder from its type
 IEncoder = IComponentFactory.CreateEncoder('jpeg')
-print(IEncoder.GetEncoderInfo().GetCLSID()[1])
+print(IEncoder.GetEncoderInfo().GetCLSID().name)
 IEncoder.Release()
 #Creating a metadata query reader from a block reader
 p = path + r'\test.jpg'
@@ -722,17 +726,17 @@ IMStream.Seek(s, 'beginning')
 print(IMStream.Get(4).tobytes())
 #Creating a new metadata reader upon the stream
 IMStream.Seek(s, 'beginning')
-IMetadataReader2 = IComponentFactory.CreateMetadataReader(IMetadataReader.GetMetadataFormat()[0], options=IStreamProvider.GetPersistOptions()[0], istream=IMStream)
+IMetadataReader2 = IComponentFactory.CreateMetadataReader(IMetadataReader.GetMetadataFormat(), options=IStreamProvider.GetPersistOptions(), istream=IMStream)
 print(*(r[2].GetMetadataFormat() for r in IMetadataReader2.GetEnumerator()))
 IMetadataReader2.Release()
 #Creating an uninitialized metadata reader with the same format
-IMetadataReader2 = IComponentFactory.CreateMetadataReader(IMetadataReader.GetMetadataFormat()[0])
+IMetadataReader2 = IComponentFactory.CreateMetadataReader(IMetadataReader.GetMetadataFormat())
 #Retrieving the persist stream of this new reader
 IPersistStream = IMetadataReader2.GetPersistStream()
 print(IPersistStream.GetClassID())
 IMStream.Seek(s,'beginning')
 #Loading the stream of the first metadata reader in the new reader through the persist stream
-IPersistStream.LoadEx(IMStream, options=IStreamProvider.GetPersistOptions()[0])
+IPersistStream.LoadEx(IMStream, options=IStreamProvider.GetPersistOptions())
 print(*(r[2].GetMetadataFormat() for r in IMetadataReader2.GetEnumerator()))
 #Creating a metadata writer initialized with the metadata reader
 IMetadataWriter2 = IComponentFactory.CreateMetadataWriterFromReader(IMetadataReader2)
@@ -755,7 +759,7 @@ IMStream = IStreamProvider.GetStream()
 #Reading the first four bytes
 print(IMStream.Get(4).tobytes())
 #Creating an uninitialized metadata writer with the same format
-IMetadataWriter2 = IComponentFactory.CreateMetadataWriter(IMetadataWriter.GetMetadataFormat()[0])
+IMetadataWriter2 = IComponentFactory.CreateMetadataWriter(IMetadataWriter.GetMetadataFormat())
 #Setting a metadata value by its index from the previous writer
 IMetadataWriter2.SetValueByIndex(0, *IMetadataWriter.GetValueWithTypeByIndex(0)[:2], IMetadataWriter.GetValueWithTypeByIndex(0)[2])
 #Retrieving the persist stream of the new writer
@@ -764,7 +768,7 @@ print(IPersistStream.GetClassID())
 print(IPersistStream.GetClassID(), IPersistStream.GetSizeMax())
 #Saving the content of the new metadata writer to a new in memory stream 
 IMStream = IStream.CreateInMemory()
-IPersistStream.SaveEx(IMStream, options=IStreamProvider.GetPersistOptions()[0])
+IPersistStream.SaveEx(IMStream, options=IStreamProvider.GetPersistOptions())
 #Reading the first four bytes
 print(IMStream.Seek())
 IMStream.Seek(0, 'beginning')
@@ -788,9 +792,9 @@ IBitmapFrame = IDecoder.GetFrame(0)
 #Retrieving the app1 and icc metadata segments
 IMetadataBlockReader = IBitmapFrame.GetMetadataBlockReader()
 e = IMetadataBlockReader.GetEnumerator()
-IMetadataReader1 = next((reader for reader in e if reader.GetMetadataFormat()[1] == 'App1'), None)
+IMetadataReader1 = next((reader for reader in e if reader.GetMetadataFormat() == 'App1'), None)
 e.Reset()
-IMetadataReader2 = next((reader for reader in e if reader.GetMetadataFormat()[1] == 'Unknown'), None)
+IMetadataReader2 = next((reader for reader in e if reader.GetMetadataFormat() == 'Unknown'), None)
 e.Release()
 #Creating the jpeg frame decode
 IJpegFrameDecode = IBitmapFrame.GetJpegFrameDecode()
@@ -800,10 +804,10 @@ IEncoder = IImagingFactory.CreateEncoder('jpeg')
 IEncoder.Initialize(IPStream)
 IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
 #Setting the tables, size and pixel format accordingly to the decoded frame
-IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': IJpegFrameDecode.GetFrameHeader()['SampleFactors'][1][-3:], 'Luminance': IJpegFrameDecode.GetQuantizationTable(0, 0), 'Chrominance': IJpegFrameDecode.GetQuantizationTable(0, 1), 'JpegLumaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,0), 'JpegLumaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,0), 'JpegChromaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,1), 'JpegChromaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,1), 'SuppressApp0': True})
+IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': IJpegFrameDecode.GetFrameHeader()['SampleFactors'].name[-3:], 'Luminance': IJpegFrameDecode.GetQuantizationTable(0, 0), 'Chrominance': IJpegFrameDecode.GetQuantizationTable(0, 1), 'JpegLumaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,0), 'JpegLumaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,0), 'JpegChromaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,1), 'JpegChromaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,1), 'SuppressApp0': True})
 IBitmapFrameEncode.Initialize(IEncoderOptions)
 IBitmapFrameEncode.SetSize(*IBitmapFrame.GetSize())
-IBitmapFrameEncode.SetPixelFormat(IBitmapFrame.GetPixelFormat()[0])
+print(IBitmapFrameEncode.SetPixelFormat(IBitmapFrame.GetPixelFormat()) == IBitmapFrame.GetPixelFormat())
 #Creating the jpeg frame encode
 IJpegFrameEncode = IBitmapFrameEncode.GetJpegFrameEncode()
 #Copying the compressed data from the jpeg frame decode to the jpeg frame encode
@@ -824,7 +828,7 @@ if IMetadataReader1 is not None:
 #Creating a metadata writer from the app1 metadata reader
   IMetadataWriter1 = IComponentFactory.CreateMetadataWriterFromReader(IMetadataReader1)
 #Retrieving the ifd metadata writer
-  IMetadataWriter11 = next(writer[2] for writer in IMetadataWriter1.GetEnumerator() if writer[2].GetMetadataFormat()[1] == 'Ifd')
+  IMetadataWriter11 = next(writer[2] for writer in IMetadataWriter1.GetEnumerator() if writer[2].GetMetadataFormat() == 'Ifd')
 #Setting the new metadata values
   IMetadataWriter11.SetValue(('VT_EMPTY', None), ('VT_UI2', 271), ('VT_LPSTR', b'Manufacturer'))
   IMetadataWriter11.SetValue(('VT_EMPTY', None), ('VT_UI2', 315), ('VT_LPSTR', b'Artist'))
@@ -834,7 +838,7 @@ if IMetadataReader1 is not None:
   IPersistStream = IMetadataWriter1.GetPersistStream()
 #Encoding the app1 metadata in a in memory stream
   IMStream = IStream.CreateInMemory()
-  IPersistStream.SaveEx(IMStream, options=IStreamProvider.GetPersistOptions()[0])
+  IPersistStream.SaveEx(IMStream, options=IStreamProvider.GetPersistOptions())
   m = IMStream.Seek()
 #Writing the app1 metadata header to the new file
   h = IMetadataWriterInfo.GetHeader('jpeg')
@@ -855,7 +859,7 @@ if IMetadataReader2 is not None:
   IPersistStream = IMetadataWriter2.GetPersistStream()
 #Encoding the icc metadata in a in memory stream
   IMStream = IStream.CreateInMemory()
-  IPersistStream.SaveEx(IMStream, options=IStreamProvider.GetPersistOptions()[0])
+  IPersistStream.SaveEx(IMStream, options=IStreamProvider.GetPersistOptions())
   m = IMStream.Seek()
 #Writing the app1 metadata header to the new file
   h = IMetadataWriterInfo.GetHeader('jpeg')
