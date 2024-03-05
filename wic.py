@@ -61,7 +61,7 @@ class IUnknown(metaclass=_IMeta):
     if clsid_component is None:
       return None
     if not clsid_component:
-      if (clsid_component := getattr(cls, 'CLSID')) is None:
+      if (clsid_component := getattr(cls, 'CLSID', None)) is None:
         raise TypeError('%s does not have an implicit constructor' % cls.__name__)
     if isinstance(clsid_component, wintypes.LPVOID):
       pI = clsid_component
@@ -248,8 +248,7 @@ class IStream(IUnknown):
       r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), True, None, ctypes.byref(pIStream))
     if r:
       return None
-    else:
-      ISetLastError(0)
+    ISetLastError(0)
     return cls(pIStream)
   shl.SHCreateMemStream.restype = wintypes.LPVOID
   @classmethod
@@ -311,7 +310,7 @@ class _Resolve_NG:
   def create_from(cls, obj):
     if isinstance(obj, str):
       obj = cls.name_guid(obj)
-    return ctypes.cast(ctypes.c_void_p(None), cls) if obj is None else cls(cls.__bases__[1]._type_(*(cls.name_guid(obj) if isinstance(obj, str) else obj)))
+    return ctypes.cast(ctypes.c_void_p(None), cls) if obj is None else cls(cls.__bases__[1]._type_(*obj))
 
 class _Resolve_GN:
   @classmethod
@@ -628,13 +627,13 @@ WICPCOMPONENT = type('WICPCOMPONENT', (_Resolve_NG, ctypes.POINTER(WICCOMPONENT)
 class _Resolve:
   @classmethod
   def name_code(cls, n):
-    return cls._tab_nc.get(n.lower(), cls._def)
+    return cls._tab_nc.get(n.lower(), cls._def) if isinstance(n, str) else n
   @classmethod
   def code_name(cls, c):
-    return cls._tab_cn.get(c, '')
+    return cls._tab_cn.get(c, str(c))
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, cls.__bases__[1]) else cls.__bases__[1](cls.name_code(obj) if isinstance(obj, str) else obj)
+    return obj if isinstance(obj, cls.__bases__[1]) else cls.__bases__[1](cls.name_code(obj))
   @property
   def value(self):
     v = self.__class__.__bases__[1].value.__get__(self)
@@ -646,17 +645,26 @@ class _Resolve:
 class _ResolveOr(_Resolve):
   @classmethod
   def name_code(cls, n):
-    n = n.lower().replace(' ', '|').replace('+', '|').split('|')
+    if not isinstance(n, str):
+      return n
     c = 0
-    for n_ in filter(None, n):
-      c_ = cls._tab_nc.get(n_, cls._def)
-      if c_ is None:
-        return None
-      c |= c_
+    for n_ in filter(None, n.lower().replace(' ', '|').replace('+', '|').split('|')):
+      c |= cls._tab_nc.get(n_, cls._def)
     return c
   @classmethod
   def code_name(cls, c):
     return ' | '.join((n_ for c_, n_ in cls._tab_cn.items() if c_ == 0) if c == 0 else (n_ for c_, n_ in cls._tab_cn.items() if c_ & c))
+
+class _ResolveT(_ResolveOr):
+  @classmethod
+  def code_name(cls, c):
+    n = []
+    for c_, n_ in reversed(cls._tab_cn.items()):
+      if c_ & c == c_:
+        n.append(n_)
+        if n_.startswith('Rotate'):
+          break
+    return ' | '.join(n)
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
 WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_Resolve, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
@@ -671,7 +679,7 @@ WICPALETTETYPE = type('WICPALETTETYPE', (_Resolve, wintypes.DWORD), {'_tab_nc': 
 WICPPALETTETYPE = ctypes.POINTER(WICPALETTETYPE)
 
 WICDecoderCapabilities = {'SameEncoder': 1, 'CanDecodeAllImages': 2, 'CanDecodeSomeImages': 4, 'CanEnumerateMetadata': 8, 'CanDecodeThumbnail': 16}
-WICDECODERCAPABILITIES = type('WICDECODERCAPABILITIES', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecoderCapabilities.items()}, '_tab_cn': {c: n for n, c in WICDecoderCapabilities.items()}, '_def': 1})
+WICDECODERCAPABILITIES = type('WICDECODERCAPABILITIES', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecoderCapabilities.items()}, '_tab_cn': {c: n for n, c in WICDecoderCapabilities.items()}, '_def': 0})
 WICPDECODERCAPABILITIES = ctypes.POINTER(WICDECODERCAPABILITIES)
 
 WICDecodeOption = {'Demand': 0, 'OnDemand': 0, 'Load': 1, 'OnLoad': 1}
@@ -693,13 +701,13 @@ WICJpegScanType = {'Interleaved': 0, 'PlanarComponents': 1, 'Progressive': 2}
 WICJPEGSCANTYPE = type('WICJPEGSCANTYPE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegScanType.items()}, '_tab_cn': {c: n for n, c in WICJpegScanType.items()}, '_def': 0})
 
 WICJpegSampleFactors = {'One': 0x11, 'Three_420': 0x111122, 'Three_422': 0x111121, 'Three_440': 0x111112, 'Three_444': 0x111111}
-WICJPEGSAMPLEFACTORS = type('WICJPEGSAMPLEFACTORS', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegSampleFactors.items()}, '_tab_cn': {c: n for n, c in WICJpegSampleFactors.items()}, '_def': 0})
+WICJPEGSAMPLEFACTORS = type('WICJPEGSAMPLEFACTORS', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegSampleFactors.items()}, '_tab_cn': {c: n for n, c in WICJpegSampleFactors.items()}, '_def': 0x111122})
 
 WICJpegQuantizationBaseline = {'One': 0x0, 'Three': 0x10100}
-WICJPEGQUANTIZATIONBASELINE = type('WICJPEGQUANTIZATIONBASELINE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegQuantizationBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegQuantizationBaseline.items()}, '_def': 0})
+WICJPEGQUANTIZATIONBASELINE = type('WICJPEGQUANTIZATIONBASELINE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegQuantizationBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegQuantizationBaseline.items()}, '_def': 0x10100})
 
 WICJpegHuffmanBaseline = {'One': 0x0, 'Three': 0x111100}
-WICJPEGHUFFMANBASELINE = type('WICJPEGHUFFMANBASELINE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegHuffmanBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegHuffmanBaseline.items()}, '_def': 0})
+WICJPEGHUFFMANBASELINE = type('WICJPEGHUFFMANBASELINE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegHuffmanBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegHuffmanBaseline.items()}, '_def': 0x111100})
 
 class WICJPEGFRAMEHEADER(ctypes.Structure):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('TransferMatrix', WICJPEGTRANSFERMATRIX), ('ScanType', WICJPEGSCANTYPE), ('cComponents', wintypes.UINT), ('ComponentIdentifiers', wintypes.DWORD), ('SampleFactors', WICJPEGSAMPLEFACTORS), ('QuantizationTableIndices', WICJPEGQUANTIZATIONBASELINE)]
@@ -721,6 +729,15 @@ class WICJPEGSCANHEADER(ctypes.Structure):
   _fields_ = [('cComponents', wintypes.UINT), ('RestartInterval', wintypes.UINT), ('ComponentSelectors', wintypes.DWORD), ('HuffmanTableIndices', WICJPEGHUFFMANBASELINE), ('StartSpectralSelection', wintypes.BYTE), ('EndSpectralSelection', wintypes.BYTE), ('SuccessiveApproximationHigh', wintypes.BYTE), ('SuccessiveApproximationLow', wintypes.BYTE)]
 WICPJPEGSCANHEADER = ctypes.POINTER(WICJPEGSCANHEADER)
 
+WICPngFilterOption = {'Unspecified': 0, 'None': 1, 'Sub': 2, 'Up': 3, 'Average': 4, 'Paeth': 5, 'Adaptive': 6}
+WICPNGFILTEROPTION = type('WICPNGFILTEROPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPngFilterOption.items()}, '_tab_cn': {c: n for n, c in WICPngFilterOption.items()}, '_def': 0})
+
+WICTiffCompressionOption = {'DontCare': 0, 'None': 1, 'CCITT3': 2, 'CCITT4': 3, 'LZW': 4, 'RLE': 5, 'ZIP': 6, 'Differencing': 7}
+WICTIFFCOMPRESSIONOPTION = type('WICTIFFCOMPRESSIONOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTiffCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICTiffCompressionOption.items()}, '_def': 0})
+
+WICHeifCompressionOption = {'DontCare': 0, 'None': 1, 'HEVC': 2, 'AV1': 3}
+WICHEIFCOMPRESSIONOPTION = type('WICHEIFCOMPRESSIONOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICHeifCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICHeifCompressionOption.items()}, '_def': 0})
+
 WICCreateCacheOption = {'None': 0, 'No': 0, 'Demand': 1, 'OnDemand': 1, 'Load': 2, 'OnLoad': 2}
 WICCREATECACHEOPTION = type('WICCREATECACHEOPTION', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICCreateCacheOption.items()}, '_tab_cn': {c: n for n, c in WICCreateCacheOption.items()}, '_def': 0})
 
@@ -738,7 +755,7 @@ WICInterpolationMode = {'Nearest': 0, 'NearestNeighbor': 0, 'Linear': 1, 'Cubic'
 WICINTERPOLATIONMODE = type('WICINTERPOLATIONMODE', (_Resolve, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICInterpolationMode.items()}, '_tab_cn': {c: n for n, c in WICInterpolationMode.items()}, '_def': 3})
 
 WICTransformOptions = {'Rotate0': 0, 'Rotate90': 1, 'Rotate180': 2, 'Rotate270': 3, 'FlipHorizontal': 8, 'FlipVertical': 16}
-WICTRANSFORMOPTIONS = type('WICTRANSFORMOPTIONS', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTransformOptions.items()}, '_tab_cn': {c: n for n, c in WICTransformOptions.items()}, '_def': 0})
+WICTRANSFORMOPTIONS = type('WICTRANSFORMOPTIONS', (_ResolveT, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTransformOptions.items()}, '_tab_cn': {c: n for n, c in WICTransformOptions.items()}, '_def': 0})
 
 WICComponentType = {'BitmapDecoder': 0x1, 'Decoder': 0x1, 'BitmapEncoder': 0x2, 'Encoder': 0x2, 'FormatConverter': 0x4 , 'PixelFormatConverter': 0x4, 'MetadataReader': 0x8, 'MetadataWriter': 0x10, 'PixelFormat': 0x20, 'Component': 0x3f, 'AllComponents': 0x3f}
 WICCOMPONENTTYPE = type('WICCOMPONENTTYPE', (_ResolveOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentType.items()}, '_tab_cn': {c: n for n, c in WICComponentType.items()}, '_def': 0x3f})
@@ -941,7 +958,7 @@ class CA(ctypes.Structure):
       etype = _BVARIANT.code_ctype[_BVARIANT.vt_co(etype)]
     if etype is not None and data is not None:
       self.vc = len(data)
-      self.vp = ctypes.cast(data if isinstance(data, etype * self.vc) else ctypes.pointer((etype * self.vc)(*data)), wintypes.LPVOID)
+      self.vp = ctypes.cast(ctypes.pointer(data) if isinstance(data, etype * self.vc) else ctypes.pointer((etype * self.vc)(*data)), wintypes.LPVOID)
 
 class SAFEARRAYBOUND(ctypes.Structure):
   _fields_ = [('cElements', wintypes.ULONG), ('lLbound', wintypes.LONG)]
@@ -1233,7 +1250,7 @@ class IPropertyBag2(IUnknown):
     return self.__class__._protos['CountProperties'](self.pI)
   def GetPropertyInfo(self, first=0, number=None, code=False):
     if number is None:
-      number = self.CountProperties()
+      number = self.CountProperties() - first
     propbags = (PROPBAG2 * number)()
     n = self.__class__._protos['GetPropertyInfo'](self.pI, first, number, propbags)
     return None if n is None else {pb.pstrName: ((pb.vt if code else VARIANT.co_vt(pb.vt)), pb.dwHint) for pb in propbags[:n]}
@@ -1254,7 +1271,7 @@ class IPropertyBag2(IUnknown):
     if self.__class__._protos['Read'](self.pI, n, propbags, None, values, results) is None:
       return None
     values._needsclear = True
-    return {prop[0]: ((prop[1][0], prop[1][1]) if isinstance(prop[1], (tuple, list)) else prop[1], val.value) for val, prop in zip(values, property_infos.items())}
+    return {prop[0]: (((prop[1][0], prop[1][1]) if isinstance(prop[1], (tuple, list)) else prop[1]), val.value) for val, prop in zip(values, property_infos.items())}
   def Write(self, properties):
     n = len(properties)
     propbags = (PROPBAG2 * n)()
@@ -1274,14 +1291,21 @@ class IPropertyBag2(IUnknown):
     if self.__class__._protos['Write'](self.pI, n, propbags, values) is None:
       return None
     return True
-  def GetProperties(self, property_infos=None):
+  def GetPropertiesWithType(self, property_infos=None):
     if property_infos is None:
-      if (property_infos := self.GetPropertyInfo(code=False)) is None:
+      if (property_infos := self.GetPropertyInfo()) is None:
         return None
     return self.Read(property_infos)
+  def GetProperties(self, property_infos=None):
+    props = self.GetPropertiesWithType(property_infos)
+    if props is None:
+      return None
+    for n, tv in props.items():
+      props[n] = tv[1]
+    return props
   def SetProperties(self, property_values, property_infos=None):
     if property_infos is None:
-      if (property_infos := self.GetPropertyInfo(code=True)) is None:
+      if (property_infos := self.GetPropertyInfo()) is None:
         return None
     n = len(property_values)
     properties = {}
@@ -1291,6 +1315,72 @@ class IPropertyBag2(IUnknown):
         return None
       properties[n] = (property_infos[n], v)
     return self.Write(properties)
+
+class _IWICEPBMeta(_IMeta):
+  _options = {
+    'ImageQuality': ('VT_R4', None, None),
+    'JpegYCrCbSubsampling': ('VT_UI1', WICJPEGYCRCBSUBSAMPLINGOPTION.code_name, WICJPEGYCRCBSUBSAMPLINGOPTION.name_code),
+    'BitmapTransform': ('VT_UI1', WICTRANSFORMOPTIONS.code_name, WICTRANSFORMOPTIONS.name_code),
+    'SuppressApp0': ('VT_BOOL', None, None),
+    'Luminance': ('VT_ARRAY | VT_I4', None, (lambda s: (wintypes.LONG * 64)(*s) if isinstance(s, wintypes.BYTE * 64) else s)),
+    'Chrominance': ('VT_ARRAY | VT_I4', None, (lambda s: (wintypes.LONG * 64)(*s) if isinstance(s, wintypes.BYTE * 64) else s)),
+    'JpegLumaDcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 12).from_buffer(s), 'CodeValues': (wintypes.BYTE * 12).from_buffer(s, 12)}, (lambda s: (wintypes.BYTE * 24)(*sum(map(tuple, s.values()),())) if isinstance(s, dict) else s)),
+    'JpegLumaAcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 16).from_buffer(s), 'CodeValues': (wintypes.BYTE * 162).from_buffer(s, 16)}, (lambda s: (wintypes.BYTE * 178)(*sum(map(tuple, s.values()),())) if isinstance(s, dict) else s)),
+    'JpegChromaDcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 12).from_buffer(s), 'CodeValues': (wintypes.BYTE * 12).from_buffer(s, 12)}, (lambda s: (wintypes.BYTE * 24)(*sum(map(tuple, s.values()),())) if isinstance(s, dict) else s)),
+    'JpegChromaAcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 16).from_buffer(s), 'CodeValues': (wintypes.BYTE * 162).from_buffer(s, 16)}, (lambda s: (wintypes.BYTE * 178)(*sum(map(tuple, s.values()),())) if isinstance(s, dict) else s)),
+    'InterlaceOption': ('VT_BOOL', None, None),
+    'FilterOption': ('VT_UI1', WICPNGFILTEROPTION.code_name, WICPNGFILTEROPTION.name_code),
+    'CompressionQuality': ('VT_R4', None, None),
+    'TiffCompressionMethod': ('VT_UI1', WICTIFFCOMPRESSIONOPTION.code_name, WICTIFFCOMPRESSIONOPTION.name_code),
+    'EnableV5Header32bppBGRA': ('VT_BOOL', None, None),
+    'HeifCompressionMethod': ('VT_UI1', WICHEIFCOMPRESSIONOPTION.code_name, WICHEIFCOMPRESSIONOPTION.name_code),
+    'Lossless': ('VT_BOOL', None, None)
+  }
+  class _encoder_option:
+    def __set_name__(self, owner, name):
+      self.name = name
+      self.options = owner._options
+    def __get__(self, obj, cls=None):
+      n = self.name
+      o = self.options[n]
+      props = obj.Read({n: o[0]})
+      return None if props is None else (props[n][1] if (o[1] is None or props[n][1] is None) else o[1](props[n][1]))
+    def __set__(self, obj, value):
+      n = self.name
+      o = self.options[n]
+      obj.Write({n: ((0 if value is None else o[0]), (value if (o[2] is None or value is None) else o[2](value)))})
+  @classmethod
+  def __prepare__(mcls, name, bases, **kwds):
+    for n in mcls._options:
+      kwds[n] = mcls._encoder_option()
+    return kwds
+
+class IWICEncoderPropertyBag(IPropertyBag2, metaclass=_IWICEPBMeta):
+  def GetPropertyInfo(self, first=0, number=None, code=False):
+    if first == 0 and number is None and code is False:
+      property_infos = getattr(self, '_property_infos', None)
+      if property_infos is None:
+        if (property_infos := super().GetPropertyInfo()) is not None:
+          setattr(self, '_property_infos', property_infos)
+    else:
+      property_infos = super().GetPropertyInfo(first, number, code)
+    return property_infos
+  def GetProperties(self, property_infos=None):
+    props = super().GetProperties(getattr(self, '_property_infos', None) if property_infos is None else property_infos)
+    if props is None:
+      return None
+    for n, v in props.items():
+      o = self.__class__._options.get(n)
+      if o is not None:
+        props[n] = (v if (o[1] is None or v is None) else o[1](v))
+    return props
+  def SetProperties(self, property_values, property_infos=None):
+    props = {}
+    for n, v in property_values.items():
+      o = self.__class__._options.get(n)
+      if o is not None:
+        props[n] = v if (o[2] is None or v is None) else o[2](v)
+    return super().SetProperties(props, getattr(self, '_property_infos', None) if property_infos is None else property_infos)
 
 class IWICEnumMetadataItem(IUnknown):
   IID = GUID(0xdc2bb46d, 0x3f07, 0x481e, 0x86, 0x25, 0x22, 0x0c, 0x4a, 0xed, 0xbb, 0x33)
@@ -1314,7 +1404,7 @@ class IWICEnumMetadataItem(IUnknown):
     schemas._needsclear = True
     idents._needsclear = True
     values._needsclear = True
-    return tuple((s.value, i.value, v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value) for s, i, v, _r in zip(schemas, idents, values, range(r))) if self.__class__.WithTypeCode is None else tuple((((s.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(s.vt)) , s.value), ((i.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(i.vt)), i.value), ((v.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(v.vt)), v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r)))
+    return tuple((s.value, i.value, (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r))) if self.__class__.WithTypeCode is None else tuple((((s.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(s.vt)) , s.value), ((i.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(i.vt)), i.value), ((v.vt if self.__class__.WithTypeCode else PROPVARIANT.co_vt(v.vt)), (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value))) for s, i, v, _r in zip(schemas, idents, values, range(r)))
   def Skip(self, number):
     try:
       if self.__class__._protos['Skip'](self.pI, number) > 1:
@@ -1355,16 +1445,6 @@ class IWICPersistStream(IPersistStream):
   IID = GUID(0x00675040, 0x6908, 0x45f8, 0x86, 0xa3, 0x49, 0xc7, 0xdf, 0xd6, 0xd9, 0xad)
   _protos['LoadEx'] = 8, (wintypes.LPVOID, WICPVENDORIDENTIFICATION, WICPERSISTOPTIONS), ()
   _protos['SaveEx'] = 9, (wintypes.LPVOID, WICPERSISTOPTIONS, wintypes.BOOLE), ()
-  def GetClassID(self):
-    return self.__class__._protos['GetClassID'](self.pI)
-  def IsDirty(self):
-    return self.__class__._protos['IsDirty'](self.pI)
-  def Load(self, istream):
-    return self.__class__._protos['Load'](self.pI, istream)
-  def GetSizeMax(self):
-    return self.__class__._protos['GetSizeMax'](self.pI)
-  def Save(self, istream, clear_dirty=True):
-    return self.__class__._protos['Save'](self.pI, istream, clear_dirty)
   def LoadEx(self, istream, load_vendor=None, options=0):
     return self.__class__._protos['LoadEx'](self.pI, istream, load_vendor, options)
   def SaveEx(self, istream, options=0, clear_dirty=True):
@@ -1469,14 +1549,12 @@ class IWICMetadataReader(IUnknown):
     if (siv := self.__class__._protos['GetValueByIndex'](self.pI, index)) is None:
       return None
     siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
-    siv = tuple(p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value for p in siv)
-    return siv[0], siv[1], siv[2]
+    return tuple(p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value for p in siv)
   def GetValueWithTypeByIndex(self, index, code=False):
     if (siv := self.__class__._protos['GetValueByIndex'](self.pI, index)) is None:
       return None
     siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
-    siv = tuple(((p.vt if code else PROPVARIANT.co_vt(p.vt)), p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value) for p in siv)
-    return siv[0], siv[1], siv[2]
+    return tuple(((p.vt if code else PROPVARIANT.co_vt(p.vt)), (p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value)) for p in siv)
   def GetMetadataHandlerInfo(self):
     return IWICMetadataHandlerInfo(self.__class__._protos['GetMetadataHandlerInfo'](self.pI)).QueryInterface(IWICMetadataReaderInfo, {'IFactory': self.ties.get('IFactory'), 'IMetadataReader': self})
   def GetPersistStream(self):
@@ -1535,7 +1613,7 @@ class IWICBitmapFrameDecode(IWICBitmapSource):
   def GetMetadataQueryReader(self):
     return IWICMetadataQueryReader(self.__class__._protos['GetMetadataQueryReader'](self.pI), {'IBitmapFrame': self})
   def GetThumbnail(self):
-    return IWICBitmapSource(self.__class__._protos['GetThumbnail'](self.pI), {'IBitmapDecoder': self.ties.get('IBitmapDecoder'), 'IBitmapFrame': self})
+    return IWICBitmapSource(self.__class__._protos['GetThumbnail'](self.pI), {'IBitmapFrame': self})
   def GetPalette(self):
     IPalette = self.ties['IFactory'].CreatePalette()
     return None if self.CopyPalette(IPalette) is None else IPalette
@@ -1844,7 +1922,7 @@ class IWICBitmapEncoder(IUnknown):
   def CreateNewFrame(self):
     if (pIBitmapFrameEncode_pIEncoderOptions := self.__class__._protos['CreateNewFrame'](self.pI)) is None:
       return None
-    return IWICBitmapFrameEncode(pIBitmapFrameEncode_pIEncoderOptions[0], {'IFactory': self.ties.get('IFactory'), 'IBitmapEncoder': self}), IPropertyBag2(pIBitmapFrameEncode_pIEncoderOptions[1])
+    return IWICBitmapFrameEncode(pIBitmapFrameEncode_pIEncoderOptions[0], {'IFactory': self.ties.get('IFactory'), 'IBitmapEncoder': self}), IWICEncoderPropertyBag(pIBitmapFrameEncode_pIEncoderOptions[1])
   def Commit(self):
     return self.__class__._protos['Commit'](self.pI)
   def GetEncoderInfo(self):
@@ -2270,7 +2348,7 @@ class IWICImagingFactory(IUnknown):
     icls = globals().get('IWIC%sInfo' % next((n_ for n_, c_ in WICComponentType.items() if c_ == c), 'Component'), 'IWICComponentInfo')
     return ci.QueryInterface(icls)
   def CreateComponentEnumerator(self, types=0x3f, options=0):
-    c = WICCOMPONENTTYPE.name_code(types) if isinstance(types, str) else types
+    c = WICCOMPONENTTYPE.name_code(types)
     icls = globals().get('IWIC%sInfo' % next((n_ for n_, c_ in WICComponentType.items() if c_ == c), 'Component'), 'IWICComponentInfo')
     return type('IEnum' + icls.__name__[1:], (IEnumUnknown,), {'IClass': icls})(self.__class__._protos['CreateComponentEnumerator'](self.pI, types, options), {'IFactory': self})
   def CreateComponentFactory(self):
@@ -2311,7 +2389,7 @@ class IWICComponentFactory(IWICImagingFactory):
       else:
         pb.vt = VARIANT.vt_co(prop[1]) if isinstance(prop[1], str) else prop[1]
         pb.dwHint = 0
-    return IPropertyBag2(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n))
+    return IWICEncoderPropertyBag(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n))
 
 if ISetLastError(ole32.CoInitializeEx(None, wintypes.DWORD(2))) in (0, 1):
   atexit.register(ole32.CoUninitialize)

@@ -315,8 +315,9 @@ l = memoryview(lu)
 l = l.cast('B').cast(l.format.lstrip('<>@'), (8,8))
 for i in range(8):
   print(', '.join(str(l[i,j]) for j in range(8)))
-#Setting array properties values from the 1d array
-IEncoderOptions.Write({'Luminance': ('VT_ARRAY | VT_I4', b)})
+#Setting array properties values from the right 1d array
+IEncoderOptions.Luminance = b
+print(IEncoderOptions.Luminance[:])
 #Initializing the frame encoder with the options
 IBitmapFrameEncode.Initialize(IEncoderOptions)
 #Setting the color context
@@ -453,8 +454,8 @@ IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
 properties = IEncoderOptions.GetPropertyInfo()
 print(properties)
 print(IEncoderOptions.Read(properties))
-IEncoderOptions.SetProperties({'FilterOption': 4}, properties)
-print(IEncoderOptions.GetProperties())
+IEncoderOptions.FilterOption = 4
+print(IEncoderOptions.GetPropertiesWithType())
 IBitmapFrameEncode.Initialize(IEncoderOptions)
 IBitmapFrameEncode.SetPalette(IPalette2)
 IBitmapFrameEncode.WriteSource(IFormatConverter)
@@ -551,8 +552,8 @@ IEncoder.Initialize(IStream2)
 IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
 print(IEncoderOptions.GetProperties())
 #Setting the tables accordingly to the decoded frame ones
-IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': WICJPEGYCRCBSUBSAMPLINGOPTION.name_code(IJpegFrameDecode.GetFrameHeader()['SampleFactors'][1][-3:]), 'Luminance': array.array('L', IJpegFrameDecode.GetQuantizationTable(0, 0)), 'Chrominance': array.array('L', IJpegFrameDecode.GetQuantizationTable(0, 1)), 'JpegLumaAcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetAcHuffmanTable(0,0).values()),())), 'JpegLumaDcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetDcHuffmanTable(0,0).values()),())), 'JpegChromaAcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetAcHuffmanTable(0,1).values()),())), 'JpegChromaDcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetDcHuffmanTable(0,1).values()),())), 'SuppressApp0': True})
-print('Luminance:', tuple(IEncoderOptions.Read({'Luminance': 'VT_ARRAY | VT_I4'}).values())[0][1][:])
+IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': IJpegFrameDecode.GetFrameHeader()['SampleFactors'][1][-3:], 'Luminance': IJpegFrameDecode.GetQuantizationTable(0, 0), 'Chrominance': IJpegFrameDecode.GetQuantizationTable(0, 1), 'JpegLumaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,0), 'JpegLumaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,0), 'JpegChromaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,1), 'JpegChromaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,1), 'SuppressApp0': True})
+print('Luminance:', IEncoderOptions.Luminance[:])
 print('Chrominance:', tuple(IEncoderOptions.Read({'Chrominance': 'VT_ARRAY | VT_I4'}).values())[0][1][:])
 IBitmapFrameEncode.Initialize(IEncoderOptions)
 #Setting the sze and pixel format accordingly to the decoded frame
@@ -799,7 +800,7 @@ IEncoder = IImagingFactory.CreateEncoder('jpeg')
 IEncoder.Initialize(IPStream)
 IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
 #Setting the tables, size and pixel format accordingly to the decoded frame
-IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': WICJPEGYCRCBSUBSAMPLINGOPTION.name_code(IJpegFrameDecode.GetFrameHeader()['SampleFactors'][1][-3:]), 'Luminance': array.array('L', IJpegFrameDecode.GetQuantizationTable(0, 0)), 'Chrominance': array.array('L', IJpegFrameDecode.GetQuantizationTable(0, 1)), 'JpegLumaAcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetAcHuffmanTable(0,0).values()),())), 'JpegLumaDcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetDcHuffmanTable(0,0).values()),())), 'JpegChromaAcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetAcHuffmanTable(0,1).values()),())), 'JpegChromaDcHuffmanTable': array.array('B', sum(map(tuple, IJpegFrameDecode.GetDcHuffmanTable(0,1).values()),())), 'SuppressApp0': True})
+IEncoderOptions.SetProperties({'JpegYCrCbSubsampling': IJpegFrameDecode.GetFrameHeader()['SampleFactors'][1][-3:], 'Luminance': IJpegFrameDecode.GetQuantizationTable(0, 0), 'Chrominance': IJpegFrameDecode.GetQuantizationTable(0, 1), 'JpegLumaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,0), 'JpegLumaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,0), 'JpegChromaAcHuffmanTable': IJpegFrameDecode.GetAcHuffmanTable(0,1), 'JpegChromaDcHuffmanTable': IJpegFrameDecode.GetDcHuffmanTable(0,1), 'SuppressApp0': True})
 IBitmapFrameEncode.Initialize(IEncoderOptions)
 IBitmapFrameEncode.SetSize(*IBitmapFrame.GetSize())
 IBitmapFrameEncode.SetPixelFormat(IBitmapFrame.GetPixelFormat()[0])
