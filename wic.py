@@ -1013,20 +1013,23 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
 class CA(ctypes.Structure):
   _fields_ = [('vc', wintypes.DWORD), ('vp', wintypes.LPVOID)]
   def content(self, etype):
-    if isinstance(etype, int):
-      etype = _BVARIANT.code_ctype[etype]
-    elif isinstance(etype, str):
-      etype = _BVARIANT.code_ctype[_BVARIANT.vt_co(etype)]
-    return (etype * self.vc).from_buffer_copy(ctypes.cast(self.vp, ctypes.POINTER(etype * self.vc)).contents) if self.vp else None
-  def __init__(self, etype=None, data=None):
-    super().__init__()
-    if isinstance(etype, int):
-      etype = _BVARIANT.code_ctype[etype]
-    elif isinstance(etype, str):
-      etype = _BVARIANT.code_ctype[_BVARIANT.vt_co(etype)]
-    if etype is not None and data is not None:
+    if isinstance(etype, (int, str)):
+      etype = _BVType.vtype_code(etype)
+      etype = None if etype is None else _BVARIANT.code_ctype.get(etype & 4095)
+    return (etype * self.vc).from_buffer_copy(ctypes.cast(self.vp, ctypes.POINTER(etype * self.vc)).contents) if etype is not None and self.vp else None
+  def __new__(cls, etype=None, data=None):
+    self = ctypes.Structure.__new__(cls)
+    if data is not None:
+      if isinstance(etype, (int, str)):
+        etype = _BVType.vtype_code(etype)
+        etype = None if etype is None else _BVARIANT.code_ctype.get(etype & 4095)
+      if etype is None:
+        return None
       self.vc = len(data)
       self.vp = ctypes.cast(ctypes.pointer(data) if isinstance(data, etype * self.vc) else ctypes.pointer((etype * self.vc)(*data)), wintypes.LPVOID)
+    return self
+  def __init__(self, etype=None, data=None):
+    super().__init__()
 
 class SAFEARRAYBOUND(ctypes.Structure):
   _fields_ = [('cElements', wintypes.ULONG), ('lLbound', wintypes.LONG)]
@@ -1064,8 +1067,8 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
         self.size *= shape[dim]
     elif len(args) == 2:
       vtype, data = args
-      if isinstance(vtype, str):
-        vtype = _BVARIANT.vt_co(vtype)
+      if (vtype := _BVType.vtype_code(vtype)) is None:
+        return None
       self = ctypes.POINTER(wintypes.USHORT).__new__(cls)
       vtype &= 4095
       self.vtype = vtype
@@ -1089,7 +1092,7 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
         sab.cElements = dim
         sab.lLbound = 0
       psafearray = wintypes.LPVOID(oleauto32.SafeArrayCreate(vtype, len(self.shape), ctypes.byref(sabs)))
-      if psafearray == 0:
+      if not psafearray:
         return None
       self._needsdestroy = True
       if self.size > 0:
@@ -1272,7 +1275,7 @@ class _BVARIANT(metaclass=_BVMeta):
   @property
   def value(self):
     cls = self.__class__
-    vt = self.vt.code
+    vt = self._vt
     if vt & 4095 <= 1:
       return None
     if vt < 4096:
@@ -1290,6 +1293,8 @@ class _BVARIANT(metaclass=_BVMeta):
         v._bvariant = self
       return v
     elif vt > 8192 and vt < 16384:
+      if 'VT_ARRAY' not in cls.vtype_code:
+        return None
       vt ^= 8192
       if (t := cls.code_ctype.get(vt)) is None:
         return None
@@ -1327,11 +1332,16 @@ class _BVARIANT(metaclass=_BVMeta):
     if vtype < 4096:
       setattr(self, cls.code_name[vtype], data)
     elif vtype > 4096 and vtype < 8192:
+      if 'VT_VECTOR' not in cls.vtype_code:
+        return False
+      if (t := cls.code_ctype.get(vtype ^ 4096)) is None:
+        return False
+      if (ca := CA(t, data)) is None:
+        return False
+      self.ca = ca
+    elif vtype > 8192 and vtype < 16384:
       if 'VT_ARRAY' not in cls.vtype_code:
         return False
-      t = cls.code_ctype[vtype ^ 4096]
-      self.ca = CA(t, data)
-    elif vtype > 8192 and vtype < 16384:
       if (psafearray := PSAFEARRAY(vtype ^ 8192, data)) is None:
         return False
       self.parray = psafearray.psafearray
