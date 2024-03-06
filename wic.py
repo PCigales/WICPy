@@ -1334,9 +1334,7 @@ class _BVARIANT(metaclass=_BVMeta):
     elif vtype > 4096 and vtype < 8192:
       if 'VT_VECTOR' not in cls.vtype_code:
         return False
-      if (t := cls.code_ctype.get(vtype ^ 4096)) is None:
-        return False
-      if (ca := CA(t, data)) is None:
+      if (ca := CA(cls.code_ctype.get(vtype ^ 4096), data)) is None:
         return False
       self.ca = ca
     elif vtype > 8192 and vtype < 16384:
@@ -1464,7 +1462,7 @@ class IPropertyBag2(IUnknown):
 class _WICEncoderOption:
   def __set_name__(self, owner, name):
     self.name = name
-    self.options = owner._options
+    self.options = owner.__class__._options
   def __get__(self, obj, cls=None):
     n = self.name
     o = self.options[n]
@@ -1478,8 +1476,8 @@ class _WICEncoderOption:
 class _IWICEPBMeta(_IMeta):
   _options = {
     'ImageQuality': ('VT_R4', None, None),
-    'JpegYCrCbSubsampling': ('VT_UI1', WICJPEGYCRCBSUBSAMPLINGOPTION.code_name, WICJPEGYCRCBSUBSAMPLINGOPTION.name_code),
-    'BitmapTransform': ('VT_UI1', WICTRANSFORMOPTIONS.code_name, WICTRANSFORMOPTIONS.name_code),
+    'JpegYCrCbSubsampling': ('VT_UI1', WICJPEGYCRCBSUBSAMPLINGOPTION, (lambda s: s.code if isinstance(s, WICJPEGYCRCBSUBSAMPLINGOPTION) else WICJPEGYCRCBSUBSAMPLINGOPTION.name_code(s))),
+    'BitmapTransform': ('VT_UI1', WICTRANSFORMOPTIONS, (lambda s: s.code if isinstance(s, WICTRANSFORMOPTIONS) else WICTRANSFORMOPTIONS.name_code(s))),
     'SuppressApp0': ('VT_BOOL', None, None),
     'Luminance': ('VT_ARRAY | VT_I4', None, (lambda s: (wintypes.LONG * 64)(*s) if isinstance(s, wintypes.BYTE * 64) else s)),
     'Chrominance': ('VT_ARRAY | VT_I4', None, (lambda s: (wintypes.LONG * 64)(*s) if isinstance(s, wintypes.BYTE * 64) else s)),
@@ -1488,11 +1486,11 @@ class _IWICEPBMeta(_IMeta):
     'JpegChromaDcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 12).from_buffer(s), 'CodeValues': (wintypes.BYTE * 12).from_buffer(s, 12)}, (lambda s: (wintypes.BYTE * 24)(*sum(map(tuple, s.values()),())) if isinstance(s, dict) else s)),
     'JpegChromaAcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 16).from_buffer(s), 'CodeValues': (wintypes.BYTE * 162).from_buffer(s, 16)}, (lambda s: (wintypes.BYTE * 178)(*sum(map(tuple, s.values()),())) if isinstance(s, dict) else s)),
     'InterlaceOption': ('VT_BOOL', None, None),
-    'FilterOption': ('VT_UI1', WICPNGFILTEROPTION.code_name, WICPNGFILTEROPTION.name_code),
+    'FilterOption': ('VT_UI1', WICPNGFILTEROPTION, (lambda s: s.code if isinstance(s, WICPNGFILTEROPTION) else WICPNGFILTEROPTION.name_code(s))),
     'CompressionQuality': ('VT_R4', None, None),
-    'TiffCompressionMethod': ('VT_UI1', WICTIFFCOMPRESSIONOPTION.code_name, WICTIFFCOMPRESSIONOPTION.name_code),
+    'TiffCompressionMethod': ('VT_UI1', WICTIFFCOMPRESSIONOPTION, (lambda s: s.code if isinstance(s, WICTIFFCOMPRESSIONOPTION) else WICTIFFCOMPRESSIONOPTION.name_code(s))),
     'EnableV5Header32bppBGRA': ('VT_BOOL', None, None),
-    'HeifCompressionMethod': ('VT_UI1', WICHEIFCOMPRESSIONOPTION.code_name, WICHEIFCOMPRESSIONOPTION.name_code),
+    'HeifCompressionMethod': ('VT_UI1', WICHEIFCOMPRESSIONOPTION, (lambda s: s.code if isinstance(s, WICHEIFCOMPRESSIONOPTION) else WICHEIFCOMPRESSIONOPTION.name_code(s))),
     'Lossless': ('VT_BOOL', None, None)
   }
   @classmethod
@@ -1611,7 +1609,73 @@ class IWICStreamProvider(IUnknown):
   def RefreshStream(self):
     return self.__class__._protos['RefreshStream'](self.pI)
 
-class IWICMetadataQueryReader(IUnknown):
+MetadataOrientation = {'TopLeft': 1, 'TopRight': 2, 'BottomRight': 3, 'BottomLeft': 4, 'LeftTop': 5, 'RightTop': 6, 'RightBottom': 7, 'LeftBottom': 8}
+METADATAORIENTATION = type('METADATAORIENTATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataOrientation.items()}, '_tab_cn': {c: n for n, c in MetadataOrientation.items()}, '_def': 1})
+
+class _WICMetadataQuery:
+  def __set_name__(self, owner, name):
+    self.name = name
+    self.queries = owner.__class__._queries
+  def __get__(self, obj, cls=None):
+    n = self.name
+    q = self.queries[n[3:]]
+    if (f := obj.GetContainerFormat()) is not None:
+      f = f.name.lower()
+      p = next((s[2] for p_ in q[0] if (s := p_.partition(f))[1]), None)
+    if n.startswith('Get'):
+      return lambda _o=obj, _p=p, _f=q[2]: None if p is None else (m if ((m := _o.GetMetadataByName(_p)) is None or _f is None) else _f(m))
+    elif n.startswith('Set'):
+      return lambda v, _o=obj, _p=p, _t=q[1], _f=q[3]: _o.SetMetadataByName(p, (_t, (v if (v is None or _f is None) else _f(v))))
+
+class _IWICMQRMeta(_IMeta):
+  _queries = {
+    'App0': (('/jpeg/app0',), 'VT_UNKNOWN', None, None),
+    'App1': (('/jpeg/app1',), 'VT_UNKNOWN', None, None),
+    'Ifd': (('/jpeg/app1/ifd', '/tiff/ifd'), 'VT_UNKNOWN', None, None),
+    'Exif': (('/jpeg/app1/ifd/exif', '/tiff/ifd/exif'), 'VT_UNKNOWN', None, None),
+    'Gps': (('/jpeg/app1/ifd/gps', '/tiff/ifd/gps'), 'VT_UNKNOWN', None, None),
+    'ImageWidth': (('/jpeg/app1/ifd/{ushort=256}', '/tiff/ifd/{ushort=256}'), 'VT_UI4', None, None),
+    'ImageLength': (('/jpeg/app1/ifd/{ushort=257}', '/tiff/ifd/{ushort=257}'), 'VT_UI4', None, None),
+    'PixelXDimension': (('/jpeg/app1/ifd/exif/{ushort=40962}', '/tiff/ifd/exif/{ushort=40962}'), 'VT_UI4', None, None),
+    'PixelYDimension': (('/jpeg/app1/ifd/exif/{ushort=40963}', '/tiff/ifd/exif/{ushort=40963}'), 'VT_UI4', None, None),
+    'Orientation': (('/jpeg/app1/ifd/{ushort=274}', '/tiff/ifd/{ushort=274}'), 'VT_UI2', METADATAORIENTATION, (lambda s: s.code if isinstance(s, METADATAORIENTATION) else METADATAORIENTATION.name_code(s))),
+    'LatitudeRef': (('/jpeg/app1/ifd/gps/{ushort=1}', '/tiff/ifd/gps/{ushort=1}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Latitude': (('/jpeg/app1/ifd/gps/{ushort=2}', '/tiff/ifd/gps/{ushort=2}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.fraction_rational, (round(s_ * 1000) for s_ in s), (1000,) * 3)))),
+    'LongitudeRef': (('/jpeg/app1/ifd/gps/{ushort=3}', '/tiff/ifd/gps/{ushort=3}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Longitude': (('/jpeg/app1/ifd/gps/{ushort=4}', '/tiff/ifd/gps/{ushort=4}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.fraction_rational, (round(s_ * 1000) for s_ in s), (1000,) * 3)))),
+    'DateTimeOriginal': (('/jpeg/app1/ifd/exif/{ushort=36867}', '/tiff/ifd/exif/{ushort=36867}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'DateTimeDigitized': (('/jpeg/app1/ifd/exif/{ushort=36868}', '/tiff/ifd/exif/{ushort=36868}'), 'VT_LPSTR', bytes.decode, str.encode)
+  }
+  @staticmethod
+  def rational_float(r):
+    n, d = struct.unpack('=LL', struct.pack('=Q', r))
+    return n / d
+  @staticmethod
+  def srational_float(r):
+    n, d = struct.unpack('=ll', struct.pack('=Q', r))
+    return n / d
+  @staticmethod
+  def fraction_rational(n, d):
+    return struct.unpack('=Q', struct.pack('=LL', n, d))[0]
+  @staticmethod
+  def fraction_srational(r):
+    return struct.unpack('=Q', struct.pack('=ll', n, d))[0]
+  @classmethod
+  def __prepare__(mcls, name, bases, **kwds):
+    kwds = super(mcls, mcls).__prepare__(name, bases, **kwds)
+    if 'Reader' in name:
+      for n in mcls._queries:
+        kwds['Get' + n] = _WICMetadataQuery()
+      kwds['GetGPSDec'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ((-1 if latr == 'S' else 1) * sum(n / d for n, d in zip(lat, (1, 60, 3600))), (-1 if lonr == 'W' else 1) * sum(n / d for n, d in zip(lon, (1, 60, 3600)))))
+      kwds['GetGPSDMS'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ('%s"%s' % (('%.0f°%02.0f\'%06.3f' % lat).rstrip('0').rstrip('.') , latr), '%s"%s' % (('%.0f°%02.0f\'%06.3f' % lon).rstrip('0').rstrip('.') , lonr)))
+    elif 'Writer' in name:
+      for n in mcls._queries:
+        kwds['Set' + n] = _WICMetadataQuery()
+      kwds['SetGPSDec'] = property(lambda s: lambda lat, lon, _s=s: None not in (_s.SetLatitudeRef('S' if lat < 0 else 'N'), _s.SetLatitude((int(abs(lat)), int(abs(lat) * 60 % 60), abs(lat) * 3600 % 60)), _s.SetLongitudeRef('W' if lon < 0 else 'E'), _s.SetLongitude((int(abs(lon)), int(abs(lon) * 60 % 60), abs(lon) * 3600 % 60))))
+      kwds['SetGPSDMS'] = property(lambda s: lambda lat, lon,_s=s: None not in (_s.SetLatitudeRef('S' if lat[-1:].upper() == 'S' else 'N'), _s.SetLatitude((int(lat.split('°')[0]), int(lat.split('°')[1].split('\'')[0]), float(lat.split('\'')[1].split('"')[0]))), _s.SetLongitudeRef('W' if lon[-1:].upper() == 'W' else 'E'), _s.SetLongitude((int(lon.split('°')[0]), int(lon.split('°')[1].split('\'')[0]), float(lon.split('\'')[1].split('"')[0])))))
+    return kwds
+
+class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
   IID = GUID(0x30989668, 0xe1c9, 0x4597, 0xb3, 0x95, 0x45, 0x8e, 0xed, 0xb8, 0x08, 0xdf)
   _protos['GetContainerFormat'] = 3, (), (WICPMETADATAHANDLER,)
   _protos['GetLocation'] = 4, (wintypes.UINT, wintypes.LPWSTR), (wintypes.PUINT,)
@@ -1651,20 +1715,6 @@ class IWICMetadataQueryReader(IUnknown):
       return None
     v._needsclear = True
     return v.vt, (v.value.QueryInterface(self.__class__, self.ties) if v.vt == 13 else v.value)
-  @staticmethod
-  def rational_float(r):
-    n, d = struct.unpack('=LL', struct.pack('=Q', r))
-    return n / d
-  @staticmethod
-  def srational_float(r):
-    n, d = struct.unpack('=ll', struct.pack('=Q', r))
-    return n / d
-  @staticmethod
-  def fraction_rational(n, d):
-    return struct.unpack('=Q', struct.pack('=LL', n, d))[0]
-  @staticmethod
-  def fraction_srational(r):
-    return struct.unpack('=Q', struct.pack('=ll', n, d))[0]
 
 class IWICMetadataReader(IUnknown):
   IID = GUID(0x9204fe99, 0xd8fc, 0x4fd5, 0xa0, 0x01, 0x95, 0x36, 0xb0, 0x67, 0xa8, 0x99)
