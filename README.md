@@ -5,4 +5,6 @@ This program is free software: you can redistribute it and/or modify it under th
 
 WICPy defines Python (>=v3.8) classes wrapping the COM interfaces, bringing access to their methods and coordinating the memory managed and unmanaged modes of the resources from either side.
 
+The COM library must be initialized for each thread creating from scratch a new component by calling Initialize() and therefore uninitialized at the end by calling Uninitialize(), after having released all interfaces.
+
 The script test.py illustrates how to use the module through various applications.
