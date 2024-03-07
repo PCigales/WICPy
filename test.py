@@ -2,13 +2,16 @@ from wic import *
 import os.path
 import msvcrt
 import array
+import threading
 
 path = os.path.dirname(os.path.abspath(globals().get('__file__', ' '))) + r'\test'
 
 #IWICImagingFactory instance creation opt1
+Initialize()
 WICImagingFactoryClassFactory = IClassFactory(IWICImagingFactory.CLSID)
 IImagingFactory = WICImagingFactoryClassFactory.CreateInstance(IWICImagingFactory)
 print(IImagingFactory, IImagingFactory.Release())
+WICImagingFactoryClassFactory.Release()
 
 #IWICImagingFactory instance creation opt2
 IImagingFactory = IWICImagingFactory()
@@ -223,6 +226,8 @@ while True:
       r = stc[0]
     else:
       break
+del stc
+IMetadataQueryReader.Release()
 print('end - metadata')
 
 #Bitmap manipulation
@@ -392,7 +397,7 @@ IBitmapFrameEncode.Commit()
 #Encoding the image
 IEncoder.Commit()
 #Releasing interfaces
-tuple(map(IUnknown.Release, (IBitmapFrameEncode, IEncoderOptions, IFormatConverter, IBitmapScaler2, IBitmapFlipRotator, IBitmapCache, IBitmapScaler, IBitmapClipper, IMetadataQueryWriter, IMetadataQueryWriter3, IMetadataQueryWriter2, IMetadataQueryWriter1, IEncoder, IStream2)))
+tuple(map(IUnknown.Release, (IBitmapFrameEncode, IEncoderOptions, IFormatConverter, IBitmapScaler2, IBitmapFlipRotator, IBitmapCache, IBitmapScaler, IBitmapClipper, IMetadataQueryWriter, IMetadataQueryWriter3, IMetadataQueryWriter2, IMetadataQueryWriter1, IEncoder, IStream2, *IColorContexts)))
 
 #Fast metadata modification
 IDecoder2 = IImagingFactory.CreateDecoderFromFilename(p2,  desired_access='readwrite', metadata_option='ondemand')
@@ -523,11 +528,12 @@ print(IMetadataReader.GetMetadataFormat(), IMetadataReader.GetCount())
 e = IMetadataReader.GetEnumeratorWithType()
 siv = e.Next(IMetadataReader.GetCount())
 print(siv)
-#Retrieving a metadata from its schema and identifier
+# Retrieving a metadata from its schema and identifier
 print(IMetadataReader.GetValue(*siv[0][:2]).GetMetadataFormat())
-#Retrieving a metadata from its index
+# Retrieving a metadata from its index
 siv = IMetadataReader.GetValueByIndex(0)
 print(siv[2].GetMetadataFormat())
+del siv
 
 #Jpeg manipulation (part 1)
 #Creating a jpeg frame decoder from the decoded frame
@@ -574,6 +580,7 @@ for IMetadataWriter in IMetadataWriters:
   print(IMetadataWriter.GetMetadataFormat(), IMetadataWriter.GetCount())
   e = IMetadataWriter.GetEnumerator()
   print(e.Next(IMetadataWriter.GetCount()))
+  IMetadataWriter.Release()
 #Retrieving a writer by its index
 IMetadataWriter = IMetadataBlockWriter.GetWriterByIndex(0)
 #Retrieving a metadata value by its index
@@ -653,24 +660,32 @@ for d in IComponentFactory.CreateComponentEnumerator('decoder'):
   print(d.GetComponentType().name, d.GetCLSID().name, d.GetSigningStatus().name, d.GetAuthor(), d.GetVendorGUID().name, d.GetVersion(), d.GetSpecVersion(), d.GetFriendlyName(), d.GetContainerFormat().name, tuple(f.name for f in d.GetPixelFormats()), d.GetColorManagementVersion(), d.GetDeviceManufacturer(), d.GetDeviceModels(), d.GetMimeTypes(), d.GetFileExtensions(), d.DoesSupportAnimation(), d.DoesSupportChromaKey(), d.DoesSupportLossless(), d.DoesSupportMultiframe(), d.MatchesMimeType('image/jpeg'), d.GetPatterns(), d.MatchesPattern(IStream))
   if d.GetCLSID() == 'JpegDecoder':
     dj = d
+  else:
+    d.Release()
 IStream.Release()
 #Creating a decoder instance from a decoder info
 print(dj.CreateInstance())
+del dj
 #Enumerating encoders
 for e in IComponentFactory.CreateComponentEnumerator('encoder'):
   print(e.GetComponentType().name, e.GetCLSID().name, e.GetSigningStatus().name, e.GetAuthor(), e.GetVendorGUID().name, e.GetVersion(), e.GetSpecVersion(), e.GetFriendlyName(), e.GetContainerFormat().name, tuple(f.name for f in e.GetPixelFormats()), e.GetColorManagementVersion(), e.GetDeviceManufacturer(), e.GetDeviceModels(), e.GetMimeTypes(), e.GetFileExtensions(), e.DoesSupportAnimation(), e.DoesSupportChromaKey(), e.DoesSupportLossless(), e.DoesSupportMultiframe(), e.MatchesMimeType('image/jpeg'), sep=' - ')
+  e.Release()
 #Enumerating pixel format converters
 for c in IComponentFactory.CreateComponentEnumerator('PixelFormatConverter'):
   print(c.GetComponentType().name, c.GetCLSID().name, c.GetSigningStatus().name, c.GetAuthor(), c.GetVendorGUID().name, c.GetVersion(), c.GetSpecVersion(), c.GetFriendlyName(), tuple(f.name for f in c.GetPixelFormats()), sep=' - ')
+  c.Release()
 #Enumerating pixel formats
 for f in IComponentFactory.CreateComponentEnumerator('PixelFormat'):
   print(f.GetComponentType().name, f.GetCLSID().name, f.GetSigningStatus().name, f.GetAuthor(), f.GetVendorGUID().name, f.GetVersion(), f.GetSpecVersion(), f.GetFriendlyName(), f.GetFormatGUID().name, f.GetBitsPerPixel(), f.GetChannelCount(), tuple(f.GetChannelMask(i) for i in range(f.GetChannelCount())), f.SupportsTransparency(), f.GetNumericRepresentation().name, getattr(f.GetColorContext(), 'GetType', lambda : None)(), sep=' - ')
+  f.Release()
 #Enumerating metadata readers
 for m in IComponentFactory.CreateComponentEnumerator('MetadataReader'):
   print(m.GetComponentType().name, m.GetCLSID().name, m.GetSigningStatus().name, m.GetAuthor(), m.GetVendorGUID().name, m.GetVersion(), m.GetSpecVersion(), m.GetFriendlyName(), m.GetMetadataFormat().name, tuple(f.name for f in m.GetContainerFormats()), m.GetDeviceManufacturer(), m.GetDeviceModels(), m.DoesRequireFullStream(), m.DoesSupportPadding(), m.DoesRequireFixedSize(), tuple((f.name, m.GetPatterns(f)) for f in m.GetContainerFormats()), sep=' - ')
+  m.Release()
 #Enumerating metadata writers
 for m in IComponentFactory.CreateComponentEnumerator('MetadataWriter'):
   print(m.GetComponentType().name, m.GetCLSID().name, m.GetSigningStatus().name, m.GetAuthor(), m.GetVendorGUID().name, m.GetVersion(), m.GetSpecVersion(), m.GetFriendlyName(), m.GetMetadataFormat().name, tuple(f.name for f in m.GetContainerFormats()), m.GetDeviceManufacturer(), m.GetDeviceModels(), m.DoesRequireFullStream(), m.DoesSupportPadding(), m.DoesRequireFixedSize(), tuple((f.name, m.GetHeader(f)) for f in m.GetContainerFormats()), sep=' - ')
+  m.Release()
 #Creating a decoder from its type
 print(IComponentFactory.CreateComponentInfo('JpegDecoder').GetFriendlyName())
 IDecoder = IComponentFactory.CreateDecoder('jpeg', 'Microsoft')
@@ -742,6 +757,7 @@ print(*(r[2].GetMetadataFormat() for r in IMetadataReader2.GetEnumerator()))
 IMetadataWriter2 = IComponentFactory.CreateMetadataWriterFromReader(IMetadataReader2)
 print(*(r[2].GetMetadataFormat() for r in IMetadataWriter2.GetEnumerator()))
 IMetadataReader2.Release()
+IMetadataReader.Release()
 IMStream.Release()
 IStreamProvider.Release()
 IPersistStream.Release()
@@ -776,12 +792,23 @@ print(IMStream.Get(4).tobytes())
 #Releasing interfaces
 tuple(map(IUnknown.Release, (IStreamProvider, IPersistStream, IMetadataWriter2, IMetadataWriter, IMetadataQueryWriter, IMetadataBlockWriter, IMetadataQueryReader, IMetadataBlockReader, IBitmapFrameEncode, IEncoderOptions, IEncoder, IStream2, IBitmapFrame, IDecoder)))
 
-#Creating an encoder options property bag
-PropertyBag = IComponentFactory.CreateEncoderPropertyBag({'test': 'VT_BSTR', 'test2': 'VT_I4'})
-print(PropertyBag.CountProperties(), PropertyBag.GetPropertyInfo())
-PropertyBag.Write({'test': ('VT_BSTR', 'rr')})
-PropertyBag.SetProperties({'test2':5})
-print(PropertyBag.GetProperties())
+#Creating an encoder options property bag in a different thread
+def f():
+  IWICComponentFactory()
+  print('Not initialized for the thread ->', IGetLastError())
+  Initialize()
+  IComponentFactory = IWICComponentFactory()
+  PropertyBag = IComponentFactory.CreateEncoderPropertyBag({'test': 'VT_BSTR', 'test2': 'VT_I4'})
+  print(PropertyBag.CountProperties(), PropertyBag.GetPropertyInfo())
+  PropertyBag.Write({'test': ('VT_BSTR', 'rr')})
+  PropertyBag.SetProperties({'test2':5})
+  print(PropertyBag.GetProperties())
+  PropertyBag.Release()
+  IComponentFactory.Release()
+  Uninitialize()
+th=threading.Thread(target=f)
+th.start()
+th.join()
 
 #Editing metadata in a jpeg image without reencoding
 p = path + r'\test.jpg'
@@ -880,3 +907,4 @@ tuple(map(IUnknown.Release, (IStream2, IMetadataWriter2, IMetadataWriter, IJpegF
 #Releasing the factory interfaces
 IImagingFactory.Release()
 IComponentFactory.Release()
+Uninitialize()

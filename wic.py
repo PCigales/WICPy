@@ -13,7 +13,7 @@ wintypes.PGUID = ctypes.POINTER(wintypes.GUID)
 wintypes.BYTES16 = wintypes.BYTE * 16
 wintypes.PBYTES16 = ctypes.POINTER(wintypes.BYTES16)
 import struct
-import atexit
+import threading
 
 kernel32 = ctypes.WinDLL('kernel32',  use_last_error=True)
 ole32 = ctypes.WinDLL('ole32', use_last_error=True)
@@ -35,6 +35,7 @@ def GUID_S(g):
   return '%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x' % struct.unpack('=LHH8B', g)
 
 class _IUtil:
+  _local = threading.local()
   @staticmethod
   def _errcheck(r, f, a):
     ISetLastError(r)
@@ -102,8 +103,10 @@ class IUnknown(metaclass=_IMeta):
   def _as_parameter_(self):
     return self.pI
   def __del__(self):
-    while self.pI and self.refs > 0:
-      self.Release()
+    __IUtil = globals().get('_IUtil')
+    if __IUtil and hasattr(__IUtil._local, 'initialized'):
+      while self.pI and self.refs > 0:
+        self.Release()
 
 class IClassFactory(IUnknown):
   IID = GUID('00000001-0000-0000-c000-000000000046')
@@ -1612,40 +1615,40 @@ class IWICStreamProvider(IUnknown):
 MetadataOrientation = {'TopLeft': 1, 'TopRight': 2, 'BottomRight': 3, 'BottomLeft': 4, 'LeftTop': 5, 'RightTop': 6, 'RightBottom': 7, 'LeftBottom': 8}
 METADATAORIENTATION = type('METADATAORIENTATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataOrientation.items()}, '_tab_cn': {c: n for n, c in MetadataOrientation.items()}, '_def': 1})
 
+MetadataResolutionUnit = {'No': 1, 'None': 1, 'Inch': 2, 'Centimeter': 3}
+METADATARESOLUTIONUNIT = type('METADATARESOLUTIONUNIT', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataResolutionUnit.items()}, '_tab_cn': {c: n for n, c in MetadataResolutionUnit.items()}, '_def': 1})
+
+MetadataAltitudeRef = {'AboveSeaLevel': 0, 'BelowSeaLevel': 1}
+METADATAALTITUDEREF = type('METADATAALTITUDEREF', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataAltitudeRef.items()}, '_tab_cn': {c: n for n, c in MetadataAltitudeRef.items()}, '_def': 0})
+
+MetadataTiffCompression = {'Uncompressed': 1, 'CCIT-RLE': 2, 'CCIT-T.4': 3, 'CCIT-T.5': 4, 'LZW': 5, 'OldJpeg': 6, 'Jpeg': 7, 'AdobeDeflate': 8, 'JBIG-T.85': 9, 'JBIG-T.43': 10, 'PKZIPDeflate': 32946, 'PackBits': 32773, 'Jpeg2000': 34712}
+METADATATIFFCOMPRESSION = type('METADATATIFFCOMPRESSION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffCompression.items()}, '_tab_cn': {c: n for n, c in MetadataTiffCompression.items()}, '_def': 5})
+
+MetadataTiffPredictor = {'No': 1, 'None': 1, 'HorizontalDifferencing': 2, 'FloatingPointHorizontalDifferencing': 3}
+METADATATIFFPREDICTOR = type('METADATATIFFPREDICTOR', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffPredictor.items()}, '_tab_cn': {c: n for n, c in MetadataTiffPredictor.items()}, '_def': 5})
+
+MetadataTiffPlanarConfiguration = {'Chunky': 0, 'Interleaved': 0, 'Planar': 1}
+METADATATIFFPLANARCONFIGURATION = type('METADATATIFFPLANARCONFIGURATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffPlanarConfiguration.items()}, '_tab_cn': {c: n for n, c in MetadataTiffPlanarConfiguration.items()}, '_def': 0})
+
+MetadataTiffSampleFormat = {'UnsignedInteger': 1, 'SignedInteger': 2, 'FloatingPoint': 3, 'Undefined': 4}
+METADATATIFFSAMPLEFORMAT = type('METADATATIFFSAMPLEFORMAT', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffSampleFormat.items()}, '_tab_cn': {c: n for n, c in MetadataTiffSampleFormat.items()}, '_def': 4})
+
 class _WICMetadataQuery:
   def __set_name__(self, owner, name):
-    self.name = name
+    self.name = name[3:]
+    self.reader = name.startswith('Get')
     self.queries = owner.__class__._queries
   def __get__(self, obj, cls=None):
-    n = self.name
-    q = self.queries[n[3:]]
+    q = self.queries[self.name]
     if (f := obj.GetContainerFormat()) is not None:
       f = f.name.lower()
       p = next((s[2] for p_ in q[0] if (s := p_.partition(f))[1]), None)
-    if n.startswith('Get'):
-      return lambda _o=obj, _p=p, _f=q[2]: None if p is None else (m if ((m := _o.GetMetadataByName(_p)) is None or _f is None) else _f(m))
-    elif n.startswith('Set'):
-      return lambda v, _o=obj, _p=p, _t=q[1], _f=q[3]: _o.SetMetadataByName(p, (_t, (v if (v is None or _f is None) else _f(v))))
+    if self.reader:
+      return lambda _o=obj, _p=p, _f=q[2]: None if _p is None else (m if ((m := _o.GetMetadataByName(_p)) is None or _f is None) else _f(m))
+    else:
+      return lambda v, _o=obj, _p=p, _t=q[1], _f=q[3]: None if _p is None else _o.SetMetadataByName(_p, (_t, (v if (v is None or _f is None) else _f(v))))
 
 class _IWICMQRMeta(_IMeta):
-  _queries = {
-    'App0': (('/jpeg/app0',), 'VT_UNKNOWN', None, None),
-    'App1': (('/jpeg/app1',), 'VT_UNKNOWN', None, None),
-    'Ifd': (('/jpeg/app1/ifd', '/tiff/ifd'), 'VT_UNKNOWN', None, None),
-    'Exif': (('/jpeg/app1/ifd/exif', '/tiff/ifd/exif'), 'VT_UNKNOWN', None, None),
-    'Gps': (('/jpeg/app1/ifd/gps', '/tiff/ifd/gps'), 'VT_UNKNOWN', None, None),
-    'ImageWidth': (('/jpeg/app1/ifd/{ushort=256}', '/tiff/ifd/{ushort=256}'), 'VT_UI4', None, None),
-    'ImageLength': (('/jpeg/app1/ifd/{ushort=257}', '/tiff/ifd/{ushort=257}'), 'VT_UI4', None, None),
-    'PixelXDimension': (('/jpeg/app1/ifd/exif/{ushort=40962}', '/tiff/ifd/exif/{ushort=40962}'), 'VT_UI4', None, None),
-    'PixelYDimension': (('/jpeg/app1/ifd/exif/{ushort=40963}', '/tiff/ifd/exif/{ushort=40963}'), 'VT_UI4', None, None),
-    'Orientation': (('/jpeg/app1/ifd/{ushort=274}', '/tiff/ifd/{ushort=274}'), 'VT_UI2', METADATAORIENTATION, (lambda s: s.code if isinstance(s, METADATAORIENTATION) else METADATAORIENTATION.name_code(s))),
-    'LatitudeRef': (('/jpeg/app1/ifd/gps/{ushort=1}', '/tiff/ifd/gps/{ushort=1}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'Latitude': (('/jpeg/app1/ifd/gps/{ushort=2}', '/tiff/ifd/gps/{ushort=2}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.fraction_rational, (round(s_ * 1000) for s_ in s), (1000,) * 3)))),
-    'LongitudeRef': (('/jpeg/app1/ifd/gps/{ushort=3}', '/tiff/ifd/gps/{ushort=3}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'Longitude': (('/jpeg/app1/ifd/gps/{ushort=4}', '/tiff/ifd/gps/{ushort=4}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.fraction_rational, (round(s_ * 1000) for s_ in s), (1000,) * 3)))),
-    'DateTimeOriginal': (('/jpeg/app1/ifd/exif/{ushort=36867}', '/tiff/ifd/exif/{ushort=36867}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'DateTimeDigitized': (('/jpeg/app1/ifd/exif/{ushort=36868}', '/tiff/ifd/exif/{ushort=36868}'), 'VT_LPSTR', bytes.decode, str.encode)
-  }
   @staticmethod
   def rational_float(r):
     n, d = struct.unpack('=LL', struct.pack('=Q', r))
@@ -1658,21 +1661,69 @@ class _IWICMQRMeta(_IMeta):
   def fraction_rational(n, d):
     return struct.unpack('=Q', struct.pack('=LL', n, d))[0]
   @staticmethod
+  def float_rational(f, d=1000):
+    return struct.unpack('=Q', struct.pack('=LL', round(f * d), d))[0]
+  @staticmethod
   def fraction_srational(r):
     return struct.unpack('=Q', struct.pack('=ll', n, d))[0]
+  @staticmethod
+  def float_srational(f, d=1000):
+    return struct.unpack('=Q', struct.pack('=ll', round(f * d), d))[0]
+  _queries = {
+    'App0': (('/jpeg/app0',), 'VT_UNKNOWN', None, None),
+    'App1': (('/jpeg/app1',), 'VT_UNKNOWN', None, None),
+    'Ifd': (('/jpeg/app1/ifd', '/tiff/ifd'), 'VT_UNKNOWN', None, None),
+    'Exif': (('/jpeg/app1/ifd/exif', '/tiff/ifd/exif'), 'VT_UNKNOWN', None, None),
+    'Gps': (('/jpeg/app1/ifd/gps', '/tiff/ifd/gps'), 'VT_UNKNOWN', None, None),
+    'PixelXDimension': (('/jpeg/app1/ifd/exif/{ushort=40962}', '/tiff/ifd/exif/{ushort=40962}'), 'VT_UI4', None, None),
+    'PixelYDimension': (('/jpeg/app1/ifd/exif/{ushort=40963}', '/tiff/ifd/exif/{ushort=40963}'), 'VT_UI4', None, None),
+    'Orientation': (('/jpeg/app1/ifd/{ushort=274}', '/tiff/ifd/{ushort=274}'), 'VT_UI2', METADATAORIENTATION, (lambda s: s.code if isinstance(s, METADATAORIENTATION) else METADATAORIENTATION.name_code(s))),
+    'LatitudeRef': (('/jpeg/app1/ifd/gps/{ushort=1}', '/tiff/ifd/gps/{ushort=1}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Latitude': (('/jpeg/app1/ifd/gps/{ushort=2}', '/tiff/ifd/gps/{ushort=2}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.float_rational, s)))),
+    'LongitudeRef': (('/jpeg/app1/ifd/gps/{ushort=3}', '/tiff/ifd/gps/{ushort=3}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Longitude': (('/jpeg/app1/ifd/gps/{ushort=4}', '/tiff/ifd/gps/{ushort=4}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.float_rational, s)))),
+    'AltitudeRef': (('/jpeg/app1/ifd/gps/{ushort=5}', '/tiff/ifd/gps/{ushort=5}'), 'VT_UI1', METADATAALTITUDEREF, (lambda s: s.code if isinstance(s, METADATAALTITUDEREF) else METADATAALTITUDEREF.name_code(s))),
+    'Altitude': (('/jpeg/app1/ifd/gps/{ushort=6}', '/tiff/ifd/gps/{ushort=6}'), 'VT_UI8', rational_float, float_rational),
+    'DateTimeOriginal': (('/jpeg/app1/ifd/exif/{ushort=36867}', '/tiff/ifd/exif/{ushort=36867}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'DateTimeDigitized': (('/jpeg/app1/ifd/exif/{ushort=36868}', '/tiff/ifd/exif/{ushort=36868}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'XResolution': (('/jpeg/app1/ifd/{ushort=282}', '/tiff/ifd/{ushort=282}'), 'VT_UI8', rational_float, float_rational),
+    'YResolution': (('/jpeg/app1/ifd/{ushort=283}', '/tiff/ifd/{ushort=283}'), 'VT_UI8', rational_float, float_rational),
+    'ResolutionUnit': (('/jpeg/app1/ifd/{ushort=296}', '/tiff/ifd/{ushort=296}'), 'VT_UI2', METADATARESOLUTIONUNIT, (lambda s: s.code if isinstance(s, METADATARESOLUTIONUNIT) else METADATARESOLUTIONUNIT.name_code(s))),
+    'DateTime': (('/jpeg/app1/ifd/{ushort=306}', '/tiff/ifd/{ushort=306}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'ImageDescription': (('/jpeg/app1/ifd/{ushort=270}', '/tiff/ifd/{ushort=270}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Make': (('/jpeg/app1/ifd/{ushort=271}', '/tiff/ifd/{ushort=271}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Model': (('/jpeg/app1/ifd/{ushort=272}', '/tiff/ifd/{ushort=272}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Software': (('/jpeg/app1/ifd/{ushort=305}', '/tiff/ifd/{ushort=305}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'ColorSpace': (('/jpeg/app1/ifd/exif/{ushort=40961}', '/tiff/ifd/exif/{ushort=40961}'), 'VT_UI2', WICEXIFCOLORSPACE, (lambda s: s.code if isinstance(s, WICEXIFCOLORSPACE) else WICEXIFCOLORSPACE.name_code(s))),
+    'ImageWidth': (('/tiff/ifd/{ushort=256}',), 'VT_UI4', None, None),
+    'ImageLength': (('/tiff/ifd/{ushort=257}',), 'VT_UI4', None, None),
+    'BitsPerSample': (('/tiff/ifd/{ushort=258}',), 'VT_UI2', None, None),
+    'Compression': (('/tiff/ifd/{ushort=259}',), 'VT_UI2', METADATATIFFCOMPRESSION, (lambda s: s.code if isinstance(s, METADATATIFFCOMPRESSION) else METADATATIFFCOMPRESSION.name_code(s))),
+    'Predictor': (('/tiff/ifd/{ushort=317}',), 'VT_UI2', METADATATIFFPREDICTOR, (lambda s: s.code if isinstance(s, METADATATIFFPREDICTOR) else METADATATIFFPREDICTOR.name_code(s))),
+    'SamplesPerPixel': (('/tiff/ifd/{ushort=277}',), 'VT_UI2', None, None),
+    'SampleFormat': (('/tiff/ifd/{ushort=339}',), 'VT_UI2', METADATATIFFSAMPLEFORMAT, (lambda s: s.code if isinstance(s, METADATATIFFSAMPLEFORMAT) else METADATATIFFSAMPLEFORMAT.name_code(s))),
+    'PlanarConfiguration': (('/tiff/ifd/{ushort=284}',), 'VT_UI2', METADATATIFFPLANARCONFIGURATION, (lambda s: s.code if isinstance(s, METADATATIFFPLANARCONFIGURATION) else METADATATIFFPLANARCONFIGURATION.name_code(s))),
+    'RowsPerStrip': (('/tiff/ifd/{ushort=278}',), 'VT_UI4', None, None),
+    'StripByteCounts': (('/tiff/ifd/{ushort=279}',), 'VT_VECTOR | VT_UI4', tuple, None),
+    'StripOffsets': (('/tiff/ifd/{ushort=273}',), 'VT_VECTOR | VT_UI4', tuple, None),
+    'TileWidth': (('/tiff/ifd/{ushort=322}',), 'VT_UI4', None, None),
+    'TileLength': (('/tiff/ifd/{ushort=323}',), 'VT_UI4', None, None),
+    'TileByteCounts': (('/tiff/ifd/{ushort=325}',), 'VT_VECTOR | VT_UI4', tuple, None),
+    'TileOffsets': (('/tiff/ifd/{ushort=324}',), 'VT_VECTOR | VT_UI4', tuple, None)
+  }
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
     kwds = super(mcls, mcls).__prepare__(name, bases, **kwds)
     if 'Reader' in name:
       for n in mcls._queries:
         kwds['Get' + n] = _WICMetadataQuery()
-      kwds['GetGPSDec'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ((-1 if latr == 'S' else 1) * sum(n / d for n, d in zip(lat, (1, 60, 3600))), (-1 if lonr == 'W' else 1) * sum(n / d for n, d in zip(lon, (1, 60, 3600)))))
-      kwds['GetGPSDMS'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ('%s"%s' % (('%.0f°%02.0f\'%06.3f' % lat).rstrip('0').rstrip('.') , latr), '%s"%s' % (('%.0f°%02.0f\'%06.3f' % lon).rstrip('0').rstrip('.') , lonr)))
+      kwds['GetGPSdec'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ((-1 if latr == 'S' else 1) * sum(n / d for n, d in zip(lat, (1, 60, 3600))), (-1 if lonr == 'W' else 1) * sum(n / d for n, d in zip(lon, (1, 60, 3600)))))
+      kwds['GetGPSdms'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ('%s"%s' % (('%.0f°%02.0f\'%06.3f' % lat).rstrip('0').rstrip('.') , latr), '%s"%s' % (('%.0f°%02.0f\'%06.3f' % lon).rstrip('0').rstrip('.') , lonr)))
     elif 'Writer' in name:
       for n in mcls._queries:
         kwds['Set' + n] = _WICMetadataQuery()
-      kwds['SetGPSDec'] = property(lambda s: lambda lat, lon, _s=s: None not in (_s.SetLatitudeRef('S' if lat < 0 else 'N'), _s.SetLatitude((int(abs(lat)), int(abs(lat) * 60 % 60), abs(lat) * 3600 % 60)), _s.SetLongitudeRef('W' if lon < 0 else 'E'), _s.SetLongitude((int(abs(lon)), int(abs(lon) * 60 % 60), abs(lon) * 3600 % 60))))
-      kwds['SetGPSDMS'] = property(lambda s: lambda lat, lon,_s=s: None not in (_s.SetLatitudeRef('S' if lat[-1:].upper() == 'S' else 'N'), _s.SetLatitude((int(lat.split('°')[0]), int(lat.split('°')[1].split('\'')[0]), float(lat.split('\'')[1].split('"')[0]))), _s.SetLongitudeRef('W' if lon[-1:].upper() == 'W' else 'E'), _s.SetLongitude((int(lon.split('°')[0]), int(lon.split('°')[1].split('\'')[0]), float(lon.split('\'')[1].split('"')[0])))))
+      kwds['SetGPSdec'] = property(lambda s: lambda lat, lon, _s=s: None not in (_s.SetLatitudeRef('S' if lat < 0 else 'N'), _s.SetLatitude((int(abs(lat)), int(abs(lat) * 60 % 60), abs(lat) * 3600 % 60)), _s.SetLongitudeRef('W' if lon < 0 else 'E'), _s.SetLongitude((int(abs(lon)), int(abs(lon) * 60 % 60), abs(lon) * 3600 % 60))))
+      kwds['SetGPSdms'] = property(lambda s: lambda lat, lon,_s=s: None not in (_s.SetLatitudeRef('S' if lat[-1:].upper() == 'S' else 'N'), _s.SetLatitude((int(lat.split('°')[0]), int(lat.split('°')[1].split('\'')[0]), float(lat.split('\'')[1].split('"')[0]))), _s.SetLongitudeRef('W' if lon[-1:].upper() == 'W' else 'E'), _s.SetLongitude((int(lon.split('°')[0]), int(lon.split('°')[1].split('\'')[0]), float(lon.split('\'')[1].split('"')[0])))))
     return kwds
 
 class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
@@ -2573,5 +2624,19 @@ class IWICComponentFactory(IWICImagingFactory):
         return None
     return IWICEncoderPropertyBag(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n))
 
-if ISetLastError(ole32.CoInitializeEx(None, wintypes.DWORD(2))) in (0, 1):
-  atexit.register(ole32.CoUninitialize)
+def Initialize(mode=6):
+  if ISetLastError(ole32.CoInitializeEx(None, wintypes.DWORD(2))) in (0, 1):
+    if not hasattr(_IUtil._local, 'initialized'):
+      _IUtil._local.initialized = 0
+    _IUtil._local.initialized += 1
+    return True
+  return None
+
+def Uninitialize():
+  if hasattr(_IUtil._local, 'initialized'):
+    while _IUtil._local.initialized > 0:
+      ISetLastError(ole32.CoUninitialize())
+      _IUtil._local.initialized -= 1
+    del _IUtil._local.initialized
+    return True
+  return None
