@@ -192,7 +192,7 @@ print('/ifd/gps/no ->', IGetLastError())
 #Retrieving gps metadata from the previous reader
 IMetadataQueryReader3 = IMetadataQueryReader2.GetMetadataByName('/ifd/gps')
 print(IMetadataQueryReader2.GetMetadataTypeByName('/ifd/gps'), IMetadataQueryReader3.GetMetadataWithTypeByName('/{ushort=2}'), IMetadataQueryReader3.GetMetadataWithTypeByName('/{ushort=3}'))
-print('%02.f° %02.f\' %02.2f"' % tuple(map(IWICMetadataQueryReader.rational_float, IMetadataQueryReader3.GetMetadataByName('/{ushort=2}'))), IMetadataQueryReader3.GetMetadataByName('/{ushort=1}').decode(), ' - ', '%02.f° %02.f\' %02.2f"' % tuple(map(IWICMetadataQueryReader.rational_float, IMetadataQueryReader3.GetMetadataByName('/{ushort=4}'))), IMetadataQueryReader3.GetMetadataByName('/{ushort=3}').decode() )
+print('%02.f° %02.f\' %02.2f"' % MetadataFloatFraction.from_rational(IMetadataQueryReader3.GetMetadataByName('/{ushort=2}')), IMetadataQueryReader3.GetMetadataByName('/{ushort=1}').decode(), ' - ', '%02.f° %02.f\' %02.2f"' % MetadataFloatFraction.from_rational(IMetadataQueryReader3.GetMetadataByName('/{ushort=4}')), IMetadataQueryReader3.GetMetadataByName('/{ushort=3}').decode())
 #Releasing interfaces
 IMetadataQueryReader3.Release()
 IMetadataQueryReader2.Release()
@@ -370,9 +370,9 @@ print(IMetadataQueryWriter1.GetMetadataNames())
 IMetadataQueryReader2.Release()
 IMetadataQueryReader.Release()
 #Setting metadata values
-IMetadataQueryWriter1.SetMetadataByName('/{ushort=4}', ('VT_VECTOR | VT_UI8', tuple(map(IWICMetadataQueryWriter.fraction_rational, (0, 0, 0), (100, ) * 3))))
+IMetadataQueryWriter1.SetMetadataByName('/{ushort=4}', ('VT_VECTOR | VT_UI8', MetadataFloatFraction.to_rational((0, 0, 0))))
 IMetadataQueryWriter1.SetMetadataByName('/{ushort=1}', ('VT_LPSTR', b'N'))
-IMetadataQueryWriter1.SetMetadataByName('/{ushort=2}', ('VT_VECTOR | VT_UI8', tuple(map(IWICMetadataQueryWriter.fraction_rational, (4300, 5000, 2010), (100, ) * 3))))
+IMetadataQueryWriter1.SetMetadataByName('/{ushort=2}', ('VT_VECTOR | VT_UI8', MetadataFloatFraction.to_rational(('4300/100', '5000/100', '2010/100'))))
 #Rebuilding the metadata tree
 IMetadataQueryWriter2 = IImagingFactory.CreateQueryWriter('ifd')
 IMetadataQueryWriter2.SetMetadataByName('/gps', ('VT_UNKNOWN', IMetadataQueryWriter1))
@@ -410,7 +410,7 @@ IBitmapThumbnail.Release()
 IFastMetadataEncoder = IImagingFactory.CreateFastMetadataEncoderFromFrameDecode(IBitmapFrame2)
 IMetadataQueryWriter = IFastMetadataEncoder.GetMetadataQueryWriter()
 #Setting the value of an existing metadata
-IMetadataQueryWriter.SetMetadataByName('/app1/ifd/gps/{ushort=4}', ('VT_VECTOR | VT_UI8', tuple(map(IWICMetadataQueryWriter.fraction_rational, (500, 1000, 8120), (100, ) * 3))))
+IMetadataQueryWriter.SetLongitude(('500/100', '1000/100', '8120/100'))
 IFastMetadataEncoder.Commit()
 IMetadataQueryWriter.Release()
 IFastMetadataEncoder.Release()
@@ -419,7 +419,7 @@ IMetadataQueryReader = IBitmapFrame2.GetMetadataQueryReader()
 print(IMetadataQueryReader.GetMetadataNames())
 IMetadataQueryReader2 = IMetadataQueryReader.GetMetadataByName('/app1/ifd')
 print(IMetadataQueryReader2.GetMetadataNames())
-print(IMetadataQueryReader2.GetMetadataByName('/gps/{ushort=1}'), '%02.f° %02.f\' %02.2f"' % tuple(map(IWICMetadataQueryReader.rational_float, IMetadataQueryReader2.GetMetadataByName('/gps/{ushort=2}'))), IMetadataQueryReader2.GetMetadataByName('/gps/{ushort=3}'), '%02.f° %02.f\' %02.2f"' % tuple(map(IWICMetadataQueryReader.rational_float, IMetadataQueryReader2.GetMetadataByName('/gps/{ushort=4}'))))
+print(IMetadataQueryReader2.GetPosition())
 #Releasing interfaces
 tuple(map(IUnknown.Release, (IMetadataQueryReader2, IMetadataQueryReader, IBitmapFrame2, IDecoder2, IStream2, IBitmapFrame, IDecoder)))
 
@@ -484,8 +484,8 @@ w, h = IBitmapFrame.GetSize()
 print('(%d, %d)' % (w, h), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat().name)
 #Retrieving metadata
 IMetadataQueryReader = IBitmapFrame.GetMetadataQueryReader()
-for c, n in {258: 'bits_per_sample', 259: 'compression' , 277: 'samples_per_pixel', 339: 'sample_format', 317: 'predictor', 256: 'image_width', 257: 'image_length'}.items():
-  print(n, '(%s): %s' % IMetadataQueryReader.GetMetadataWithTypeByName('/ifd/{ushort=%d}' % c))
+for n in ('BitsPerSample', 'Compression', 'SamplesPerPixel', 'SampleFormat', 'Predictor', 'ImageWidth', 'ImageLength'):
+  print('%s: %s' % (n, getattr(IMetadataQueryReader, 'Get' + n)()))
 IMetadataQueryReader.Release()
 #Retrieving the elevations in a int16 memoryview on top a bytearray
 b=bytearray(w*h*2)

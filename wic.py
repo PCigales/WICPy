@@ -14,6 +14,8 @@ wintypes.BYTES16 = wintypes.BYTE * 16
 wintypes.PBYTES16 = ctypes.POINTER(wintypes.BYTES16)
 import struct
 import threading
+import math
+from fractions import Fraction
 
 kernel32 = ctypes.WinDLL('kernel32',  use_last_error=True)
 ole32 = ctypes.WinDLL('ole32', use_last_error=True)
@@ -397,8 +399,8 @@ WICMetadataHandler = {
   'Gps': GUID(0x7134ab8a, 0x9351, 0x44ad, 0xaf, 0x62, 0x44, 0x8d, 0xb6, 0xb5, 0x02, 0xec),
   'Interop': GUID(0xed686f8e, 0x681f, 0x4c8b, 0xbd, 0x41, 0xa8, 0xad, 0xdb, 0xf6, 0xb3, 0xfc),
   'Thumbnail': GUID(0x243dcee9, 0x8703, 0x40ee, 0x8e, 0xf0, 0x22, 0xa6, 0x0, 0xb8, 0x5, 0x8c),
-  'JpegChrominance': GUID(0xf73d0dcf, 0xcec6, 0x4f85, 0x9b, 0x0e, 0x1c, 0x39, 0x56, 0xb1, 0xbe, 0xf7),
   'JpegLuminance': GUID(0x86908007, 0xedfc, 0x4860, 0x8d, 0x4b, 0x4e, 0xe6, 0xe8, 0x3e, 0x60, 0x58),
+  'JpegChrominance': GUID(0xf73d0dcf, 0xcec6, 0x4f85, 0x9b, 0x0e, 0x1c, 0x39, 0x56, 0xb1, 0xbe, 0xf7),
   'IPTC': GUID(0x4fab0914, 0xe129, 0x4087, 0xa1, 0xd1, 0xbc, 0x81, 0x2d, 0x45, 0xa7, 0xb5),
   'IPTCDigest': GUID(0x1ca32285, 0x9ccd, 0x4786, 0x8b, 0xd8, 0x79, 0x53, 0x9d, 0xb6, 0xa0, 0x06),
   'IRB': GUID(0x16100d66, 0x8570, 0x4bb9, 0xb9, 0x2d, 0xfd, 0xa4, 0xb2, 0x3e, 0xce, 0x67),
@@ -661,6 +663,9 @@ class _BCode:
   @classmethod
   def from_param(cls, obj):
     return obj if isinstance(obj, cls.__bases__[1]) else cls.__bases__[1](cls.name_code(obj))
+  @classmethod
+  def to_int(cls, obj):
+    return obj.code if isinstance(obj, cls) else cls.name_code(obj)
   @property
   def value(self):
     return self
@@ -1465,15 +1470,15 @@ class IPropertyBag2(IUnknown):
 class _WICEncoderOption:
   def __set_name__(self, owner, name):
     self.name = name
-    self.options = owner.__class__._options
+    self.option = owner.__class__._options[name]
   def __get__(self, obj, cls=None):
     n = self.name
-    o = self.options[n]
+    o = self.option
     props = obj.Read({n: o[0]})
     return None if props is None else (props[n][1] if (o[1] is None or props[n][1] is None) else o[1](props[n][1]))
   def __set__(self, obj, value):
     n = self.name
-    o = self.options[n]
+    o = self.option
     obj.Write({n: ((0 if value is None else o[0]), (value if (o[2] is None or value is None) else o[2](value)))})
 
 class _IWICEPBMeta(_IMeta):
@@ -1618,6 +1623,33 @@ METADATAORIENTATION = type('METADATAORIENTATION', (_BCode, wintypes.WORD), {'_ta
 MetadataResolutionUnit = {'No': 1, 'None': 1, 'Inch': 2, 'Centimeter': 3}
 METADATARESOLUTIONUNIT = type('METADATARESOLUTIONUNIT', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataResolutionUnit.items()}, '_tab_cn': {c: n for n, c in MetadataResolutionUnit.items()}, '_def': 1})
 
+MetadataYCbCrPositioning = {'Centered': 1, 'Cosited': 2}
+METADATAYCBCRPOSITIONING = type('METADATAYCBCRPOSITIONING', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataYCbCrPositioning.items()}, '_tab_cn': {c: n for n, c in MetadataYCbCrPositioning.items()}, '_def': 1})
+
+MetadataComponentsConfiguration = {'None': 0, 'Y': 1, 'Cb': 2, 'Cr': 3, 'R': 4, 'G': 5, 'B': 6}
+METADATACOMPONENTSCONFIGURATION = type('METADATACOMPONENTSCONFIGURATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataComponentsConfiguration.items()}, '_tab_cn': {c: n for n, c in MetadataComponentsConfiguration.items()}, '_def': 0})
+
+MetadataExposureProgram = {'NotDefined': 0, 'Manual': 1, 'Normal': 2, 'AperturePriority': 3, 'ShutterPriority': 4, 'Creative': 5, 'Action': 6, 'Portrait': 7, 'Landscape': 8}
+METADATAEXPOSUREPROGRAM = type('METADATAEXPOSUREPROGRAM', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataExposureProgram.items()}, '_tab_cn': {c: n for n, c in MetadataExposureProgram.items()}, '_def': 0})
+
+MetadataMeteringMode = {'Unknown': 0, 'Average': 1, 'CenterWeightedAverage': 2, 'Spot': 3, 'MultiSpot': 4, 'MultiSegment': 5, 'Pattern': 5, 'Partial': 6, 'Other': 255}
+METADATAMETERINGMODE = type('METADATAMETERINGMODE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataMeteringMode.items()}, '_tab_cn': {c: n for n, c in MetadataMeteringMode.items()}, '_def': 0})
+
+MetadataLightSource = {'Unknown': 0, 'Daylight': 1, 'Fluorescent': 2, 'Tungsten': 3, 'Flash': 4, 'FineWeather': 9, 'CloudyWeather': 10, 'Shade': 11, 'DaylightFluorescent': 12, 'DayWhiteFluorescent': 13, 'CoolWhiteFluorescent': 14, 'WhiteFluorescent': 15, 'StandardLightA': 17, 'StandardLightB': 18, 'StandardLightC': 19, 'D55': 20, 'D65': 21, 'D75': 22, 'D50': 23, 'ISOStudioTungsten': 24, 'Other': 255}
+METADATALIGHTSOURCE = type('METADATALIGHTSOURCE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataLightSource.items()}, '_tab_cn': {c: n for n, c in MetadataLightSource.items()}, '_def': 0})
+
+MetadataFlash = {'NotFired': 0x0, 'Fired': 0x1, 'Fired-ReturnNotDetected': 0x5, 'Fired-ReturnDetected': 0x7, 'Fired-Compulsory': 0x9, 'Fired-ReturnNotDetected-Compulsory': 0xd, 'Fired-ReturnDetected-Compulsory': 0xf, 'NotFired-Compulsory': 0x10, 'NotFired-Auto': 0x18, 'Fired-Auto': 0x19, 'Fired-ReturnNotDetected-Auto': 0x1d, 'Fired-ReturnDetected-Auto': 0x1f, 'NoFlashFunction': 0x20, 'Fired-RedEyeReduction': 0x41, 'Fired-ReturnNotDetected-RedEyeReduction': 0x45, 'Fired-ReturnDetected-RedEyeReduction': 0x47, 'Fired-Compulsory-RedEyeReduction': 0x49, 'Fired-ReturnNotDetected-Compulsory-RedEyeReduction': 0x4d, 'Fired-ReturnDetected-Compulsory-RedEyeReduction': 0x4f, 'Fired-Auto-RedEyeReduction': 0x59, 'Fired-ReturnNotDetected-Auto-RedEyeReduction': 0x5d, 'Fired-ReturnDetected-Auto-RedEyeReduction': 0x5f}
+METADATAFLASH = type('METADATAFLASH', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataFlash.items()}, '_tab_cn': {c: n for n, c in MetadataFlash.items()}, '_def': 0x20})
+
+MetadataExposureMode = {'Auto': 0, 'Manual': 1, 'AutoBracket': 2}
+METADATAEXPOSUREMODE = type('METADATAEXPOSUREMODE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataExposureMode.items()}, '_tab_cn': {c: n for n, c in MetadataExposureMode.items()}, '_def': 0})
+
+MetadataWhiteBalance = {'Auto': 0, 'Manual': 1}
+METADATAWHITEBALANCE = type('METADATAWHITEBALANCE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataWhiteBalance.items()}, '_tab_cn': {c: n for n, c in MetadataWhiteBalance.items()}, '_def': 0})
+
+MetadataSceneCaptureType = {'Standard': 0, 'Landscape': 1, 'Portrait': 2, 'Night': 3}
+METADATASCENECAPTURETYPE = type('METADATASCENECAPTURETYPE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataSceneCaptureType.items()}, '_tab_cn': {c: n for n, c in MetadataSceneCaptureType.items()}, '_def': 0})
+
 MetadataAltitudeRef = {'AboveSeaLevel': 0, 'BelowSeaLevel': 1}
 METADATAALTITUDEREF = type('METADATAALTITUDEREF', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataAltitudeRef.items()}, '_tab_cn': {c: n for n, c in MetadataAltitudeRef.items()}, '_def': 0})
 
@@ -1633,83 +1665,198 @@ METADATATIFFPLANARCONFIGURATION = type('METADATATIFFPLANARCONFIGURATION', (_BCod
 MetadataTiffSampleFormat = {'UnsignedInteger': 1, 'SignedInteger': 2, 'FloatingPoint': 3, 'Undefined': 4}
 METADATATIFFSAMPLEFORMAT = type('METADATATIFFSAMPLEFORMAT', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffSampleFormat.items()}, '_tab_cn': {c: n for n, c in MetadataTiffSampleFormat.items()}, '_def': 4})
 
+MetadataTiffPhotometricInterpretation = {'WhiteIsZero': 0, 'BlackIsZero': 1, 'RGB': 2, 'Palette': 3, 'Mask': 4, 'CMYK': 5, 'YCbCr': 6, 'CIELab': 8, 'ICCLab': 9, 'ITULab': 10, 'LogL': 32844, 'LogLuv': 32845}
+METADATATIFFPHOTOMETRICINTERPRETATION = type('METADATATIFFPHOTOMETRICINTERPRETATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffPhotometricInterpretation.items()}, '_tab_cn': {c: n for n, c in MetadataTiffPhotometricInterpretation.items()}, '_def': 2})
+
+class _BMFraction(Fraction):
+  def __iter__(self):
+    return iter((self.numerator, self.denominator))
+  def limit(self, max=1<<30):
+    if abs(self.numerator) <= max and abs(self.denominator) <= max:
+      return self
+    f = self.limit_denominator(max if abs(self) <= 1 else (max - 0.5) / abs(self))
+    return self.__class__(f.numerator, f.denominator)
+  @classmethod
+  def from_rational(cls, r):
+    if isinstance(r, (tuple, list, ctypes.Array)):
+      return tuple(map(cls.from_rational, r))
+    else:
+      n, d = struct.unpack('=LL', struct.pack('=Q', r))
+      return None if d == 0 else cls(n, d)
+  @classmethod
+  def from_srational(cls, r):
+    if isinstance(r, (tuple, list, ctypes.Array)):
+      return tuple(map(cls.from_srational, r))
+    else:
+      n, d = struct.unpack('=ll', struct.pack('=Q', r))
+      return None if d == 0 else cls(n, d)
+  @classmethod
+  def to_rational(cls, f):
+    return tuple(map(cls.to_rational, f)) if isinstance(f, (tuple, list, ctypes.Array)) else struct.unpack('=Q', struct.pack('=LL', *(f if isinstance(f, _BMFraction) else cls(f)).limit()))[0]
+  @classmethod
+  def to_srational(cls, f):
+    return tuple(map(cls.to_srational, f)) if isinstance(f, (tuple, list, ctypes.Array)) else struct.unpack('=Q', struct.pack('=ll', *(f if isinstance(f, _BMFraction) else cls(f)).limit()))[0]
+  def __repr__(self):
+    return str(self)
+
+class MetadataFloatFraction(_BMFraction):
+  def __str__(self):
+    return str(float(self))
+
+class MetadataTimeFraction(_BMFraction):
+  def __str__(self):
+    return ('1/%d' % round(1 / self)) if self != 0 else '0'
+
+class MetadataSpeedFraction(_BMFraction):
+  @classmethod
+  def to_rational(cls, f):
+    return super().to_rational(-math.log2(Fraction(f)) if isinstance(f, str) and f.replace(' ','')[:2] == '1/' else f)
+  @classmethod
+  def to_srational(cls, f):
+    return super().to_srational(-math.log2(Fraction(f)) if isinstance(f, str) and f.replace(' ','')[:2] == '1/' else f)
+  def __str__(self):
+    return '1/%d' % round(2 ** self)
+
+class MetadataApertureFraction(_BMFraction):
+  @classmethod
+  def to_rational(cls, f):
+    return super().to_rational(2 * math.log2(Fraction(f.lstrip(' fF'))) if isinstance(f, str) and f.replace(' ','')[:1] in ('f', 'F') else f)
+  @classmethod
+  def to_srational(cls, f):
+    return super().to_srational(2 * math.log2(Fraction(f.lstrip(' fF'))) if isinstance(f, str) and f.replace(' ','')[:1] in ('f', 'F') else f)
+  def __str__(self):
+    return 'F %.2f' % math.sqrt(2) ** self
+
+class _MetadataPositionComponent(tuple):
+  @classmethod
+  def from_components(cls, ref, dms):
+    return cls((ref.upper(), dms))
+  @property
+  def dec(self):
+    return (-1 if self[0] == self.__class__._neg else 1) * sum(float(n) / d for n, d in zip(self[1], (1, 60, 3600)))
+  @property
+  def dms(self):
+    return '%s"%s' % (('%.0f°%02.0f\'%06.3f' % self[1]).rstrip('0').rstrip('.'), self[0])
+  @classmethod
+  def to_components(cls, pos):
+    if isinstance(pos, _MetadataPositionComponent):
+      return tuple(pos)
+    elif isinstance(pos, str):
+      return ((cls._neg if pos[-1:].upper() == cls._neg else cls._pos), (MetadataFloatFraction(pos.split('°')[0]), MetadataFloatFraction(pos.split('°')[1].split('\'')[0]), MetadataFloatFraction(pos.split('\'')[1].split('"')[0])))
+    else:
+      return (cls._neg if pos < 0 else cls._pos, (MetadataFloatFraction(int(abs(pos))), MetadataFloatFraction(int(abs(pos) * 60 % 60)), MetadataFloatFraction(abs(pos) * 3600 % 60)))
+  def __str__(self):
+    return '%s (%s)' % (('%0.7f' % self.dec).rstrip('0').rstrip('.'), self.dms)
+  def __repr__(self):
+    return str(self)
+
+class MetadataLatitude(_MetadataPositionComponent):
+  _pos = 'N'
+  _neg = 'S'
+
+class MetadataLongitude(_MetadataPositionComponent):
+  _pos = 'E'
+  _neg = 'W'
+
 class _WICMetadataQuery:
   def __set_name__(self, owner, name):
     self.name = name[3:]
     self.reader = name.startswith('Get')
-    self.queries = owner.__class__._queries
+    self.query = owner.__class__._queries[self.name]
   def __get__(self, obj, cls=None):
-    q = self.queries[self.name]
+    q = self.query
     if (f := obj.GetContainerFormat()) is not None:
-      f = f.name.lower()
+      f = {'Thumbnail': 'thumb', 'JpegLuminance': 'luminance', 'JpegChrominance': 'chrominance'}.get(f.name, f.name.lower())
       p = next((s[2] for p_ in q[0] if (s := p_.partition(f))[1]), None)
+    else:
+      p = None
     if self.reader:
       return lambda _o=obj, _p=p, _f=q[2]: None if _p is None else (m if ((m := _o.GetMetadataByName(_p)) is None or _f is None) else _f(m))
     else:
       return lambda v, _o=obj, _p=p, _t=q[1], _f=q[3]: None if _p is None else _o.SetMetadataByName(_p, (_t, (v if (v is None or _f is None) else _f(v))))
 
 class _IWICMQRMeta(_IMeta):
-  @staticmethod
-  def rational_float(r):
-    n, d = struct.unpack('=LL', struct.pack('=Q', r))
-    return n / d
-  @staticmethod
-  def srational_float(r):
-    n, d = struct.unpack('=ll', struct.pack('=Q', r))
-    return n / d
-  @staticmethod
-  def fraction_rational(n, d):
-    return struct.unpack('=Q', struct.pack('=LL', n, d))[0]
-  @staticmethod
-  def float_rational(f, d=1000):
-    return struct.unpack('=Q', struct.pack('=LL', round(f * d), d))[0]
-  @staticmethod
-  def fraction_srational(r):
-    return struct.unpack('=Q', struct.pack('=ll', n, d))[0]
-  @staticmethod
-  def float_srational(f, d=1000):
-    return struct.unpack('=Q', struct.pack('=ll', round(f * d), d))[0]
   _queries = {
+    'Unknown': (('/jpeg/unknown',), 'VT_UNKNOWN', None, None),
     'App0': (('/jpeg/app0',), 'VT_UNKNOWN', None, None),
     'App1': (('/jpeg/app1',), 'VT_UNKNOWN', None, None),
     'Ifd': (('/jpeg/app1/ifd', '/tiff/ifd'), 'VT_UNKNOWN', None, None),
     'Exif': (('/jpeg/app1/ifd/exif', '/tiff/ifd/exif'), 'VT_UNKNOWN', None, None),
     'Gps': (('/jpeg/app1/ifd/gps', '/tiff/ifd/gps'), 'VT_UNKNOWN', None, None),
-    'PixelXDimension': (('/jpeg/app1/ifd/exif/{ushort=40962}', '/tiff/ifd/exif/{ushort=40962}'), 'VT_UI4', None, None),
-    'PixelYDimension': (('/jpeg/app1/ifd/exif/{ushort=40963}', '/tiff/ifd/exif/{ushort=40963}'), 'VT_UI4', None, None),
-    'Orientation': (('/jpeg/app1/ifd/{ushort=274}', '/tiff/ifd/{ushort=274}'), 'VT_UI2', METADATAORIENTATION, (lambda s: s.code if isinstance(s, METADATAORIENTATION) else METADATAORIENTATION.name_code(s))),
-    'LatitudeRef': (('/jpeg/app1/ifd/gps/{ushort=1}', '/tiff/ifd/gps/{ushort=1}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'Latitude': (('/jpeg/app1/ifd/gps/{ushort=2}', '/tiff/ifd/gps/{ushort=2}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.float_rational, s)))),
-    'LongitudeRef': (('/jpeg/app1/ifd/gps/{ushort=3}', '/tiff/ifd/gps/{ushort=3}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'Longitude': (('/jpeg/app1/ifd/gps/{ushort=4}', '/tiff/ifd/gps/{ushort=4}'), 'VT_VECTOR | VT_UI8', (lambda s: tuple(map(_IWICMQRMeta.rational_float, s))), (lambda s: tuple(map(_IWICMQRMeta.float_rational, s)))),
-    'AltitudeRef': (('/jpeg/app1/ifd/gps/{ushort=5}', '/tiff/ifd/gps/{ushort=5}'), 'VT_UI1', METADATAALTITUDEREF, (lambda s: s.code if isinstance(s, METADATAALTITUDEREF) else METADATAALTITUDEREF.name_code(s))),
-    'Altitude': (('/jpeg/app1/ifd/gps/{ushort=6}', '/tiff/ifd/gps/{ushort=6}'), 'VT_UI8', rational_float, float_rational),
-    'DateTimeOriginal': (('/jpeg/app1/ifd/exif/{ushort=36867}', '/tiff/ifd/exif/{ushort=36867}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'DateTimeDigitized': (('/jpeg/app1/ifd/exif/{ushort=36868}', '/tiff/ifd/exif/{ushort=36868}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'XResolution': (('/jpeg/app1/ifd/{ushort=282}', '/tiff/ifd/{ushort=282}'), 'VT_UI8', rational_float, float_rational),
-    'YResolution': (('/jpeg/app1/ifd/{ushort=283}', '/tiff/ifd/{ushort=283}'), 'VT_UI8', rational_float, float_rational),
-    'ResolutionUnit': (('/jpeg/app1/ifd/{ushort=296}', '/tiff/ifd/{ushort=296}'), 'VT_UI2', METADATARESOLUTIONUNIT, (lambda s: s.code if isinstance(s, METADATARESOLUTIONUNIT) else METADATARESOLUTIONUNIT.name_code(s))),
-    'DateTime': (('/jpeg/app1/ifd/{ushort=306}', '/tiff/ifd/{ushort=306}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Thumbnail': (('/jpeg/app1/thumb', '/tiff/ifd/thumb'), 'VT_UNKNOWN', None, None),
+    'IRB': (('/jpeg/app13/irb',), 'VT_UNKNOWN', None, None),
+    'IPTC': (('/jpeg/app13/irb/8bimiptc/iptc', '/tiff/ifd/iptc'), 'VT_UNKNOWN', None, None),
+    '8BIMIPTC': (('/jpeg/app13/irb/8bimiptc',), 'VT_UNKNOWN', None, None),
+    '8BIMResolutionInfo': (('/jpeg/app13/irb/8bimResInfo',), 'VT_UNKNOWN', None, None),
+    'XMP': (('/jpeg/xmp', '/tiff/ifd/xmp'), 'VT_UNKNOWN', None, None),
+    'JpegComment':  (('/jpeg/com/TextEntry',), 'VT_LPSTR', bytes.decode, str.encode),
+    'Luminance': (('/jpeg/luminance/TableEntry',), 'VT_VECTOR | VT_UI2', None, None),
+    'Chrominance': (('/jpeg/chrominance/TableEntry',), 'VT_VECTOR | VT_UI2', None, None),
+    'ImageWidth': (('/tiff/ifd/{ushort=256}', '/thumb/{ushort=256}'), 'VT_UI4', None, None),
+    'ImageLength': (('/tiff/ifd/{ushort=257}', '/thumb/{ushort=257}'), 'VT_UI4', None, None),
+    'BitsPerSample': (('/tiff/ifd/{ushort=258}', '/thumb/{ushort=258}'), 'VT_VECTOR | VT_UI2', lambda s: tuple(s if isinstance(s, ctypes.Array) else (s,)), lambda s: (s if hasattr(s, '__len__') else (s,))),
+    'Compression': (('/tiff/ifd/{ushort=259}', '/thumb/{ushort=259}'), 'VT_UI2', METADATATIFFCOMPRESSION, METADATATIFFCOMPRESSION.to_int),
+    'PhotometricInterpretation': (('/tiff/ifd/{ushort=262}', '/thumb/{ushort=262}'), 'VT_UI2', METADATATIFFPHOTOMETRICINTERPRETATION, METADATATIFFPHOTOMETRICINTERPRETATION.to_int),
     'ImageDescription': (('/jpeg/app1/ifd/{ushort=270}', '/tiff/ifd/{ushort=270}'), 'VT_LPSTR', bytes.decode, str.encode),
     'Make': (('/jpeg/app1/ifd/{ushort=271}', '/tiff/ifd/{ushort=271}'), 'VT_LPSTR', bytes.decode, str.encode),
     'Model': (('/jpeg/app1/ifd/{ushort=272}', '/tiff/ifd/{ushort=272}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'StripOffsets': (('/tiff/ifd/{ushort=273}', '/thumb/{ushort=273}'), 'VT_VECTOR | VT_UI4', None, None),
+    'Orientation': (('/jpeg/app1/ifd/{ushort=274}', '/tiff/ifd/{ushort=274}', '/thumb/{ushort=274}'), 'VT_UI2', METADATAORIENTATION, METADATAORIENTATION.to_int),
+    'SamplesPerPixel': (('/tiff/ifd/{ushort=277}', '/thumb/{ushort=277}'), 'VT_UI2', None, None),
+    'RowsPerStrip': (('/tiff/ifd/{ushort=278}', '/thumb/{ushort=278}'), 'VT_UI4', None, None),
+    'StripByteCounts': (('/tiff/ifd/{ushort=279}', '/thumb/{ushort=279}'), 'VT_VECTOR | VT_UI4', None, None),
+    'XResolution': (('/jpeg/app1/ifd/{ushort=282}', '/tiff/ifd/{ushort=282}', '/thumb/{ushort=282}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'YResolution': (('/jpeg/app1/ifd/{ushort=283}', '/tiff/ifd/{ushort=283}', '/thumb/{ushort=283}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'PlanarConfiguration': (('/tiff/ifd/{ushort=284}', '/thumb/{ushort=284}'), 'VT_UI2', METADATATIFFPLANARCONFIGURATION, METADATATIFFPLANARCONFIGURATION.to_int),
+    'ResolutionUnit': (('/jpeg/app1/ifd/{ushort=296}', '/tiff/ifd/{ushort=296}', '/thumb/{ushort=296}'), 'VT_UI2', METADATARESOLUTIONUNIT, METADATARESOLUTIONUNIT.to_int),
     'Software': (('/jpeg/app1/ifd/{ushort=305}', '/tiff/ifd/{ushort=305}'), 'VT_LPSTR', bytes.decode, str.encode),
-    'ColorSpace': (('/jpeg/app1/ifd/exif/{ushort=40961}', '/tiff/ifd/exif/{ushort=40961}'), 'VT_UI2', WICEXIFCOLORSPACE, (lambda s: s.code if isinstance(s, WICEXIFCOLORSPACE) else WICEXIFCOLORSPACE.name_code(s))),
-    'ImageWidth': (('/tiff/ifd/{ushort=256}',), 'VT_UI4', None, None),
-    'ImageLength': (('/tiff/ifd/{ushort=257}',), 'VT_UI4', None, None),
-    'BitsPerSample': (('/tiff/ifd/{ushort=258}',), 'VT_UI2', None, None),
-    'Compression': (('/tiff/ifd/{ushort=259}',), 'VT_UI2', METADATATIFFCOMPRESSION, (lambda s: s.code if isinstance(s, METADATATIFFCOMPRESSION) else METADATATIFFCOMPRESSION.name_code(s))),
-    'Predictor': (('/tiff/ifd/{ushort=317}',), 'VT_UI2', METADATATIFFPREDICTOR, (lambda s: s.code if isinstance(s, METADATATIFFPREDICTOR) else METADATATIFFPREDICTOR.name_code(s))),
-    'SamplesPerPixel': (('/tiff/ifd/{ushort=277}',), 'VT_UI2', None, None),
-    'SampleFormat': (('/tiff/ifd/{ushort=339}',), 'VT_UI2', METADATATIFFSAMPLEFORMAT, (lambda s: s.code if isinstance(s, METADATATIFFSAMPLEFORMAT) else METADATATIFFSAMPLEFORMAT.name_code(s))),
-    'PlanarConfiguration': (('/tiff/ifd/{ushort=284}',), 'VT_UI2', METADATATIFFPLANARCONFIGURATION, (lambda s: s.code if isinstance(s, METADATATIFFPLANARCONFIGURATION) else METADATATIFFPLANARCONFIGURATION.name_code(s))),
-    'RowsPerStrip': (('/tiff/ifd/{ushort=278}',), 'VT_UI4', None, None),
-    'StripByteCounts': (('/tiff/ifd/{ushort=279}',), 'VT_VECTOR | VT_UI4', tuple, None),
-    'StripOffsets': (('/tiff/ifd/{ushort=273}',), 'VT_VECTOR | VT_UI4', tuple, None),
+    'DateTime': (('/jpeg/app1/ifd/{ushort=306}', '/tiff/ifd/{ushort=306}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Predictor': (('/tiff/ifd/{ushort=317}',), 'VT_UI2', METADATATIFFPREDICTOR, METADATATIFFPREDICTOR.to_int),
+    'ColorMap': (('/tiff/ifd/{ushort=320}',), 'VT_VECTOR | VT_UI2', None, None),
     'TileWidth': (('/tiff/ifd/{ushort=322}',), 'VT_UI4', None, None),
     'TileLength': (('/tiff/ifd/{ushort=323}',), 'VT_UI4', None, None),
-    'TileByteCounts': (('/tiff/ifd/{ushort=325}',), 'VT_VECTOR | VT_UI4', tuple, None),
-    'TileOffsets': (('/tiff/ifd/{ushort=324}',), 'VT_VECTOR | VT_UI4', tuple, None)
+    'TileOffsets': (('/tiff/ifd/{ushort=324}',), 'VT_VECTOR | VT_UI4', None, None),
+    'TileByteCounts': (('/tiff/ifd/{ushort=325}',), 'VT_VECTOR | VT_UI4', None, None),
+    'SampleFormat': (('/tiff/ifd/{ushort=339}',), 'VT_VECTOR | VT_UI2', lambda s: tuple(map(METADATATIFFSAMPLEFORMAT, (s if isinstance(s, ctypes.Array) else (s,)))), lambda s: tuple(map(METADATATIFFSAMPLEFORMAT.to_int, (s if hasattr(s, '__len__') else (s,))))),
+    'YCbCrPositioning': (('/jpeg/app1/ifd/{ushort=531}', '/tiff/ifd/{ushort=531}'), 'VT_UI2', METADATAYCBCRPOSITIONING, METADATAYCBCRPOSITIONING.to_int),
+    'ExposureTime': (('/jpeg/app1/ifd/exif/{ushort=33434}', '/tiff/ifd/exif/{ushort=33434}'), 'VT_UI8', MetadataTimeFraction.from_rational, MetadataTimeFraction.to_rational),
+    'FNumber': (('/jpeg/app1/ifd/exif/{ushort=33437}', '/tiff/ifd/exif/{ushort=33437}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'ExposureProgram': (('/jpeg/app1/ifd/exif/{ushort=34850}', '/tiff/ifd/exif/{ushort=34850}'), 'VT_UI2', METADATAEXPOSUREPROGRAM, METADATAEXPOSUREPROGRAM.to_int),
+    'PhotographicSensitivity': (('/jpeg/app1/ifd/exif/{ushort=34855}', '/tiff/ifd/exif/{ushort=34855}'), 'VT_UI2', None, None),
+    'ISOSpeedRatings': (('/jpeg/app1/ifd/exif/{ushort=34855}', '/tiff/ifd/exif/{ushort=34855}'), 'VT_UI2', None, None),
+    'DateTimeOriginal': (('/jpeg/app1/ifd/exif/{ushort=36867}', '/tiff/ifd/exif/{ushort=36867}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'DateTimeDigitized': (('/jpeg/app1/ifd/exif/{ushort=36868}', '/tiff/ifd/exif/{ushort=36868}'), 'VT_LPSTR', bytes.decode, str.encode),
+   'ComponentsConfiguration': (('/jpeg/app1/ifd/exif/{ushort=37121}', '/tiff/ifd/exif/{ushort=37121}'), 'VT_BLOB', lambda s: tuple(map(METADATACOMPONENTSCONFIGURATION, s)), lambda s: bytes(map(METADATACOMPONENTSCONFIGURATION.to_int, s))),
+    'CompressedBitsPerPixel': (('/jpeg/app1/ifd/exif/{ushort=37122}', '/tiff/ifd/exif/{ushort=37122}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'ShutterSpeedValue': (('/jpeg/app1/ifd/exif/{ushort=37377}', '/tiff/ifd/exif/{ushort=37377}'), 'VT_I8', MetadataSpeedFraction.from_rational, MetadataSpeedFraction.to_rational),
+    'ApertureValue': (('/jpeg/app1/ifd/exif/{ushort=37378}', '/tiff/ifd/exif/{ushort=37378}'), 'VT_UI8', MetadataApertureFraction.from_rational, MetadataApertureFraction.to_rational),
+    'BrightnessValue': (('/jpeg/app1/ifd/exif/{ushort=37379}', '/tiff/ifd/exif/{ushort=37379}'), 'VT_I8', MetadataFloatFraction.from_srational, MetadataFloatFraction.to_srational),
+    'ExposureBiasValue': (('/jpeg/app1/ifd/exif/{ushort=37380}', '/tiff/ifd/exif/{ushort=37380}'), 'VT_I8', MetadataFloatFraction.from_srational, MetadataFloatFraction.to_srational),
+    'MaxApertureValue': (('/jpeg/app1/ifd/exif/{ushort=37381}', '/tiff/ifd/exif/{ushort=37381}'), 'VT_UI8', MetadataApertureFraction.from_rational, MetadataApertureFraction.to_rational),
+    'SubjectDistance': (('/jpeg/app1/ifd/exif/{ushort=37382}', '/tiff/ifd/exif/{ushort=37382}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'MeteringMode': (('/jpeg/app1/ifd/exif/{ushort=37383}', '/tiff/ifd/exif/{ushort=37383}'), 'VT_UI2', METADATAMETERINGMODE, METADATAMETERINGMODE.to_int),
+    'LightSource': (('/jpeg/app1/ifd/exif/{ushort=37384}', '/tiff/ifd/exif/{ushort=37384}'), 'VT_UI2', METADATALIGHTSOURCE, METADATALIGHTSOURCE.to_int),
+    'Flash': (('/jpeg/app1/ifd/exif/{ushort=37385}', '/tiff/ifd/exif/{ushort=37385}'), 'VT_UI2', METADATAFLASH, METADATAFLASH.to_int),
+    'FocalLength': (('/jpeg/app1/ifd/exif/{ushort=37386}', '/tiff/ifd/exif/{ushort=37386}'), 'VT_I8', MetadataFloatFraction.from_srational, MetadataFloatFraction.to_srational),
+    'MakerNote': (('/jpeg/app1/ifd/exif/{ushort=37500}', '/tiff/ifd/exif/{ushort=37500}'), 'VT_BLOB', None, None),
+    'UserComment': (('/jpeg/app1/ifd/exif/{ushort=37510}', '/tiff/ifd/exif/{ushort=37510}'), 'VT_LPWSTR', None, None),
+    'ColorSpace': (('/jpeg/app1/ifd/exif/{ushort=40961}', '/tiff/ifd/exif/{ushort=40961}'), 'VT_UI2', WICEXIFCOLORSPACE, WICEXIFCOLORSPACE.to_int),
+    'PixelXDimension': (('/jpeg/app1/ifd/exif/{ushort=40962}', '/tiff/ifd/exif/{ushort=40962}'), 'VT_UI4', None, None),
+    'PixelYDimension': (('/jpeg/app1/ifd/exif/{ushort=40963}', '/tiff/ifd/exif/{ushort=40963}'), 'VT_UI4', None, None),
+    'ExposureMode': (('/jpeg/app1/ifd/exif/{ushort=41986}', '/tiff/ifd/exif/{ushort=41986}'), 'VT_UI2', METADATAEXPOSUREMODE, METADATAEXPOSUREMODE.to_int),
+    'WhiteBalance': (('/jpeg/app1/ifd/exif/{ushort=41987}', '/tiff/ifd/exif/{ushort=41987}'), 'VT_UI2', METADATAWHITEBALANCE, METADATAWHITEBALANCE.to_int),
+    'FocalLengthIn35mmFilm': (('/jpeg/app1/ifd/exif/{ushort=41989}', '/tiff/ifd/exif/{ushort=41989}'), 'VT_UI2', None, None),
+    'SceneCaptureType': (('/jpeg/app1/ifd/exif/{ushort=41990}', '/tiff/ifd/exif/{ushort=41990}'), 'VT_UI2', METADATASCENECAPTURETYPE, METADATASCENECAPTURETYPE.to_int),
+    'LatitudeRef': (('/jpeg/app1/ifd/gps/{ushort=1}', '/tiff/ifd/gps/{ushort=1}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Latitude': (('/jpeg/app1/ifd/gps/{ushort=2}', '/tiff/ifd/gps/{ushort=2}'), 'VT_VECTOR | VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'LongitudeRef': (('/jpeg/app1/ifd/gps/{ushort=3}', '/tiff/ifd/gps/{ushort=3}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'Longitude': (('/jpeg/app1/ifd/gps/{ushort=4}', '/tiff/ifd/gps/{ushort=4}'), 'VT_VECTOR | VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'AltitudeRef': (('/jpeg/app1/ifd/gps/{ushort=5}', '/tiff/ifd/gps/{ushort=5}'), 'VT_UI1', METADATAALTITUDEREF, METADATAALTITUDEREF.to_int),
+    'Altitude': (('/jpeg/app1/ifd/gps/{ushort=6}', '/tiff/ifd/gps/{ushort=6}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'TimeStamp': (('/jpeg/app1/ifd/gps/{ushort=7}', '/tiff/ifd/gps/{ushort=7}'), 'VT_VECTOR | VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'DateStamp': (('/jpeg/app1/ifd/gps/{ushort=29}', '/tiff/ifd/gps/{ushort=29}'), 'VT_LPSTR', bytes.decode, str.encode),
+    'ThumbnailBytes': (('/jpeg/app1/thumb/{}', '/tiff/ifd/thumb/{}'), 'VT_BLOB', None, None),
+    'ICCProfile': (('/jpeg/unknown/{}', '/tiff/ifd/{ushort=34675}'), 'VT_BLOB', None, None),
   }
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
@@ -1717,13 +1864,11 @@ class _IWICMQRMeta(_IMeta):
     if 'Reader' in name:
       for n in mcls._queries:
         kwds['Get' + n] = _WICMetadataQuery()
-      kwds['GetGPSdec'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ((-1 if latr == 'S' else 1) * sum(n / d for n, d in zip(lat, (1, 60, 3600))), (-1 if lonr == 'W' else 1) * sum(n / d for n, d in zip(lon, (1, 60, 3600)))))
-      kwds['GetGPSdms'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else ('%s"%s' % (('%.0f°%02.0f\'%06.3f' % lat).rstrip('0').rstrip('.') , latr), '%s"%s' % (('%.0f°%02.0f\'%06.3f' % lon).rstrip('0').rstrip('.') , lonr)))
+      kwds['GetPosition'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else (MetadataLatitude.from_components(latr, lat), MetadataLongitude.from_components(lonr, lon)))
     elif 'Writer' in name:
       for n in mcls._queries:
         kwds['Set' + n] = _WICMetadataQuery()
-      kwds['SetGPSdec'] = property(lambda s: lambda lat, lon, _s=s: None not in (_s.SetLatitudeRef('S' if lat < 0 else 'N'), _s.SetLatitude((int(abs(lat)), int(abs(lat) * 60 % 60), abs(lat) * 3600 % 60)), _s.SetLongitudeRef('W' if lon < 0 else 'E'), _s.SetLongitude((int(abs(lon)), int(abs(lon) * 60 % 60), abs(lon) * 3600 % 60))))
-      kwds['SetGPSdms'] = property(lambda s: lambda lat, lon,_s=s: None not in (_s.SetLatitudeRef('S' if lat[-1:].upper() == 'S' else 'N'), _s.SetLatitude((int(lat.split('°')[0]), int(lat.split('°')[1].split('\'')[0]), float(lat.split('\'')[1].split('"')[0]))), _s.SetLongitudeRef('W' if lon[-1:].upper() == 'W' else 'E'), _s.SetLongitude((int(lon.split('°')[0]), int(lon.split('°')[1].split('\'')[0]), float(lon.split('\'')[1].split('"')[0])))))
+      kwds['SetPosition'] = property(lambda s: lambda pos, _s=s: None if None in (sc(s) for s, sc in zip(MetadataLatitude.to_components(pos[0]), (_s.SetLatitudeRef, _s.SetLatitude))) or None in (sc(s) for s, sc in zip(MetadataLongitude.to_components(pos[1]), (_s.SetLongitudeRef, _s.SetLongitude))) else True)
     return kwds
 
 class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
@@ -2249,6 +2394,8 @@ class IWICBitmapFlipRotator(IWICBitmapSource):
   _protos['Initialize'] = 8, (wintypes.LPVOID, WICTRANSFORMOPTIONS), ()
   def Initialize(self, source, transform_options):
     return self.__class__._protos['Initialize'](self.pI, source, transform_options)
+  def InitializeOnOrientation(self, source, orientation):
+    return self.__class__._protos['Initialize'](self.pI, source, {1: 0, 2: 8, 3: 2, 4: 16, 5: 11, 6: 1, 7: 9, 8: 3}.get(METADATAORIENTATION.to_int(orientation), 0))
 
 class IWICComponentInfo(IUnknown):
   IID = GUID(0x23bc3f0a, 0x698b, 0x4357, 0x88, 0x6b, 0xf2, 0x4d, 0x50, 0x67, 0x13, 0x34)
@@ -2625,6 +2772,8 @@ class IWICComponentFactory(IWICImagingFactory):
     return IWICEncoderPropertyBag(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n))
 
 def Initialize(mode=6):
+  if isinstance(mode, str):
+    mode = 4 if mode.lower() in ('mt', 'mta') else 6
   if ISetLastError(ole32.CoInitializeEx(None, wintypes.DWORD(2))) in (0, 1):
     if not hasattr(_IUtil._local, 'initialized'):
       _IUtil._local.initialized = 0
