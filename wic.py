@@ -62,7 +62,7 @@ class IUnknown(metaclass=_IMeta):
   _protos['QueryInterface'] = 0, (wintypes.LPCSTR,), (wintypes.PLPVOID,)
   _protos['AddRef'] = ctypes.WINFUNCTYPE(wintypes.ULONG)(1, 'AddRef')
   _protos['Release'] = ctypes.WINFUNCTYPE(wintypes.ULONG)(2, 'Release')
-  def __new__(cls, clsid_component=False, add_ties=None):
+  def __new__(cls, clsid_component=False, factory=None):
     if clsid_component is None:
       return None
     if not clsid_component:
@@ -77,7 +77,7 @@ class IUnknown(metaclass=_IMeta):
     self = object.__new__(cls)
     self.pI = pI
     self.refs = 1
-    self.ties = {} if add_ties is None else {**add_ties}
+    self.factory = factory
     return self
   def AddRef(self):
     if self.pI is None:
@@ -94,12 +94,12 @@ class IUnknown(metaclass=_IMeta):
     if self.refs == 0:
       self.pI = None
     return r, self.refs
-  def QueryInterface(self, icls, add_ties=None):
+  def QueryInterface(self, icls, factory=None):
     if self.pI is None:
       return None
     if (i := icls(self.__class__._protos['QueryInterface'](self.pI, icls.IID))) is None:
       return None
-    i.ties = {**self.ties} if add_ties is None else {**self.ties, **add_ties}
+    i.factory = factory if factory is not None else self.factory
     return i
   @property
   def _as_parameter_(self):
@@ -122,12 +122,12 @@ class IClassFactory(IUnknown):
     self = object.__new__(cls)
     self.pI = pI
     self.refs = 1
-    self.ties = {}
+    self.factory = None
     return self
-  def CreateInstance(self, icls, add_ties=None):
+  def CreateInstance(self, icls):
     if self.pI is None:
       return None
-    return icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), {} if add_ties is None else {**add_ties})
+    return icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), self)
 
 class IEnumString(IUnknown):
   IID = GUID('00000101-0000-0000-c000-000000000046')
@@ -152,7 +152,7 @@ class IEnumString(IUnknown):
       return None
     return True
   def Clone(self):
-    return self.__class__(self.__class__._protos['Clone'](self.pI), self.ties)
+    return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
     return self
   def __next__(self):
@@ -175,9 +175,9 @@ class IEnumUnknown(IUnknown):
     if self.__class__._protos['Next'](self.pI, number, a, r) > 1:
       return None
     if self.__class__.IClass is IUnknown:
-      return tuple(IUnknown(wintypes.LPVOID(a[i]), self.ties) for i in range(r.value))
+      return tuple(IUnknown(wintypes.LPVOID(a[i]), self.factory) for i in range(r.value))
     else:
-      return tuple(IUnknown(wintypes.LPVOID(a[i])).QueryInterface(self.__class__.IClass, self.ties) for i in range(r.value))
+      return tuple(IUnknown(wintypes.LPVOID(a[i]), self.factory).QueryInterface(self.__class__.IClass) for i in range(r.value))
   def Skip(self, number):
     try:
       if self.__class__._protos['Skip'](self.pI, number) > 1:
@@ -187,7 +187,7 @@ class IEnumUnknown(IUnknown):
       return None
     return True
   def Clone(self):
-    return self.__class__(self.__class__._protos['Clone'](self.pI), self.ties)
+    return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
     return self
   def __next__(self):
@@ -243,7 +243,7 @@ class IStream(IUnknown):
   def Commit(self):
     return self.__class__._protos['Commit'](self.pI, 0)
   def Clone(self):
-    return self.__class__(self.__class__._protos['Clone'](self.pI), self.ties)
+    return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   shl.SHCreateStreamOnFileEx.restype = wintypes.ULONG
   @classmethod
   def CreateOnFile(cls, file_name, desired_access=0x20):
@@ -1556,7 +1556,7 @@ class IWICEnumMetadataItem(IUnknown):
     schemas._needsclear = True
     idents._needsclear = True
     values._needsclear = True
-    return tuple((s.value, i.value, (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r))) if not self.__class__.WithType else tuple(((s.vt , s.value), (i.vt, i.value), (v.vt, (v.value.QueryInterface(self.__class__.IClass, self.ties) if v.vt == 13 else v.value))) for s, i, v, _r in zip(schemas, idents, values, range(r)))
+    return tuple((s.value, i.value, (v.value.QueryInterface(self.__class__.IClass, self.factory) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r))) if not self.__class__.WithType else tuple(((s.vt , s.value), (i.vt, i.value), (v.vt, (v.value.QueryInterface(self.__class__.IClass, self.factory) if v.vt == 13 else v.value))) for s, i, v, _r in zip(schemas, idents, values, range(r)))
   def Skip(self, number):
     try:
       if self.__class__._protos['Skip'](self.pI, number) > 1:
@@ -1566,7 +1566,7 @@ class IWICEnumMetadataItem(IUnknown):
       return None
     return True
   def Clone(self):
-    return self.__class__(self.__class__._protos['Clone'](self.pI), self.ties)
+    return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
     return self
   def __next__(self):
@@ -1609,7 +1609,7 @@ class IWICStreamProvider(IUnknown):
   _protos['GetPreferredVendorGUID'] = 5, (), (WICPVENDORIDENTIFICATION,)
   _protos['RefreshStream'] = 6, (), ()
   def GetStream(self):
-    return IStream(self.__class__._protos['GetStream'](self.pI))
+    return IStream(self.__class__._protos['GetStream'](self.pI), self.factory)
   def GetPersistOptions(self):
     return self.__class__._protos['GetPersistOptions'](self.pI)
   def GetPreferredVendorGUID(self):
@@ -1771,30 +1771,50 @@ class _WICMetadataQuery:
     else:
       p = None
     if self.reader:
-      return lambda _o=obj, _p=p, _f=q[2]: None if _p is None else (m if ((m := _o.GetMetadataByName(_p)) is None or _f is None) else _f(m))
+      return lambda _o=obj, _p=p, _f=q[2]: (ISetLastError(0x88982f90) and None) if _p is None else (m if ((m := _o.GetMetadataByName(_p)) is None or _f is None) else _f(m))
     else:
-      return lambda v, _o=obj, _p=p, _t=q[1], _f=q[3]: None if _p is None else _o.SetMetadataByName(_p, (_t, (v if (v is None or _f is None) else _f(v))))
+      return lambda v, _o=obj, _p=p, _t=q[1], _f=q[3]: (ISetLastError(0x88982f90) and None) if _p is None else _o.SetMetadataByName(_p, (_t, (v if (v is None or _f is None) else _f(v))))
+
+class _IWICMQRUtil:
+  @staticmethod
+  def _writer(handler):
+    return handler.factory.CreateQueryWriterFromReader(handler) if isinstance(handler, IWICMetadataQueryReader) else handler
+  @staticmethod
+  def _tuple(cls=None):
+    if cls is None:
+      return (lambda s: tuple(s) if hasattr(s, '__len__') else (s,),) * 2
+    else:
+      return lambda s: tuple(map(cls, (s if hasattr(s, '__len__') else (s,)))), lambda s: tuple(map(cls.to_int, (s if hasattr(s, '__len__') and not isinstance(s, str) else (s,))))
+  @staticmethod
+  def _blob(cls):
+    return lambda s: tuple(map(cls, s)), lambda s: bytes(map(cls.to_int, s))
+  @staticmethod
+  def _pos(handler, reader=True):
+    if reader:
+      return lambda _h=handler: None if None in ((latr := _h.GetLatitudeRef()), (lat := _h.GetLatitude()), (lonr := _h.GetLongitudeRef()), (lon := _h.GetLongitude())) else (MetadataLatitude.from_components(latr, lat), MetadataLongitude.from_components(lonr, lon))
+    else:
+      return lambda pos, _h=handler: None if None in (sc(s) for s, sc in zip(MetadataLatitude.to_components(pos[0]), (_h.SetLatitudeRef, _h.SetLatitude))) or None in (sc(s) for s, sc in zip(MetadataLongitude.to_components(pos[1]), (_h.SetLongitudeRef, _h.SetLongitude))) else True
 
 class _IWICMQRMeta(_IMeta):
   _queries = {
-    'Unknown': (('/jpeg/unknown',), 'VT_UNKNOWN', None, None),
-    'App0': (('/jpeg/app0',), 'VT_UNKNOWN', None, None),
-    'App1': (('/jpeg/app1',), 'VT_UNKNOWN', None, None),
-    'Ifd': (('/jpeg/app1/ifd', '/tiff/ifd'), 'VT_UNKNOWN', None, None),
-    'Exif': (('/jpeg/app1/ifd/exif', '/tiff/ifd/exif'), 'VT_UNKNOWN', None, None),
-    'Gps': (('/jpeg/app1/ifd/gps', '/tiff/ifd/gps'), 'VT_UNKNOWN', None, None),
-    'Thumbnail': (('/jpeg/app1/thumb', '/tiff/ifd/thumb'), 'VT_UNKNOWN', None, None),
-    'IRB': (('/jpeg/app13/irb',), 'VT_UNKNOWN', None, None),
-    'IPTC': (('/jpeg/app13/irb/8bimiptc/iptc', '/tiff/ifd/iptc'), 'VT_UNKNOWN', None, None),
-    '8BIMIPTC': (('/jpeg/app13/irb/8bimiptc',), 'VT_UNKNOWN', None, None),
-    '8BIMResolutionInfo': (('/jpeg/app13/irb/8bimResInfo',), 'VT_UNKNOWN', None, None),
-    'XMP': (('/jpeg/xmp', '/tiff/ifd/xmp'), 'VT_UNKNOWN', None, None),
+    'Unknown': (('/jpeg/unknown',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'App0': (('/jpeg/app0',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'App1': (('/jpeg/app1',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'Ifd': (('/jpeg/app1/ifd', '/tiff/ifd'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'Exif': (('/jpeg/app1/ifd/exif', '/tiff/ifd/exif'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'Gps': (('/jpeg/app1/ifd/gps', '/tiff/ifd/gps'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'Thumbnail': (('/jpeg/app1/thumb', '/tiff/ifd/thumb'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'IRB': (('/jpeg/app13/irb',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'IPTC': (('/jpeg/app13/irb/8bimiptc/iptc', '/tiff/ifd/iptc'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '8BIMIPTC': (('/jpeg/app13/irb/8bimiptc',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '8BIMResolutionInfo': (('/jpeg/app13/irb/8bimResInfo',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'XMP': (('/jpeg/xmp', '/tiff/ifd/xmp'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     'JpegComment':  (('/jpeg/com/TextEntry',), 'VT_LPSTR', bytes.decode, str.encode),
     'Luminance': (('/jpeg/luminance/TableEntry',), 'VT_VECTOR | VT_UI2', None, None),
     'Chrominance': (('/jpeg/chrominance/TableEntry',), 'VT_VECTOR | VT_UI2', None, None),
     'ImageWidth': (('/tiff/ifd/{ushort=256}', '/thumb/{ushort=256}'), 'VT_UI4', None, None),
     'ImageLength': (('/tiff/ifd/{ushort=257}', '/thumb/{ushort=257}'), 'VT_UI4', None, None),
-    'BitsPerSample': (('/tiff/ifd/{ushort=258}', '/thumb/{ushort=258}'), 'VT_VECTOR | VT_UI2', lambda s: tuple(s if isinstance(s, ctypes.Array) else (s,)), lambda s: (s if hasattr(s, '__len__') else (s,))),
+    'BitsPerSample': (('/tiff/ifd/{ushort=258}', '/thumb/{ushort=258}'), 'VT_VECTOR | VT_UI2', *_IWICMQRUtil._tuple()),
     'Compression': (('/tiff/ifd/{ushort=259}', '/thumb/{ushort=259}'), 'VT_UI2', METADATATIFFCOMPRESSION, METADATATIFFCOMPRESSION.to_int),
     'PhotometricInterpretation': (('/tiff/ifd/{ushort=262}', '/thumb/{ushort=262}'), 'VT_UI2', METADATATIFFPHOTOMETRICINTERPRETATION, METADATATIFFPHOTOMETRICINTERPRETATION.to_int),
     'ImageDescription': (('/jpeg/app1/ifd/{ushort=270}', '/tiff/ifd/{ushort=270}'), 'VT_LPSTR', bytes.decode, str.encode),
@@ -1817,7 +1837,7 @@ class _IWICMQRMeta(_IMeta):
     'TileLength': (('/tiff/ifd/{ushort=323}',), 'VT_UI4', None, None),
     'TileOffsets': (('/tiff/ifd/{ushort=324}',), 'VT_VECTOR | VT_UI4', None, None),
     'TileByteCounts': (('/tiff/ifd/{ushort=325}',), 'VT_VECTOR | VT_UI4', None, None),
-    'SampleFormat': (('/tiff/ifd/{ushort=339}',), 'VT_VECTOR | VT_UI2', lambda s: tuple(map(METADATATIFFSAMPLEFORMAT, (s if isinstance(s, ctypes.Array) else (s,)))), lambda s: tuple(map(METADATATIFFSAMPLEFORMAT.to_int, (s if hasattr(s, '__len__') else (s,))))),
+    'SampleFormat': (('/tiff/ifd/{ushort=339}',), 'VT_VECTOR | VT_UI2', *_IWICMQRUtil._tuple(METADATATIFFSAMPLEFORMAT)),
     'YCbCrPositioning': (('/jpeg/app1/ifd/{ushort=531}', '/tiff/ifd/{ushort=531}'), 'VT_UI2', METADATAYCBCRPOSITIONING, METADATAYCBCRPOSITIONING.to_int),
     'ExposureTime': (('/jpeg/app1/ifd/exif/{ushort=33434}', '/tiff/ifd/exif/{ushort=33434}'), 'VT_UI8', MetadataTimeFraction.from_rational, MetadataTimeFraction.to_rational),
     'FNumber': (('/jpeg/app1/ifd/exif/{ushort=33437}', '/tiff/ifd/exif/{ushort=33437}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
@@ -1826,7 +1846,7 @@ class _IWICMQRMeta(_IMeta):
     'ISOSpeedRatings': (('/jpeg/app1/ifd/exif/{ushort=34855}', '/tiff/ifd/exif/{ushort=34855}'), 'VT_UI2', None, None),
     'DateTimeOriginal': (('/jpeg/app1/ifd/exif/{ushort=36867}', '/tiff/ifd/exif/{ushort=36867}'), 'VT_LPSTR', bytes.decode, str.encode),
     'DateTimeDigitized': (('/jpeg/app1/ifd/exif/{ushort=36868}', '/tiff/ifd/exif/{ushort=36868}'), 'VT_LPSTR', bytes.decode, str.encode),
-   'ComponentsConfiguration': (('/jpeg/app1/ifd/exif/{ushort=37121}', '/tiff/ifd/exif/{ushort=37121}'), 'VT_BLOB', lambda s: tuple(map(METADATACOMPONENTSCONFIGURATION, s)), lambda s: bytes(map(METADATACOMPONENTSCONFIGURATION.to_int, s))),
+   'ComponentsConfiguration': (('/jpeg/app1/ifd/exif/{ushort=37121}', '/tiff/ifd/exif/{ushort=37121}'), 'VT_BLOB', *_IWICMQRUtil._blob(METADATACOMPONENTSCONFIGURATION)),
     'CompressedBitsPerPixel': (('/jpeg/app1/ifd/exif/{ushort=37122}', '/tiff/ifd/exif/{ushort=37122}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
     'ShutterSpeedValue': (('/jpeg/app1/ifd/exif/{ushort=37377}', '/tiff/ifd/exif/{ushort=37377}'), 'VT_I8', MetadataSpeedFraction.from_rational, MetadataSpeedFraction.to_rational),
     'ApertureValue': (('/jpeg/app1/ifd/exif/{ushort=37378}', '/tiff/ifd/exif/{ushort=37378}'), 'VT_UI8', MetadataApertureFraction.from_rational, MetadataApertureFraction.to_rational),
@@ -1864,11 +1884,11 @@ class _IWICMQRMeta(_IMeta):
     if 'Reader' in name:
       for n in mcls._queries:
         kwds['Get' + n] = _WICMetadataQuery()
-      kwds['GetPosition'] = property(lambda s: lambda _s=s: None if None in ((latr := _s.GetLatitudeRef()), (lat := _s.GetLatitude()), (lonr := _s.GetLongitudeRef()), (lon := _s.GetLongitude())) else (MetadataLatitude.from_components(latr, lat), MetadataLongitude.from_components(lonr, lon)))
+      kwds['GetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, True))
     elif 'Writer' in name:
       for n in mcls._queries:
         kwds['Set' + n] = _WICMetadataQuery()
-      kwds['SetPosition'] = property(lambda s: lambda pos, _s=s: None if None in (sc(s) for s, sc in zip(MetadataLatitude.to_components(pos[0]), (_s.SetLatitudeRef, _s.SetLatitude))) or None in (sc(s) for s, sc in zip(MetadataLongitude.to_components(pos[1]), (_s.SetLongitudeRef, _s.SetLongitude))) else True)
+      kwds['SetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, False))
     return kwds
 
 class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
@@ -1887,7 +1907,7 @@ class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
     l = ctypes.create_unicode_buffer(al)
     return None if self.__class__._protos['GetLocation'](self.pI, al, l) is None else (ctypes.c_wchar * al).from_buffer(l).value
   def GetEnumerator(self):
-    return IEnumString(self.__class__._protos['GetEnumerator'](self.pI))
+    return IEnumString(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def GetMetadataNames(self):
     if (e := self.GetEnumerator()) is None:
       return None
@@ -1900,7 +1920,7 @@ class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
     v._needsclear = True
-    return v.value.QueryInterface(self.__class__, self.ties) if v.vt == 13 else v.value
+    return v.value.QueryInterface(self.__class__, self.factory) if v.vt == 13 else v.value
   def GetMetadataTypeByName(self, name):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
@@ -1910,7 +1930,7 @@ class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
     v._needsclear = True
-    return v.vt, (v.value.QueryInterface(self.__class__, self.ties) if v.vt == 13 else v.value)
+    return v.vt, (v.value.QueryInterface(self.__class__, self.factory) if v.vt == 13 else v.value)
 
 class IWICMetadataReader(IUnknown):
   IID = GUID(0x9204fe99, 0xd8fc, 0x4fd5, 0xa0, 0x01, 0x95, 0x36, 0xb0, 0x67, 0xa8, 0x99)
@@ -1925,9 +1945,9 @@ class IWICMetadataReader(IUnknown):
   def GetCount(self):
     return self.__class__._protos['GetCount'](self.pI)
   def GetEnumerator(self):
-    return IWICEnumMetadataItemReader(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+    return IWICEnumMetadataItemReader(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def GetEnumeratorWithType(self):
-    return IWICEnumMetadataWithTypeItemReader(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+    return IWICEnumMetadataWithTypeItemReader(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def GetValue(self, schema, ident):
     if isinstance(schema, (tuple, list)):
       schema = PROPVARIANT(*schema)
@@ -1936,23 +1956,23 @@ class IWICMetadataReader(IUnknown):
     if (v := self.__class__._protos['GetValue'](self.pI, schema, ident)) is None:
       return None
     v._needsclear = True
-    return v.value.QueryInterface(self.__class__, self.ties) if v.vt == 13 else v.value
+    return v.value.QueryInterface(self.__class__, self.factory) if v.vt == 13 else v.value
   def GetValueByIndex(self, index):
     if (siv := self.__class__._protos['GetValueByIndex'](self.pI, index)) is None:
       return None
     siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
-    return tuple(p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value for p in siv)
+    return tuple(p.value.QueryInterface(self.__class__, self.factory) if p.vt == 13 else p.value for p in siv)
   def GetValueWithTypeByIndex(self, index):
     if (siv := self.__class__._protos['GetValueByIndex'](self.pI, index)) is None:
       return None
     siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
-    return tuple((p.vt, (p.value.QueryInterface(self.__class__, self.ties) if p.vt == 13 else p.value)) for p in siv)
+    return tuple((p.vt, (p.value.QueryInterface(self.__class__, self.factory) if p.vt == 13 else p.value)) for p in siv)
   def GetMetadataHandlerInfo(self):
-    return IWICMetadataHandlerInfo(self.__class__._protos['GetMetadataHandlerInfo'](self.pI)).QueryInterface(IWICMetadataReaderInfo, {'IFactory': self.ties.get('IFactory'), 'IMetadataReader': self})
+    return IWICMetadataHandlerInfo(self.__class__._protos['GetMetadataHandlerInfo'](self.pI)).QueryInterface(IWICMetadataReaderInfo, self.factory)
   def GetPersistStream(self):
-    return self.QueryInterface(IWICPersistStream, {'IMetadataReader': self})
+    return self.QueryInterface(IWICPersistStream, self.factory)
   def GetStreamProvider(self):
-    return self.QueryInterface(IWICStreamProvider, {'IMetadataReader': self})
+    return self.QueryInterface(IWICStreamProvider, self.factory)
 
 class IWICEnumMetadataItemReader(IWICEnumMetadataItem):
   IClass = IWICMetadataReader
@@ -1976,14 +1996,14 @@ class IWICMetadataBlockReader(IUnknown):
   def GetCount(self):
     return self.__class__._protos['GetCount'](self.pI)
   def GetEnumerator(self):
-    return IEnumWICMetadataReader(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+    return IEnumWICMetadataReader(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def GetReaderByIndex(self, index):
-    return IWICMetadataReader(self.__class__._protos['GetReaderByIndex'](self.pI, index), self.ties)
+    return IWICMetadataReader(self.__class__._protos['GetReaderByIndex'](self.pI, index), self.factory)
   def GetReaders(self):
     e = self.GetEnumerator()
     return None if e is None else tuple(e)
   def GetStreamProvider(self):
-    return self.QueryInterface(IWICStreamProvider, {'IMetadataBlockReader': self})
+    return self.QueryInterface(IWICStreamProvider, self.factory)
 
 class IWICBitmapFrameDecode(IWICBitmapSource):
   IID = GUID(0x3b16811b, 0x6a43, 0x4ec9, 0xa8, 0x13, 0x3d, 0x93, 0x0c, 0x13, 0xb9, 0x40)
@@ -1995,24 +2015,24 @@ class IWICBitmapFrameDecode(IWICBitmapSource):
       return None
     if ac == 0:
       return ()
-    IColorContexts = tuple(self.ties['IFactory'].CreateColorContext() for c in range(ac))
+    IColorContexts = tuple(self.factory.CreateColorContext() for c in range(ac))
     pColorContexts = (wintypes.LPVOID * ac)(*(cc.pI for cc in IColorContexts))
     return None if self.__class__._protos['GetColorContexts'](self.pI, ac, pColorContexts) is None else IColorContexts
   def GetMetadataQueryReader(self):
-    return IWICMetadataQueryReader(self.__class__._protos['GetMetadataQueryReader'](self.pI), {'IBitmapFrame': self})
+    return IWICMetadataQueryReader(self.__class__._protos['GetMetadataQueryReader'](self.pI), self.factory)
   def GetThumbnail(self):
-    return IWICBitmapSource(self.__class__._protos['GetThumbnail'](self.pI), {'IBitmapFrame': self})
+    return IWICBitmapSource(self.__class__._protos['GetThumbnail'](self.pI), self.factory)
   def GetPalette(self):
-    IPalette = self.ties['IFactory'].CreatePalette()
+    IPalette = self.factory.CreatePalette()
     return None if self.CopyPalette(IPalette) is None else IPalette
   def GetMetadataBlockReader(self):
-    return self.QueryInterface(IWICMetadataBlockReader, {'IBitmapFrame': self})
+    return self.QueryInterface(IWICMetadataBlockReader, self.factory)
   def GetJpegFrameDecode(self):
-    return self.QueryInterface(IWICJpegFrameDecode, {'IBitmapFrame': self})
+    return self.QueryInterface(IWICJpegFrameDecode, self.factory)
   def GetBitmapSourceTransform(self):
-    return self.QueryInterface(IWICBitmapSourceTransform, {'IBitmapFrame': self})
+    return self.QueryInterface(IWICBitmapSourceTransform, self.factory)
   def GetStreamProvider(self):
-    return self.QueryInterface(IWICStreamProvider, {'IBitmapFrame': self})
+    return self.QueryInterface(IWICStreamProvider, self.factory)
 
 class IWICBitmapSourceTransform(IUnknown):
   IID = GUID(0x3b16811b, 0x6a43, 0x4ec9, 0xb7, 0x13, 0x3d, 0x5a, 0x0c, 0x13, 0xb9, 0x40)
@@ -2062,28 +2082,28 @@ class IWICBitmapDecoder(IUnknown):
       return None
     if ac == 0:
       return ()
-    IColorContexts = tuple(self.ties['IFactory'].CreateColorContext() for c in range(ac))
+    IColorContexts = tuple(self.factory.CreateColorContext() for c in range(ac))
     pColorContexts = (wintypes.LPVOID * ac)(*(cc.pI for cc in IColorContexts))
     return None if self.__class__._protos['GetColorContexts'](self.pI, ac, pColorContexts) is None else IColorContexts
   def GetMetadataQueryReader(self):
-    return IWICMetadataQueryReader(self.__class__._protos['GetMetadataQueryReader'](self.pI), {'IBitmapDecoder': self})
+    return IWICMetadataQueryReader(self.__class__._protos['GetMetadataQueryReader'](self.pI), self.factory)
   def GetThumbnail(self):
-    return IWICBitmapSource(self.__class__._protos['GetThumbnail'](self.pI), {'IBitmapDecoder': self})
+    return IWICBitmapSource(self.__class__._protos['GetThumbnail'](self.pI), self.factory)
   def GetPreview(self):
-    return IWICBitmapSource(self.__class__._protos['GetPreview'](self.pI), {'IBitmapDecoder': self})
+    return IWICBitmapSource(self.__class__._protos['GetPreview'](self.pI), self.factory)
   def CopyPalette(self, palette):
     return self.__class__._protos['CopyPalette'](self.pI, palette)
   def GetPalette(self):
-    IPalette = self.ties['IFactory'].CreatePalette()
+    IPalette = self.factory.CreatePalette()
     return None if self.CopyPalette(IPalette) is None else IPalette
   def GetFrameCount(self):
     return self.__class__._protos['GetFrameCount'](self.pI)
   def GetFrame(self, index):
-    return IWICBitmapFrameDecode(self.__class__._protos['GetFrame'](self.pI, index), {'IFactory': self.ties.get('IFactory'), 'IBitmapDecoder': self})
+    return IWICBitmapFrameDecode(self.__class__._protos['GetFrame'](self.pI, index), self.factory)
   def GetDecoderInfo(self):
-    return IWICBitmapDecoderInfo(self.__class__._protos['GetDecoderInfo'](self.pI), {'IFactory': self.ties.get('IFactory'), 'IBitmapDecoder': self})
+    return IWICBitmapDecoderInfo(self.__class__._protos['GetDecoderInfo'](self.pI), self.factory)
   def GetStreamProvider(self):
-    return self.QueryInterface(IWICStreamProvider, {'IBitmapDecoder': self})
+    return self.QueryInterface(IWICStreamProvider, self.factory)
 
 class IWICJpegFrameDecode(IUnknown):
   IID = GUID(0x8939f66e, 0xc46a, 0x4c21, 0xa9, 0xd1, 0x98, 0xb3, 0x27, 0xce, 0x16, 0x79)
@@ -2157,9 +2177,9 @@ class IWICMetadataWriter(IWICMetadataReader):
   _protos['RemoveValue'] = 11, (PPROPVARIANT, PPROPVARIANT), ()
   _protos['RemoveValueByIndex'] = 12, (wintypes.UINT,), ()
   def GetEnumerator(self):
-    return IWICEnumMetadataItemWriter(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+    return IWICEnumMetadataItemWriter(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def GetEnumeratorWithType(self, code=False):
-    return IWICEnumMetadataWithTypeItemWriter(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+    return IWICEnumMetadataWithTypeItemWriter(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def SetValue(self, schema, ident, value):
     if isinstance(schema, (tuple, list)):
       schema = PROPVARIANT(*schema)
@@ -2185,11 +2205,11 @@ class IWICMetadataWriter(IWICMetadataReader):
   def RemoveValueByIndex(self, index):
     return self.__class__._protos['RemoveValueByIndex'](self.pI, index)
   def GetMetadataHandlerInfo(self):
-    return IWICMetadataHandlerInfo(self.__class__._protos['GetMetadataHandlerInfo'](self.pI)).QueryInterface(IWICMetadataWriterInfo, {'IFactory': self.ties.get('IFactory'), 'IMetadataWriter': self})
+    return IWICMetadataHandlerInfo(self.__class__._protos['GetMetadataHandlerInfo'](self.pI)).QueryInterface(IWICMetadataWriterInfo, self.factory)
   def GetPersistStream(self):
-    return self.QueryInterface(IWICPersistStream, {'IMetadataWriter': self})
+    return self.QueryInterface(IWICPersistStream, self.factory)
   def GetStreamProvider(self):
-    return self.QueryInterface(IWICStreamProvider, {'IMetadataWriter': self})
+    return self.QueryInterface(IWICStreamProvider, self.factory)
 
 class IWICEnumMetadataItemWriter(IWICEnumMetadataItem):
   IClass = IWICMetadataWriter
@@ -2210,11 +2230,11 @@ class IWICMetadataBlockWriter(IWICMetadataBlockReader):
   _protos['SetWriterByIndex'] = 10, (wintypes.UINT, wintypes.LPVOID), ()
   _protos['RemoveWriterByIndex'] = 11, (wintypes.UINT,), ()
   def GetEnumerator(self):
-    return IEnumWICMetadataWriter(self.__class__._protos['GetEnumerator'](self.pI), self.ties)
+    return IEnumWICMetadataWriter(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def InitializeFromBlockReader(self, reader):
     return self.__class__._protos['InitializeFromBlockReader'](self.pI, reader)
   def GetWriterByIndex(self, index):
-    return IWICMetadataWriter(self.__class__._protos['GetWriterByIndex'](self.pI, index), self.ties)
+    return IWICMetadataWriter(self.__class__._protos['GetWriterByIndex'](self.pI, index), self.factory)
   def AddWriter(self, writer):
     return self.__class__._protos['AddWriter'](self.pI, writer)
   def SetWriterByIndex(self, index, writer):
@@ -2232,7 +2252,7 @@ class IWICFastMetadataEncoder(IUnknown):
   def Commit(self):
     return self.__class__._protos['Commit'](self.pI)
   def GetMetadataQueryWriter(self):
-    return IWICMetadataQueryWriter(self.__class__._protos['GetMetadataQueryWriter'](self.pI), self.ties)
+    return IWICMetadataQueryWriter(self.__class__._protos['GetMetadataQueryWriter'](self.pI), self.factory)
 
 class IWICBitmapFrameEncode(IUnknown):
   IID = GUID(0x00000105, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -2263,7 +2283,7 @@ class IWICBitmapFrameEncode(IUnknown):
   def SetPalette(self, palette):
     return self.__class__._protos['SetPalette'](self.pI, palette)
   def GetMetadataQueryWriter(self):
-    return IWICMetadataQueryWriter(self.__class__._protos['GetMetadataQueryWriter'](self.pI), {'IBitmapFrame': self})
+    return IWICMetadataQueryWriter(self.__class__._protos['GetMetadataQueryWriter'](self.pI), self.factory)
   def SetThumbnail(self, thumbnail):
     return self.__class__._protos['SetThumbnail'](self.pI, thumbnail)
   def WriteSource(self, source, xywh=None):
@@ -2273,9 +2293,9 @@ class IWICBitmapFrameEncode(IUnknown):
   def Commit(self):
     return self.__class__._protos['Commit'](self.pI)
   def GetMetadataBlockWriter(self):
-    return self.QueryInterface(IWICMetadataBlockWriter, {'IBitmapFrame': self})
+    return self.QueryInterface(IWICMetadataBlockWriter, self.factory)
   def GetJpegFrameEncode(self):
-    return self.QueryInterface(IWICJpegFrameEncode, {'IBitmapFrame': self})
+    return self.QueryInterface(IWICJpegFrameEncode, self.factory)
 
 class IWICBitmapEncoder(IUnknown):
   IID = GUID(0x00000103, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -2298,7 +2318,7 @@ class IWICBitmapEncoder(IUnknown):
   def SetPalette(self, palette):
     return self.__class__._protos['SetPalette'](self.pI, palette)
   def GetMetadataQueryWriter(self):
-    return IWICMetadataQueryWriter(self.__class__._protos['GetMetadataQueryWriter'](self.pI), {'IBitmapEncoder': self})
+    return IWICMetadataQueryWriter(self.__class__._protos['GetMetadataQueryWriter'](self.pI), self.factory)
   def SetThumbnail(self, thumbnail):
     return self.__class__._protos['SetThumbnail'](self.pI, thumbnail)
   def SetPreview(self, preview):
@@ -2306,11 +2326,11 @@ class IWICBitmapEncoder(IUnknown):
   def CreateNewFrame(self):
     if (pIBitmapFrameEncode_pIEncoderOptions := self.__class__._protos['CreateNewFrame'](self.pI)) is None:
       return None
-    return IWICBitmapFrameEncode(pIBitmapFrameEncode_pIEncoderOptions[0], {'IFactory': self.ties.get('IFactory'), 'IBitmapEncoder': self}), IWICEncoderPropertyBag(pIBitmapFrameEncode_pIEncoderOptions[1])
+    return IWICBitmapFrameEncode(pIBitmapFrameEncode_pIEncoderOptions[0], self.factory), IWICEncoderPropertyBag(pIBitmapFrameEncode_pIEncoderOptions[1], self.factory)
   def Commit(self):
     return self.__class__._protos['Commit'](self.pI)
   def GetEncoderInfo(self):
-    return IWICBitmapEncoderInfo(self.__class__._protos['GetEncoderInfo'](self.pI), {'IFactory': self.ties.get('IFactory'), 'IBitmapEncoder': self})
+    return IWICBitmapEncoderInfo(self.__class__._protos['GetEncoderInfo'](self.pI), self.factory)
 
 class IWICJpegFrameEncode(IUnknown):
   IID = GUID(0x2f0c601f, 0xd2c6, 0x468c, 0xab, 0xfa, 0x49, 0x49, 0x5d, 0x98, 0x3e, 0xd1)
@@ -2375,7 +2395,7 @@ class IWICBitmap(IWICBitmapSource):
   def Lock(self, xywh, access_mode=1):
     if isinstance(access_mode, str):
       access_mode = {'read': 1, 'write': 2, 'readwrite': 3}.get(access_mode.lower(), 1)
-    return IWICBitmapLock(self.__class__._protos['Lock'](self.pI, xywh, access_mode), {'pIBitmap': self})
+    return IWICBitmapLock(self.__class__._protos['Lock'](self.pI, xywh, access_mode), self.factory)
 
 class IWICBitmapScaler(IWICBitmapSource):
   IID = GUID(0x00000302, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -2529,13 +2549,13 @@ class IWICBitmapDecoderInfo(IWICBitmapCodecInfo):
   def MatchesPattern(self, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, istream)
   def CreateInstance(self):
-    return IWICBitmapDecoder(self.__class__._protos['CreateInstance'](self.pI), {'IFactory': self.ties.get('IFactory')})
+    return IWICBitmapDecoder(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
 class IWICBitmapEncoderInfo(IWICBitmapCodecInfo):
   IID = GUID(0x94c9b4ee, 0xa09f, 0x4f92, 0x8a, 0x1e, 0x4a, 0x9b, 0xce, 0x7e, 0x76, 0xfb)
   _protos['CreateInstance'] = 23, (), (wintypes.PLPVOID,)
   def CreateInstance(self):
-    return IWICBitmapEncoder(self.__class__._protos['CreateInstance'](self.pI), {'IFactory': self.ties.get('IFactory')})
+    return IWICBitmapEncoder(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
 class IWICFormatConverterInfo(IWICComponentInfo):
   IID = GUID(0x9f34fb65, 0x13f4, 0x4f15, 0xbc, 0x57, 0x37, 0x26, 0xb5, 0xe5, 0x3d, 0x9f)
@@ -2549,7 +2569,7 @@ class IWICFormatConverterInfo(IWICComponentInfo):
     f = (WICPIXELFORMAT * ac)()
     return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p] for p in range(ac))
   def CreateInstance(self):
-    return IWICFormatConverter(self.__class__._protos['CreateInstance'](self.pI), {'IFactory': self.ties.get('IFactory')})
+    return IWICFormatConverter(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
 class IWICPixelFormatInfo(IWICComponentInfo):
   IID = GUID(0xa9db33a2, 0xaf5f, 0x43c7, 0xb6, 0x79, 0x74, 0xf5, 0x98, 0x4b, 0x5a, 0xa4)
@@ -2574,7 +2594,7 @@ class IWICPixelFormatInfo(IWICComponentInfo):
     m = ctypes.create_string_buffer(al)
     return None if self.__class__._protos['GetChannelMask'](self.pI, index, al, m) is None else m.raw
   def GetColorContext(self):
-    return IWICColorContext(self.__class__._protos['GetColorContext'](self.pI))
+    return IWICColorContext(self.__class__._protos['GetColorContext'](self.pI), self.factory)
   def SupportsTransparency(self):
     return self.__class__._protos['SupportsTransparency'](self.pI)
   def GetNumericRepresentation(self):
@@ -2636,7 +2656,7 @@ class IWICMetadataReaderInfo(IWICMetadataHandlerInfo):
   def MatchesPattern(self, container_format, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, container_format, istream)
   def CreateInstance(self):
-    return IWICMetadataReader(self.__class__._protos['CreateInstance'](self.pI), {'IFactory': self.ties.get('IFactory')})
+    return IWICMetadataReader(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
 class IWICMetadataWriterInfo(IWICMetadataHandlerInfo):
   IID = GUID(0xb22e3fba, 0x3925, 0x4323, 0xb5, 0xc1, 0x9e, 0xbf, 0xc4, 0x30, 0xf2, 0x36)
@@ -2651,7 +2671,7 @@ class IWICMetadataWriterInfo(IWICMetadataHandlerInfo):
     f = WICMETADATAHEADER.from_buffer(h)
     return None if self.__class__._protos['GetHeader'](self.pI, container_format, al, ctypes.byref(h)) is None else {'Position': f.Position, 'Header': ctypes.string_at(f.Header, f.Length), 'DataOffset': f.DataOffset}
   def CreateInstance(self):
-    return IWICMetadataWriter(self.__class__._protos['CreateInstance'](self.pI), {'IFactory': self.ties.get('IFactory')})
+    return IWICMetadataWriter(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
 class IWICImagingFactory(IUnknown):
   # CLSID = GUID(0xcacaf262, 0x9370, 0x4615, 0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a)
@@ -2682,52 +2702,52 @@ class IWICImagingFactory(IUnknown):
   _protos['CreateQueryWriter'] = 26, (WICPMETADATAHANDLER, WICPVENDORIDENTIFICATION), (wintypes.PLPVOID,)
   _protos['CreateQueryWriterFromReader'] = 27, (wintypes.LPVOID, WICPVENDORIDENTIFICATION), (wintypes.PLPVOID,)
   def CreateDecoder(self, container_format, decoder_vendor=None):
-    return IWICBitmapDecoder(self.__class__._protos['CreateDecoder'](self.pI, container_format, decoder_vendor), {'IFactory': self})
+    return IWICBitmapDecoder(self.__class__._protos['CreateDecoder'](self.pI, container_format, decoder_vendor), self)
   def CreateDecoderFromFilename(self, file_name, decoder_vendor=None, desired_access=0x80000000, metadata_option=0):
     if isinstance(desired_access, str):
       desired_access = {'read': 0x80000000, 'write': 0x40000000, 'readwrite': 0xc0000000}.get(desired_access.lower(), 0x80000000)
-    return IWICBitmapDecoder(self.__class__._protos['CreateDecoderFromFilename'](self.pI, file_name, decoder_vendor, desired_access, metadata_option), {'IFactory': self})
+    return IWICBitmapDecoder(self.__class__._protos['CreateDecoderFromFilename'](self.pI, file_name, decoder_vendor, desired_access, metadata_option), self)
   def CreateDecoderFromFileHandle(self, file_handle, decoder_vendor=None, metadata_option=0):
-    return IWICBitmapDecoder(self.__class__._protos['CreateDecoderFromFileHandle'](self.pI, file_handle, decoder_vendor, metadata_option), {'IFactory': self})
+    return IWICBitmapDecoder(self.__class__._protos['CreateDecoderFromFileHandle'](self.pI, file_handle, decoder_vendor, metadata_option), self)
   def CreateDecoderFromStream(self, istream, decoder_vendor=None, metadata_option=0):
-    return IWICBitmapDecoder(self.__class__._protos['CreateDecoderFromStream'](self.pI, istream, decoder_vendor, metadata_option), {'IFactory': self})
+    return IWICBitmapDecoder(self.__class__._protos['CreateDecoderFromStream'](self.pI, istream, decoder_vendor, metadata_option), self)
   def CreateEncoder(self, container_format, encoder_vendor=None):
-    return IWICBitmapEncoder(self.__class__._protos['CreateEncoder'](self.pI, container_format, encoder_vendor), {'IFactory': self})
+    return IWICBitmapEncoder(self.__class__._protos['CreateEncoder'](self.pI, container_format, encoder_vendor), self)
   def CreateStream(self):
-    return IWICStream(self.__class__._protos['CreateStream'](self.pI))
+    return IWICStream(self.__class__._protos['CreateStream'](self.pI), self)
   def CreateColorContext(self):
-    return IWICColorContext(self.__class__._protos['CreateColorContext'](self.pI))
+    return IWICColorContext(self.__class__._protos['CreateColorContext'](self.pI), self)
   def CreatePalette(self):
-    return IWICPalette(self.__class__._protos['CreatePalette'](self.pI))
+    return IWICPalette(self.__class__._protos['CreatePalette'](self.pI), self)
   def CreateFormatConverter(self):
-    return IWICFormatConverter(self.__class__._protos['CreateFormatConverter'](self.pI), {'IFactory': self})
+    return IWICFormatConverter(self.__class__._protos['CreateFormatConverter'](self.pI), self)
   def CreateColorTransformer(self):
-    return IWICColorTransform(self.__class__._protos['CreateColorTransformer'](self.pI), {'IFactory': self})
+    return IWICColorTransform(self.__class__._protos['CreateColorTransformer'](self.pI), self)
   def CreateFastMetadataEncoderFromDecoder(self, decoder):
-    return IWICFastMetadataEncoder(self.__class__._protos['CreateFastMetadataEncoderFromDecoder'](self.pI, decoder), ({'IFactory': self, 'IBitmapDecoder': decoder} if isinstance(decoder, IUnknown) else {'IFactory': self}))
+    return IWICFastMetadataEncoder(self.__class__._protos['CreateFastMetadataEncoderFromDecoder'](self.pI, decoder), self)
   def CreateFastMetadataEncoderFromFrameDecode(self, frame_decode):
-    return IWICFastMetadataEncoder(self.__class__._protos['CreateFastMetadataEncoderFromFrameDecode'](self.pI, frame_decode), ({'IFactory': self, 'IBitmapFrame': frame_decode} if isinstance(frame_decode, IUnknown) else {'IFactory': self}))
+    return IWICFastMetadataEncoder(self.__class__._protos['CreateFastMetadataEncoderFromFrameDecode'](self.pI, frame_decode), self)
   def CreateQueryWriter(self, metadata_format, writer_vendor=None):
-    return IWICMetadataQueryWriter(self.__class__._protos['CreateQueryWriter'](self.pI, metadata_format, writer_vendor), {'IFactory': self})
+    return IWICMetadataQueryWriter(self.__class__._protos['CreateQueryWriter'](self.pI, metadata_format, writer_vendor), self)
   def CreateQueryWriterFromReader(self, query_reader, writer_vendor=None):
-    return IWICMetadataQueryWriter(self.__class__._protos['CreateQueryWriterFromReader'](self.pI, query_reader, writer_vendor), {'IFactory': self})
+    return IWICMetadataQueryWriter(self.__class__._protos['CreateQueryWriterFromReader'](self.pI, query_reader, writer_vendor), self)
   def CreateBitmap(self, width, height, pixel_format, cache_option=1):
-    return IWICBitmap(self.__class__._protos['CreateBitmap'](self.pI, width, height, pixel_format, cache_option), {'IFactory': self})
+    return IWICBitmap(self.__class__._protos['CreateBitmap'](self.pI, width, height, pixel_format, cache_option), self)
   def CreateBitmapFromSource(self, source, cache_option=1):
-    return IWICBitmap(self.__class__._protos['CreateBitmapFromSource'](self.pI, source, cache_option), {'IFactory': self, 'IBitmapSource': source})
+    return IWICBitmap(self.__class__._protos['CreateBitmapFromSource'](self.pI, source, cache_option), self)
   def CreateBitmapFromSourceRect(self, source, xywh):
-    return IWICBitmap(self.__class__._protos['CreateBitmapFromSourceRect'](self.pI, source, *xywh), {'IFactory': self, 'IBitmapSource': source})
+    return IWICBitmap(self.__class__._protos['CreateBitmapFromSourceRect'](self.pI, source, *xywh), self)
   def CreateBitmapFromMemory(self, width, height, pixel_format, stride, buffer):
     l = PBUFFER.length(buffer)
-    return IWICBitmap(self.__class__._protos['CreateBitmapFromMemory'](self.pI, width, height, pixel_format, stride, l, buffer), {'IFactory': self})
+    return IWICBitmap(self.__class__._protos['CreateBitmapFromMemory'](self.pI, width, height, pixel_format, stride, l, buffer), self)
   def CreateBitmapScaler(self):
-    return IWICBitmapScaler(self.__class__._protos['CreateBitmapScaler'](self.pI), {'IFactory': self})
+    return IWICBitmapScaler(self.__class__._protos['CreateBitmapScaler'](self.pI), self)
   def CreateBitmapClipper(self):
-    return IWICBitmapClipper(self.__class__._protos['CreateBitmapClipper'](self.pI), {'IFactory': self})
+    return IWICBitmapClipper(self.__class__._protos['CreateBitmapClipper'](self.pI), self)
   def CreateBitmapFlipRotator(self):
-    return IWICBitmapFlipRotator(self.__class__._protos['CreateBitmapFlipRotator'](self.pI), {'IFactory': self})
+    return IWICBitmapFlipRotator(self.__class__._protos['CreateBitmapFlipRotator'](self.pI), self)
   def CreateComponentInfo(self, clsid):
-    if (ci := IWICComponentInfo(self.__class__._protos['CreateComponentInfo'](self.pI, clsid), {'IFactory': self})) is None:
+    if (ci := IWICComponentInfo(self.__class__._protos['CreateComponentInfo'](self.pI, clsid), self)) is None:
       return None
     c = ci.GetComponentType().code
     icls = globals().get('IWIC%sInfo' % next((n_ for n_, c_ in WICComponentType.items() if c_ == c), 'Component'), 'IWICComponentInfo')
@@ -2735,9 +2755,9 @@ class IWICImagingFactory(IUnknown):
   def CreateComponentEnumerator(self, types=0x3f, options=0):
     c = WICCOMPONENTTYPE.name_code(types)
     icls = globals().get('IWIC%sInfo' % next((n_ for n_, c_ in WICComponentType.items() if c_ == c), 'Component'), 'IWICComponentInfo')
-    return type('IEnum' + icls.__name__[1:], (IEnumUnknown,), {'IClass': icls})(self.__class__._protos['CreateComponentEnumerator'](self.pI, types, options), {'IFactory': self})
+    return type('IEnum' + icls.__name__[1:], (IEnumUnknown,), {'IClass': icls})(self.__class__._protos['CreateComponentEnumerator'](self.pI, types, options), self)
   def CreateComponentFactory(self):
-    return self.QueryInterface(IWICComponentFactory, {'IImagingFactory': self})
+    return self.QueryInterface(IWICComponentFactory, self)
 IWICImagingFactory2 = IWICImagingFactory
 
 class IWICComponentFactory(IWICImagingFactory):
@@ -2751,17 +2771,17 @@ class IWICComponentFactory(IWICImagingFactory):
   _protos['CreateQueryWriterFromBlockWriter'] = 33, (wintypes.LPVOID,), (wintypes.PLPVOID,)
   _protos['CreateEncoderPropertyBag'] = 34, (wintypes.LPVOID, wintypes.UINT), (wintypes.PLPVOID,)
   def CreateMetadataReader(self, metadata_format, reader_vendor=None, options=0, istream=None):
-    return IWICMetadataReader(self.__class__._protos['CreateMetadataReader'](self.pI, metadata_format, reader_vendor, options, istream), {'IFactory': self})
+    return IWICMetadataReader(self.__class__._protos['CreateMetadataReader'](self.pI, metadata_format, reader_vendor, options, istream), self)
   def CreateMetadataReaderFromContainer(self, container_format, reader_vendor=None, options=0, istream=None):
-    return IWICMetadataReader(self.__class__._protos['CreateMetadataReaderFromContainer'](self.pI, container_format, reader_vendor, options, istream), {'IFactory': self})
+    return IWICMetadataReader(self.__class__._protos['CreateMetadataReaderFromContainer'](self.pI, container_format, reader_vendor, options, istream), self)
   def CreateMetadataWriter(self, metadata_format, writer_vendor=None, options=0):
-    return IWICMetadataWriter(self.__class__._protos['CreateMetadataWriter'](self.pI, metadata_format, writer_vendor, options), {'IFactory': self})
+    return IWICMetadataWriter(self.__class__._protos['CreateMetadataWriter'](self.pI, metadata_format, writer_vendor, options), self)
   def CreateMetadataWriterFromReader(self, reader, writer_vendor=None):
-    return IWICMetadataWriter(self.__class__._protos['CreateMetadataWriterFromReader'](self.pI, reader, writer_vendor), {'IFactory': self})
+    return IWICMetadataWriter(self.__class__._protos['CreateMetadataWriterFromReader'](self.pI, reader, writer_vendor), self)
   def CreateQueryReaderFromBlockReader(self, block_reader):
-    return IWICMetadataQueryReader(self.__class__._protos['CreateQueryReaderFromBlockReader'](self.pI, block_reader), {'IFactory': self})
+    return IWICMetadataQueryReader(self.__class__._protos['CreateQueryReaderFromBlockReader'](self.pI, block_reader), self)
   def CreateQueryWriterFromBlockWriter(self, block_writer):
-    return IWICMetadataQueryWriter(self.__class__._protos['CreateQueryWriterFromBlockWriter'](self.pI, block_writer), {'IFactory': self})
+    return IWICMetadataQueryWriter(self.__class__._protos['CreateQueryWriterFromBlockWriter'](self.pI, block_writer), self)
   def CreateEncoderPropertyBag(self, properties):
     n = len(properties)
     propbags = (PROPBAG2 * n)()
@@ -2769,7 +2789,7 @@ class IWICComponentFactory(IWICImagingFactory):
       if not (pb.set(prop[0], *prop[1]) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1])):
         ISetLastError(0x80070057)
         return None
-    return IWICEncoderPropertyBag(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n))
+    return IWICEncoderPropertyBag(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n), self)
 
 def Initialize(mode=6):
   if isinstance(mode, str):
