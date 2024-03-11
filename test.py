@@ -227,8 +227,18 @@ while True:
     else:
       break
 del stc
-IMetadataQueryReader.Release()
 print('end - metadata')
+#Accessing predefined metadata
+for q in (*IMetadataQueryReader.__class__._queries, 'Resolution', 'Position'):
+  if q != 'ThumbnailBytes':
+    m = getattr(IMetadataQueryReader, 'Get' + q)()
+    if isinstance(m, ctypes.Array):
+      m = m[:]
+    elif isinstance(m, IWICMetadataQueryReader):
+      m = '%s [%s]' % (m, m.GetContainerFormat().name)
+    if m is not None:
+      print(q, ':', m)
+IMetadataQueryReader.Release()
 
 #Bitmap manipulation
 #Creation from the decoded frame

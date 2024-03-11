@@ -1701,11 +1701,29 @@ class _BMFraction(Fraction):
 
 class MetadataFloatFraction(_BMFraction):
   def __str__(self):
-    return str(float(self))
+    return str(float(self)).rstrip('0').rstrip('.')
 
 class MetadataTimeFraction(_BMFraction):
   def __str__(self):
-    return ('1/%d' % round(1 / self)) if self != 0 else '0'
+    return ('1/%d s' % round(1 / self)) if self != 0 else '0'
+
+class MetadataLengthFraction(_BMFraction):
+  def __str__(self):
+    return ('%.2f' % self).rstrip('0').rstrip('.') + ' mm'
+
+class MetadataLength(int):
+  def __str__(self):
+    return '%d mm' % self
+  def __repr__(self):
+    return str(self)
+
+class MetadataAltitudeFraction(_BMFraction):
+  def __str__(self):
+    return super().__str__() + ' m'
+
+class MetadataExposureFraction(_BMFraction):
+  def __str__(self):
+    return ('%.2f' % self).rstrip('0').rstrip('.') + ' EV'
 
 class MetadataSpeedFraction(_BMFraction):
   @classmethod
@@ -1715,7 +1733,7 @@ class MetadataSpeedFraction(_BMFraction):
   def to_srational(cls, f):
     return super().to_srational(-math.log2(Fraction(f)) if isinstance(f, str) and f.replace(' ','')[:2] == '1/' else f)
   def __str__(self):
-    return '1/%d' % round(2 ** self)
+    return '1/%d s' % round(2 ** self)
 
 class MetadataApertureFraction(_BMFraction):
   @classmethod
@@ -1725,7 +1743,42 @@ class MetadataApertureFraction(_BMFraction):
   def to_srational(cls, f):
     return super().to_srational(2 * math.log2(Fraction(f.lstrip(' fF'))) if isinstance(f, str) and f.replace(' ','')[:1] in ('f', 'F') else f)
   def __str__(self):
-    return 'F %.2f' % math.sqrt(2) ** self
+    return ('F %.2f' % math.sqrt(2) ** self).rstrip('0').rstrip('.')
+
+class MetadataResolution(tuple):
+  @classmethod
+  def from_components(cls, rx, ry, ru):
+    return cls((rx, ry, ru))
+  @classmethod
+  def to_components(cls, res):
+    if isinstance(res, cls):
+      return tuple(res)
+    elif isinstance(res, str):
+      res = res.lower().replace('(', ' ').replace(')', ' ').replace(',', ' ').strip()
+      e = len(res) - 1
+      while e >= 0 and not res[e].isdecimal():
+        e -= 1
+      rxy = map(str.strip, res[:e+1].split(' ', 1))
+      return (*map(MetadataFloatFraction, rxy), 2 if res.endswith('dpi') else (3 if res.endswith('dpc') else 1))
+    elif isinstance(res, (int, float)):
+      return (MetadataFloatFraction(res), MetadataFloatFraction(res), 1)
+    elif isinstance(res, (tuple, list)):
+      if len(res) == 1:
+        return (MetadataFloatFraction(res[0]), MetadataFloatFraction(res[0]), 1)
+      elif len(res) == 2:
+        return (MetadataFloatFraction(res[0]), MetadataFloatFraction(res[1]), 1)
+      elif len(res) >= 3:
+        ru = res[2]
+        if isinstance(ru, str):
+          ru = res[2].strip().lower()
+          ru = 2 if ru == 'dpi' else (3 if ru == 'dpc' else 1)
+        return (MetadataFloatFraction(res[0]), MetadataFloatFraction(res[1]), ru)
+    else:
+      return res
+  def __str__(self):
+    return '(%s, %s)%s' % (('%.2f' % self[0]).rstrip('0').rstrip('.'), ('%.2f' % self[1]).rstrip('0').rstrip('.'), (' dpi' if self[2] == 2 else (' dpc' if self[2] == 3 else '')))
+  def __repr__(self):
+    return str(self)
 
 class _MetadataPositionComponent(tuple):
   @classmethod
@@ -1789,6 +1842,12 @@ class _IWICMQRUtil:
   def _blob(cls):
     return lambda s: tuple(map(cls, s)), lambda s: bytes(map(cls.to_int, s))
   @staticmethod
+  def _res(handler, reader=True):
+    if reader:
+      return lambda _h=handler: None if None in ((ru := (_h.GetResolutionUnit() or 1)), (rx := _h.GetXResolution()), (ry := _h.GetYResolution())) else (MetadataResolution.from_components(rx, ry, ru))
+    else:
+      return lambda res, _h=handler: None if None in (sc(s) for s, sc in zip(MetadataResolution.to_components(res), (_h.SetXResolution, _h.SetYResolution, _h.SetResolutionUnit))) else True
+  @staticmethod
   def _pos(handler, reader=True):
     if reader:
       return lambda _h=handler: None if None in ((latr := _h.GetLatitudeRef()), (lat := _h.GetLatitude()), (lonr := _h.GetLongitudeRef()), (lon := _h.GetLongitude())) else (MetadataLatitude.from_components(latr, lat), MetadataLongitude.from_components(lonr, lon))
@@ -1850,14 +1909,14 @@ class _IWICMQRMeta(_IMeta):
     'CompressedBitsPerPixel': (('/jpeg/app1/ifd/exif/{ushort=37122}', '/tiff/ifd/exif/{ushort=37122}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
     'ShutterSpeedValue': (('/jpeg/app1/ifd/exif/{ushort=37377}', '/tiff/ifd/exif/{ushort=37377}'), 'VT_I8', MetadataSpeedFraction.from_rational, MetadataSpeedFraction.to_rational),
     'ApertureValue': (('/jpeg/app1/ifd/exif/{ushort=37378}', '/tiff/ifd/exif/{ushort=37378}'), 'VT_UI8', MetadataApertureFraction.from_rational, MetadataApertureFraction.to_rational),
-    'BrightnessValue': (('/jpeg/app1/ifd/exif/{ushort=37379}', '/tiff/ifd/exif/{ushort=37379}'), 'VT_I8', MetadataFloatFraction.from_srational, MetadataFloatFraction.to_srational),
-    'ExposureBiasValue': (('/jpeg/app1/ifd/exif/{ushort=37380}', '/tiff/ifd/exif/{ushort=37380}'), 'VT_I8', MetadataFloatFraction.from_srational, MetadataFloatFraction.to_srational),
+    'BrightnessValue': (('/jpeg/app1/ifd/exif/{ushort=37379}', '/tiff/ifd/exif/{ushort=37379}'), 'VT_I8', MetadataExposureFraction.from_srational, MetadataExposureFraction.to_srational),
+    'ExposureBiasValue': (('/jpeg/app1/ifd/exif/{ushort=37380}', '/tiff/ifd/exif/{ushort=37380}'), 'VT_I8', MetadataExposureFraction.from_srational, MetadataExposureFraction.to_srational),
     'MaxApertureValue': (('/jpeg/app1/ifd/exif/{ushort=37381}', '/tiff/ifd/exif/{ushort=37381}'), 'VT_UI8', MetadataApertureFraction.from_rational, MetadataApertureFraction.to_rational),
     'SubjectDistance': (('/jpeg/app1/ifd/exif/{ushort=37382}', '/tiff/ifd/exif/{ushort=37382}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
     'MeteringMode': (('/jpeg/app1/ifd/exif/{ushort=37383}', '/tiff/ifd/exif/{ushort=37383}'), 'VT_UI2', METADATAMETERINGMODE, METADATAMETERINGMODE.to_int),
     'LightSource': (('/jpeg/app1/ifd/exif/{ushort=37384}', '/tiff/ifd/exif/{ushort=37384}'), 'VT_UI2', METADATALIGHTSOURCE, METADATALIGHTSOURCE.to_int),
     'Flash': (('/jpeg/app1/ifd/exif/{ushort=37385}', '/tiff/ifd/exif/{ushort=37385}'), 'VT_UI2', METADATAFLASH, METADATAFLASH.to_int),
-    'FocalLength': (('/jpeg/app1/ifd/exif/{ushort=37386}', '/tiff/ifd/exif/{ushort=37386}'), 'VT_I8', MetadataFloatFraction.from_srational, MetadataFloatFraction.to_srational),
+    'FocalLength': (('/jpeg/app1/ifd/exif/{ushort=37386}', '/tiff/ifd/exif/{ushort=37386}'), 'VT_I8', MetadataLengthFraction.from_srational, MetadataLengthFraction.to_srational),
     'MakerNote': (('/jpeg/app1/ifd/exif/{ushort=37500}', '/tiff/ifd/exif/{ushort=37500}'), 'VT_BLOB', None, None),
     'UserComment': (('/jpeg/app1/ifd/exif/{ushort=37510}', '/tiff/ifd/exif/{ushort=37510}'), 'VT_LPWSTR', None, None),
     'ColorSpace': (('/jpeg/app1/ifd/exif/{ushort=40961}', '/tiff/ifd/exif/{ushort=40961}'), 'VT_UI2', WICEXIFCOLORSPACE, WICEXIFCOLORSPACE.to_int),
@@ -1865,14 +1924,14 @@ class _IWICMQRMeta(_IMeta):
     'PixelYDimension': (('/jpeg/app1/ifd/exif/{ushort=40963}', '/tiff/ifd/exif/{ushort=40963}'), 'VT_UI4', None, None),
     'ExposureMode': (('/jpeg/app1/ifd/exif/{ushort=41986}', '/tiff/ifd/exif/{ushort=41986}'), 'VT_UI2', METADATAEXPOSUREMODE, METADATAEXPOSUREMODE.to_int),
     'WhiteBalance': (('/jpeg/app1/ifd/exif/{ushort=41987}', '/tiff/ifd/exif/{ushort=41987}'), 'VT_UI2', METADATAWHITEBALANCE, METADATAWHITEBALANCE.to_int),
-    'FocalLengthIn35mmFilm': (('/jpeg/app1/ifd/exif/{ushort=41989}', '/tiff/ifd/exif/{ushort=41989}'), 'VT_UI2', None, None),
+    'FocalLengthIn35mmFilm': (('/jpeg/app1/ifd/exif/{ushort=41989}', '/tiff/ifd/exif/{ushort=41989}'), 'VT_UI2', MetadataLength, None),
     'SceneCaptureType': (('/jpeg/app1/ifd/exif/{ushort=41990}', '/tiff/ifd/exif/{ushort=41990}'), 'VT_UI2', METADATASCENECAPTURETYPE, METADATASCENECAPTURETYPE.to_int),
     'LatitudeRef': (('/jpeg/app1/ifd/gps/{ushort=1}', '/tiff/ifd/gps/{ushort=1}'), 'VT_LPSTR', bytes.decode, str.encode),
     'Latitude': (('/jpeg/app1/ifd/gps/{ushort=2}', '/tiff/ifd/gps/{ushort=2}'), 'VT_VECTOR | VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
     'LongitudeRef': (('/jpeg/app1/ifd/gps/{ushort=3}', '/tiff/ifd/gps/{ushort=3}'), 'VT_LPSTR', bytes.decode, str.encode),
     'Longitude': (('/jpeg/app1/ifd/gps/{ushort=4}', '/tiff/ifd/gps/{ushort=4}'), 'VT_VECTOR | VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
     'AltitudeRef': (('/jpeg/app1/ifd/gps/{ushort=5}', '/tiff/ifd/gps/{ushort=5}'), 'VT_UI1', METADATAALTITUDEREF, METADATAALTITUDEREF.to_int),
-    'Altitude': (('/jpeg/app1/ifd/gps/{ushort=6}', '/tiff/ifd/gps/{ushort=6}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
+    'Altitude': (('/jpeg/app1/ifd/gps/{ushort=6}', '/tiff/ifd/gps/{ushort=6}'), 'VT_UI8', MetadataAltitudeFraction.from_rational, MetadataAltitudeFraction.to_rational),
     'TimeStamp': (('/jpeg/app1/ifd/gps/{ushort=7}', '/tiff/ifd/gps/{ushort=7}'), 'VT_VECTOR | VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
     'DateStamp': (('/jpeg/app1/ifd/gps/{ushort=29}', '/tiff/ifd/gps/{ushort=29}'), 'VT_LPSTR', bytes.decode, str.encode),
     'ThumbnailBytes': (('/jpeg/app1/thumb/{}', '/tiff/ifd/thumb/{}'), 'VT_BLOB', None, None),
@@ -1885,10 +1944,12 @@ class _IWICMQRMeta(_IMeta):
       for n in mcls._queries:
         kwds['Get' + n] = _WICMetadataQuery()
       kwds['GetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, True))
+      kwds['GetResolution'] = property(lambda s: _IWICMQRUtil._res(s, True))
     elif 'Writer' in name:
       for n in mcls._queries:
         kwds['Set' + n] = _WICMetadataQuery()
       kwds['SetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, False))
+      kwds['SetResolution'] = property(lambda s: _IWICMQRUtil._res(s, False))
     return kwds
 
 class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
@@ -2800,7 +2861,6 @@ def Initialize(mode=6):
     _IUtil._local.initialized += 1
     return True
   return None
-
 def Uninitialize():
   if hasattr(_IUtil._local, 'initialized'):
     while _IUtil._local.initialized > 0:
