@@ -818,6 +818,16 @@ WICPJPEGSCANHEADER = ctypes.POINTER(WICJPEGSCANHEADER)
 
 class WICBITMAPPLANE(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Format', WICPIXELFORMAT), ('pbBuffer', wintypes.LPVOID), ('cbStride', wintypes.UINT), ('cbBufferSize', wintypes.UINT)]
+  @classmethod
+  def create(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, IWICBitmapLock):
+      return cls(obj.GetPixelFormat(), ctypes.cast((dp := obj.GetDataPointer()), wintypes.LPVOID), obj.GetStride(), len(dp))
+    elif isinstance(obj, dict):
+      return cls(obj.get('Format', 'DontCare'), ctypes.cast(PBUFFER.from_param(obj.get('pbBuffer', None)), wintypes.LPVOID), obj.get('cbStride', 0), PBUFFER.length(obj.get('pbBuffer', None)))
+    else:
+      return cls(obj[0], ctypes.cast(PBUFFER.from_param(obj[1]), wintypes.LPVOID), obj[2], PBUFFER.length(obj[1]))
 WICPBITMAPPLANE = ctypes.POINTER(WICBITMAPPLANE)
 
 WICPngFilterOption = {'Unspecified': 0, 'None': 1, 'Sub': 2, 'Up': 3, 'Average': 4, 'Paeth': 5, 'Adaptive': 6}
@@ -843,11 +853,15 @@ class D2D1PIXELFORMAT(ctypes.Structure, metaclass=_WSMeta):
 
 class WICIMAGEPARAMETERS(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('PixelFormat', D2D1PIXELFORMAT), ('DpiX', wintypes.FLOAT), ('DpiY', wintypes.FLOAT), ('Top', wintypes.FLOAT), ('Left', wintypes.FLOAT), ('PixelWidth', wintypes.UINT), ('PixelHeight', wintypes.UINT)]
-class WICPIMAGEPARAMETERS(ctypes.POINTER(WICIMAGEPARAMETERS)):
-  _type_ = WICIMAGEPARAMETERS
   @classmethod
-  def from_param(cls, obj):
-    return obj if (obj is None or isinstance(obj, cls)) else ctypes.byref(obj if isinstance(obj, cls._type_) else cls._type_((pf if isinstance((pf := obj.get('PixelFormat', D2D1PIXELFORMAT())), D2D1PIXELFORMAT) else D2D1PIXELFORMAT(pf.get('format', 0), pf.get('alphaMode', 0))), obj.get('DpiX', 0), obj.get('DpiY', 0), obj.get('Top', 0), obj.get('Left', 0), obj.get('PixelWidth', 0), obj.get('PixelHeight', 0)))
+  def create(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, dict):
+      return cls((pf if isinstance((pf := obj.get('PixelFormat', D2D1PIXELFORMAT())), D2D1PIXELFORMAT) else D2D1PIXELFORMAT(pf.get('format', 0), pf.get('alphaMode', 0))), obj.get('DpiX', 0), obj.get('DpiY', 0), obj.get('Top', 0), obj.get('Left', 0), obj.get('PixelWidth', 0), obj.get('PixelHeight', 0))
+    else:
+      return cls((pf if isinstance((pf := obj[0]), D2D1PIXELFORMAT) else D2D1PIXELFORMAT(pf[0], pf[1])), obj[1], obj[2], obj[3], obj[4], obj[5], obj[6])
+WICPIMAGEPARAMETERS = ctypes.POINTER(WICIMAGEPARAMETERS)
 
 WICBitmapAlphaChannelOption = {'Use': 0, 'UseAlpha': 0, 'UsePremultiplied': 1, 'UsePremultipliedAlpha': 1, 'Ignore': 2, 'IgnoreAlpha': 2}
 WICBITMAPALPHACHANNELOPTION = type('WICBITMAPALPHACHANNELOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICBitmapAlphaChannelOption.items()}, '_tab_cn': {c: n for n, c in WICBitmapAlphaChannelOption.items()}, '_def': 0})
@@ -2163,20 +2177,18 @@ class IWICPlanarBitmapSourceTransform(IUnknown):
   IID = GUID(0x3aff9cce, 0xbe95, 0x4303, 0xb9, 0x27, 0xe7, 0xd1, 0x6f, 0xf4, 0xa6, 0x13)
   _protos['DoesSupportTransform'] = 3, (wintypes.PUINT, wintypes.PUINT, WICTRANSFORMOPTIONS, WICPLANAROPTION, WICPPIXELFORMAT, WICPBITMAPPLANEDESCRIPTION, wintypes.UINT), (wintypes.PBOOLE,)
   _protos['CopyPixels'] = 4, (PXYWH, wintypes.UINT, wintypes.UINT, WICTRANSFORMOPTIONS, WICPLANAROPTION, WICPBITMAPPLANE, wintypes.UINT),  ()
-  def DoesSupportTransform(self, width, height, transform_options, planar_option, pixel_formats, planes_number=None):
-    if planes_number is None:
-      planes_number = len(pixel_formats) if pixel_formats is not None else 0
+  def DoesSupportTransform(self, width, height, transform_options, planar_option, pixel_formats):
+    planes_number = len(pixel_formats) if pixel_formats is not None else 0
     w = wintypes.UINT(width)
     h = wintypes.UINT(height)
     if pixel_formats is not None and not isinstance(pixel_formats, ctypes.Array):
       pixel_formats = (WICPIXELFORMAT * planes_number)(*(WICPIXELFORMAT(pf) for pf in pixel_formats))
     planes_descriptions = (WICBITMAPPLANEDESCRIPTION * planes_number)()
     return None if (r := self.__class__._protos['DoesSupportTransform'](self.pI, w, h, transform_options, planar_option, (pixel_formats[0] if pixel_formats else None), (planes_descriptions[0] if planes_descriptions else None), planes_number)) is None else r, w.value, h.value, tuple({'Format': pd.Format, 'Width': pd.Width, 'Height': pd.Height} for pd in planes_descriptions)
-  def CopyPixels(self, xywh, width, height, transform_options, planar_option, planes_buffers, planes_number=None):
-    if planes_number is None:
-      planes_number = len(planes_buffers) if planes_buffers is not None else 0
+  def CopyPixels(self, xywh, width, height, transform_options, planar_option, planes_buffers):
+    planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*((pb if isinstance(pb, WICBITMAPPLANE) else (WICBITMAPPLANE(pb.get('Format', 'DontCare'), ctypes.cast(PBUFFER.from_param(pb.get('pbBuffer', None)), ctypes.c_void_p), pb.get('cbStride', 0), PBUFFER.length(pb.get('pbBuffer', None))) if isinstance(pb, dict) else WICBITMAPPLANE(pb[0], ctypes.cast(PBUFFER.from_param(pb[1]), ctypes.c_void_p), pb[2], PBUFFER.length(pb[1])))) for pb in planes_buffers))
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.create(pb) for pb in planes_buffers))
     return self.__class__._protos['CopyPixels'](self.pI, xywh, width, height, transform_options, planar_option, (planes_buffers[0] if planes_buffers else None), planes_number)
 
 class IWICBitmapDecoder(IUnknown):
@@ -2485,17 +2497,15 @@ class IWICPlanarBitmapFrameEncode(IUnknown):
   IID = GUID(0xf928b7b8, 0x2221, 0x40c1, 0xb7, 0x2e, 0x7e, 0x82, 0xf1, 0x97, 0x4d, 0x1a)
   _protos['WritePixels'] = 3, (wintypes.UINT, WICPBITMAPPLANE, wintypes.UINT), ()
   _protos['WriteSource'] = 4, (wintypes.PLPVOID, wintypes.UINT, PXYWH), ()
-  def WriteSource(self, planes_sources, xywh=None, planes_number=None):
-    if planes_number is None:
-      planes_number = len(planes_sources) if planes_sources is not None else 0
+  def WriteSource(self, planes_sources, xywh=None):
+    planes_number = len(planes_sources) if planes_sources is not None else 0
     if planes_sources is not None and not isinstance(planes_sources, ctypes.Array):
-      planes_sources = (wintypes.LPVOID * planes_number)(*(ps.pI for ps in planes_sources))
+      planes_sources = (wintypes.LPVOID * planes_number)(*((ps.pI if isinstance(ps, IUnknown) else ps) for ps in planes_sources))
     return self.__class__._protos['WriteSource'](self.pI, planes_sources, planes_number, xywh)
-  def WritePixels(self, lines_number, planes_buffers, planes_number=None):
-    if planes_number is None:
-      planes_number = len(planes_buffers) if planes_buffers is not None else 0
+  def WritePixels(self, lines_number, planes_buffers):
+    planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*((pb if isinstance(pb, WICBITMAPPLANE) else (WICBITMAPPLANE(pb.get('Format', 'DontCare'), ctypes.cast(PBUFFER.from_param(pb.get('pbBuffer', None)), ctypes.c_void_p), pb.get('cbStride', 0), PBUFFER.length(pb.get('pbBuffer', None))) if isinstance(pb, dict) else WICBITMAPPLANE(pb[0], ctypes.cast(PBUFFER.from_param(pb[1]), ctypes.c_void_p), pb[2], PBUFFER.length(pb[1])))) for pb in planes_buffers))
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.create(pb) for pb in planes_buffers))
     return self.__class__._protos['WritePixels'](self.pI, lines_number, planes_buffers, planes_number)
 
 class IWICImageEncoder(IUnknown):
@@ -2504,11 +2514,11 @@ class IWICImageEncoder(IUnknown):
   _protos['WriteFrameThumbnail'] = 4, (wintypes.LPVOID, wintypes.LPVOID, WICPIMAGEPARAMETERS), ()
   _protos['WriteThumbnail'] = 5, (wintypes.LPVOID, wintypes.LPVOID, WICPIMAGEPARAMETERS), ()
   def WriteThumbnail(self, image, encoder, image_parameters=None):
-    return self.__class__._protos['WriteThumbnail'](self.pI, image, encoder, image_parameters)
+     return self.__class__._protos['WriteThumbnail'](self.pI, image, encoder, WICIMAGEPARAMETERS.create(image_parameters))
   def WriteFrame(self, image, frame_encode, image_parameters=None):
-    return self.__class__._protos['WriteFrame'](self.pI, image, frame_encode, image_parameters)
+    return self.__class__._protos['WriteFrame'](self.pI, image, frame_encode, WICIMAGEPARAMETERS.create(image_parameters))
   def WriteFrameThumbnail(self, image, frame_encode, image_parameters=None):
-    return self.__class__._protos['WriteFrameThumbnail'](self.pI, image, frame_encode, image_parameters)
+    return self.__class__._protos['WriteFrameThumbnail'](self.pI, image, frame_encode, WICIMAGEPARAMETERS.create(image_parameters))
 
 class IWICFormatConverter(IWICBitmapSource):
   IID = GUID(0x00000301, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -2525,17 +2535,15 @@ class IWICPlanarFormatConverter(IWICBitmapSource):
   IID = GUID(0xbebee9cb, 0x83b0, 0x4dcc, 0x81, 0x32, 0xb0, 0xaa, 0xa5, 0x5e, 0xac, 0x96)
   _protos['Initialize'] = 8, (wintypes.PLPVOID, wintypes.UINT, WICPPIXELFORMAT, WICDITHERTYPE, wintypes.LPVOID, wintypes.DOUBLE, WICPALETTETYPE), ()
   _protos['CanConvert'] = 9, (WICPPIXELFORMAT, wintypes.UINT, WICPPIXELFORMAT), (wintypes.PBOOLE,)
-  def CanConvert(self, source_pixel_formats, destination_pixel_format, planes_number=None):
-    if planes_number is None:
-      planes_number = len(source_pixel_formats) if source_pixel_formats is not None else 0
+  def CanConvert(self, source_pixel_formats, destination_pixel_format):
+    planes_number = len(source_pixel_formats) if source_pixel_formats is not None else 0
     if source_pixel_formats is not None and not isinstance(source_pixel_formats, ctypes.Array):
       source_pixel_formats = (WICPIXELFORMAT * planes_number)(*(WICPIXELFORMAT(pf) for pf in source_pixel_formats))
     return self.__class__._protos['CanConvert'](self.pI, (source_pixel_formats[0] if source_pixel_formats else None), planes_number, destination_pixel_format)
-  def Initialize(self, planes_sources, destination_pixel_format, dither_type=0, palette=None, alpha_threshold=0, palette_type=0, planes_number=None):
-    if planes_number is None:
-      planes_number = len(planes_sources) if planes_sources is not None else 0
+  def Initialize(self, planes_sources, destination_pixel_format, dither_type=0, palette=None, alpha_threshold=0, palette_type=0):
+    planes_number = len(planes_sources) if planes_sources is not None else 0
     if planes_sources is not None and not isinstance(planes_sources, ctypes.Array):
-      planes_sources = (wintypes.LPVOID * planes_number)(*(ps.pI for ps in planes_sources))
+      planes_sources = (wintypes.LPVOID * planes_number)(*((ps.pI if isinstance(ps, IUnknown) else ps) for ps in planes_sources))
     return self.__class__._protos['Initialize'](self.pI, planes_sources, planes_number, destination_pixel_format, dither_type, palette, alpha_threshold, palette_type)
 
 class IWICColorTransform(IWICBitmapSource):
@@ -2939,6 +2947,8 @@ class IWICImagingFactory(IUnknown):
   def CreateBitmapFlipRotator(self):
     return IWICBitmapFlipRotator(self.__class__._protos['CreateBitmapFlipRotator'](self.pI), self)
   def CreateComponentInfo(self, clsid):
+    if isinstance(clsid, WICPIXELFORMAT):
+      clsid = WICCOMPONENT(clsid)
     if (ci := IWICComponentInfo(self.__class__._protos['CreateComponentInfo'](self.pI, clsid), self)) is None:
       return None
     c = ci.GetComponentType().code

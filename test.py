@@ -950,8 +950,8 @@ print(*(len(b) for b in bs))
 r, w, h, pds = IPlanarBitmapSourceTransform.DoesSupportTransform(100, 100, 'rotate0', 'preservesubsampling', ('8bppY', '16bppCbCr'))
 print(r, w, h, pds)
 #Retrieving the 2 planes
-bs2 = tuple(bytearray(pd['Width'] * pd['Height'] * (2 if pd['Format'].name.startswith('16') else 1)) for pd in pds)
-IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', tuple((pd['Format'], b, pd['Width'] * (2 if pd['Format'].name.startswith('16') else 1)) for pd, b in zip(pds, bs2)))
+bs2 = tuple(bytearray(pd['Width'] * pd['Height'] * (IImagingFactory.CreateComponentInfo(pd['Format']).GetBitsPerPixel() // 8)) for pd in pds)
+IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', tuple((pd['Format'], b, pd['Width'] * (IImagingFactory.CreateComponentInfo(pd['Format']).GetBitsPerPixel() // 8)) for pd, b in zip(pds, bs2)))
 print(*(len(b) for b in bs2))
 #Checking that the planes of the two modes matches
 print(bs[0]==bs2[0], bs[1]==bs2[1][::2], bs[2]==bs2[1][1::2])
@@ -960,16 +960,14 @@ del bs
 IFormatConverter = IImagingFactory.CreateFormatConverter()
 IPlanarFormatConverter = IFormatConverter.GetPlanarFormatConverter()
 IFormatConverter.Release()
-#Checking if conversion to BGR is supported)
-print(IPlanarFormatConverter.CanConvert(('8bppY', '8bppCb', '8bppCr'), '24bppBGR'))
-#Creating the two planes bitmaps, locking them and retrieving their buffer
+#Checking if conversion to BGR is supported
+print(IPlanarFormatConverter.CanConvert(tuple(pd['Format'] for pd in pds), '24bppBGR'))
+#Creating the two planes bitmaps
 IBitmaps = tuple(IImagingFactory.CreateBitmap(pd['Width'], pd['Height'], pd['Format']) for pd in pds)
+#Writing data to the planes bitmaps
 IBitmapLocks = tuple(IBitmap.Lock(None, 'write') for IBitmap in IBitmaps)
-IBitmapLockBuffers = tuple(IBitmapLock.GetDataPointer() for IBitmapLock in IBitmapLocks)
-#Writing data to the buffers
-IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', tuple((pd['Format'], b, l.GetStride()) for pd, l, b in zip(pds, IBitmapLocks, IBitmapLockBuffers)))
+IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', IBitmapLocks)
 tuple(map(IUnknown.Release, IBitmapLocks))
-del IBitmapLockBuffers
 #Initializing the planar format converter
 IPlanarFormatConverter.Initialize(IBitmaps, '24bppBGR')
 #Checking the format of the converted bitmap
@@ -991,7 +989,7 @@ IPlanarBitmapFrameEncode.WriteSource(IBitmaps)
 #Finalizing the encoding
 IBitmapFrameEncode.Commit()
 IEncoder.Commit()
-tuple(map(IUnknown.Release, (IPlanarBitmapFrameEncode, IBitmapFrameEncode, IEncoderOptions, IEncoder, IStream2, *IBitmaps)))
+tuple(map(IUnknown.Release, (IPlanarBitmapFrameEncode, IBitmapFrameEncode, IEncoderOptions, IEncoder, IStream2)))
 #Creating and initializing an encoder
 IStream2 = IStream.CreateOnFile(p2, 'write')
 IEncoder = IImagingFactory.CreateEncoder('jpeg')
@@ -999,13 +997,17 @@ IEncoder.Initialize(IStream2)
 IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
 IEncoderOptions.JpegYCrCbSubsampling = IBitmapFrame.GetJpegFrameDecode().GetFrameHeader()['SampleFactors'].name[-3:]
 IBitmapFrameEncode.Initialize(IEncoderOptions)
-IBitmapFrameEncode.SetSize(w,h)
+IBitmapFrameEncode.SetSize(w, h * 2)
 IBitmapFrameEncode.SetPixelFormat(IBitmapFrame .GetPixelFormat())
 #Retrieving a planar frame encoder
 IPlanarBitmapFrameEncode = IBitmapFrameEncode.GetPlanarBitmapFrameEncode()
 #Writing the pixels from the previous buffers in the planar frame
-IPlanarBitmapFrameEncode.WritePixels(h, tuple((pd['Format'], b, pd['Width'] * (2 if pd['Format'].name.startswith('16') else 1)) for pd, b in zip(pds, bs2)))
+IPlanarBitmapFrameEncode.WritePixels(h, tuple((pd['Format'], b, pd['Width'] * (IImagingFactory.CreateComponentInfo(pd['Format']).GetBitsPerPixel() // 8)) for pd, b in zip(pds, bs2)))
 del bs2
+#Writing the pixels from the plane bitmaps in the planar frame
+IBitmapLocks = tuple(IBitmap.Lock(None, 'read') for IBitmap in IBitmaps)
+IPlanarBitmapFrameEncode.WritePixels(h, IBitmapLocks)
+tuple(map(IUnknown.Release, (*IBitmapLocks, *IBitmaps)))
 #Finalizing the encoding
 IBitmapFrameEncode.Commit()
 IEncoder.Commit()
