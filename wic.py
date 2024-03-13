@@ -2514,7 +2514,7 @@ class IWICImageEncoder(IUnknown):
   _protos['WriteFrameThumbnail'] = 4, (wintypes.LPVOID, wintypes.LPVOID, WICPIMAGEPARAMETERS), ()
   _protos['WriteThumbnail'] = 5, (wintypes.LPVOID, wintypes.LPVOID, WICPIMAGEPARAMETERS), ()
   def WriteThumbnail(self, image, encoder, image_parameters=None):
-     return self.__class__._protos['WriteThumbnail'](self.pI, image, encoder, WICIMAGEPARAMETERS.create(image_parameters))
+    return self.__class__._protos['WriteThumbnail'](self.pI, image, encoder, WICIMAGEPARAMETERS.create(image_parameters))
   def WriteFrame(self, image, frame_encode, image_parameters=None):
     return self.__class__._protos['WriteFrame'](self.pI, image, frame_encode, WICIMAGEPARAMETERS.create(image_parameters))
   def WriteFrameThumbnail(self, image, frame_encode, image_parameters=None):
