@@ -294,6 +294,24 @@ for l in range(5):
   print(' '.join('(%d, %d, %d)' % (b2[l * s2 + 3 * c], b2[l * s2+ 3 * c + 1], b2[l * s2 + 3 * c + 2]) for c in range(7)))
 IBitmapCache2.Release()
 IBitmapCache.Release()
+#Creation from an icon handle
+user32 = ctypes.WinDLL('user32', use_last_error=True)
+user32.LoadIconW.restype = wintypes.HICON
+IBitmap = IImagingFactory.CreateBitmapFromHICON(user32.LoadIconW(None, wintypes.LPCWSTR(32516)))
+print(IBitmap.GetSize(), IBitmap.GetPixelFormat())
+#Creation from a bitmap handle
+gdiplus = ctypes.WinDLL('gdiplus', use_last_error=True)
+token = ctypes.wintypes.ULONG()
+gdiplus.GdiplusStartup(ctypes.byref(token), ctypes.c_char_p(ctypes.string_at(ctypes.addressof(ctypes.c_uint(1)), ctypes.sizeof(ctypes.c_uint)) + b'\x00' * 24), None)
+Bitmap = ctypes.c_void_p()
+gdiplus.GdipCreateBitmapFromFile(wintypes.LPCWSTR(path + r'\test.png'), ctypes.byref(Bitmap))
+HBitmap = wintypes.HBITMAP()
+gdiplus.GdipCreateHBITMAPFromBitmap(Bitmap, ctypes.byref(HBitmap))
+IBitmap = IImagingFactory.CreateBitmapFromHBITMAP(HBitmap)
+print(IBitmap.GetSize(), IBitmap.GetPixelFormat())
+gdiplus.GdipDisposeImage(Bitmap)
+gdiplus.GdiplusShutdown(token)
+IBitmap.Release()
 
 #Encoding options management
 p2 = path + r'\test-p3-.jpg'
@@ -659,7 +677,7 @@ IEncoder.Commit()
 tuple(map(IUnknown.Release, (IEncoder, IJpegFrameEncode, IBitmapFrameEncode, IEncoderOptions, IStream2, IJpegFrameDecode, IBitmapFrame, IDecoder, IMetadataBlockWriter, IMetadataWriter2, IMetadataWriter, IMetadataReader, IMetadataBlockReader)))
 
 #Component infos manipulation
-#IWICComponentFactory instance creation 
+#IWICComponentFactory instance creation
 IComponentFactory = IWICComponentFactory()
 #Enumerating components
 print(*(c.GetComponentType() for c in IComponentFactory.CreateComponentEnumerator(options='BuiltInOnly')))
@@ -792,7 +810,7 @@ IMetadataWriter2.SetValueByIndex(0, *IMetadataWriter.GetValueWithTypeByIndex(0)[
 IPersistStream = IMetadataWriter2.GetPersistStream()
 print(IPersistStream.GetClassID())
 print(IPersistStream.GetClassID(), IPersistStream.GetSizeMax())
-#Saving the content of the new metadata writer to a new in memory stream 
+#Saving the content of the new metadata writer to a new in memory stream
 IMStream = IStream.CreateInMemory()
 IPersistStream.SaveEx(IMStream, options=IStreamProvider.GetPersistOptions())
 #Reading the first four bytes
@@ -913,6 +931,86 @@ IPStream.CopyTo(IStream2, l - IPStream.Seek())
 IStream2.Commit()
 #Releasing interfaces
 tuple(map(IUnknown.Release, (IStream2, IMetadataWriter2, IMetadataWriter, IJpegFrameEncode, IBitmapFrameEncode, IEncoderOptions, IEncoder, IPStream, IMetadataBlockReader, IJpegFrameDecode, IBitmapFrame, IDecoderInfo, IDecoder)))
+
+#Planar YCbCr format manipulation
+#Decoding the file
+p = path + r'\test.jpg'
+IDecoder = IImagingFactory.CreateDecoderFromFilename(p, metadata_option='onload')
+IBitmapFrame = IDecoder.GetFrame(0)
+#Creating the planar data provider
+IPlanarBitmapSourceTransform = IBitmapFrame.GetPlanarBitmapSourceTransform()
+#Checking if 3 planes mode is supported
+r, w, h, pds = IPlanarBitmapSourceTransform.DoesSupportTransform(100, 100, 'rotate0', 'preservesubsampling', ('8bppY', '8bppCb', '8bppCr'))
+print(r, w, h, pds)
+#Retrieving the 3 planes
+bs = tuple(bytearray(pd['Width'] * pd['Height']) for pd in pds)
+IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', ({'Format': '8bppY', 'pbBuffer': bs[0], 'cbStride': pds[0]['Width']}, WICBITMAPPLANE('8bppCb', ctypes.cast(ctypes.pointer((ctypes.c_char * len(bs[1])).from_buffer(bs[1])), ctypes.c_void_p), pds[1]['Width']), ('8bppCr', bs[2], pds[2]['Width'])))
+print(*(len(b) for b in bs))
+#Checking if 2 planes mode is supported
+r, w, h, pds = IPlanarBitmapSourceTransform.DoesSupportTransform(100, 100, 'rotate0', 'preservesubsampling', ('8bppY', '16bppCbCr'))
+print(r, w, h, pds)
+#Retrieving the 2 planes
+bs2 = tuple(bytearray(pd['Width'] * pd['Height'] * (2 if pd['Format'].name.startswith('16') else 1)) for pd in pds)
+IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', tuple((pd['Format'], b, pd['Width'] * (2 if pd['Format'].name.startswith('16') else 1)) for pd, b in zip(pds, bs2)))
+print(*(len(b) for b in bs2))
+#Checking that the planes of the two modes matches
+print(bs[0]==bs2[0], bs[1]==bs2[1][::2], bs[2]==bs2[1][1::2])
+del bs
+#Creating the planar format converter
+IFormatConverter = IImagingFactory.CreateFormatConverter()
+IPlanarFormatConverter = IFormatConverter.GetPlanarFormatConverter()
+IFormatConverter.Release()
+#Checking if conversion to BGR is supported)
+print(IPlanarFormatConverter.CanConvert(('8bppY', '8bppCb', '8bppCr'), '24bppBGR'))
+#Creating the two planes bitmaps, locking them and retrieving their buffer
+IBitmaps = tuple(IImagingFactory.CreateBitmap(pd['Width'], pd['Height'], pd['Format']) for pd in pds)
+IBitmapLocks = tuple(IBitmap.Lock(None, 'write') for IBitmap in IBitmaps)
+IBitmapLockBuffers = tuple(IBitmapLock.GetDataPointer() for IBitmapLock in IBitmapLocks)
+#Writing data to the buffers
+IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', tuple((pd['Format'], b, l.GetStride()) for pd, l, b in zip(pds, IBitmapLocks, IBitmapLockBuffers)))
+tuple(map(IUnknown.Release, IBitmapLocks))
+del IBitmapLockBuffers
+#Initializing the planar format converter
+IPlanarFormatConverter.Initialize(IBitmaps, '24bppBGR')
+#Checking the format of the converted bitmap
+print(IPlanarFormatConverter.GetSize(), IPlanarFormatConverter.GetPixelFormat())
+IPlanarFormatConverter.Release()
+IPlanarBitmapSourceTransform.Release()
+#Creating and initializing an encoder
+p2 = path + r'\test-.jpg'
+IStream2 = IStream.CreateOnFile(p2, 'write')
+IEncoder = IImagingFactory.CreateEncoder('jpeg')
+IEncoder.Initialize(IStream2)
+IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
+IEncoderOptions.JpegYCrCbSubsampling = IBitmapFrame.GetJpegFrameDecode().GetFrameHeader()['SampleFactors'].name[-3:]
+IBitmapFrameEncode.Initialize(IEncoderOptions)
+#Retrieving a planar frame encoder
+IPlanarBitmapFrameEncode = IBitmapFrameEncode.GetPlanarBitmapFrameEncode()
+#Writing the planes bitmaps to the planar frame
+IPlanarBitmapFrameEncode.WriteSource(IBitmaps)
+#Finalizing the encoding
+IBitmapFrameEncode.Commit()
+IEncoder.Commit()
+tuple(map(IUnknown.Release, (IPlanarBitmapFrameEncode, IBitmapFrameEncode, IEncoderOptions, IEncoder, IStream2, *IBitmaps)))
+#Creating and initializing an encoder
+IStream2 = IStream.CreateOnFile(p2, 'write')
+IEncoder = IImagingFactory.CreateEncoder('jpeg')
+IEncoder.Initialize(IStream2)
+IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
+IEncoderOptions.JpegYCrCbSubsampling = IBitmapFrame.GetJpegFrameDecode().GetFrameHeader()['SampleFactors'].name[-3:]
+IBitmapFrameEncode.Initialize(IEncoderOptions)
+IBitmapFrameEncode.SetSize(w,h)
+IBitmapFrameEncode.SetPixelFormat(IBitmapFrame .GetPixelFormat())
+#Retrieving a planar frame encoder
+IPlanarBitmapFrameEncode = IBitmapFrameEncode.GetPlanarBitmapFrameEncode()
+#Writing the pixels from the previous buffers in the planar frame
+IPlanarBitmapFrameEncode.WritePixels(h, tuple((pd['Format'], b, pd['Width'] * (2 if pd['Format'].name.startswith('16') else 1)) for pd, b in zip(pds, bs2)))
+del bs2
+#Finalizing the encoding
+IBitmapFrameEncode.Commit()
+IEncoder.Commit()
+tuple(map(IUnknown.Release, (IPlanarBitmapFrameEncode, IBitmapFrameEncode, IEncoderOptions, IEncoder, IStream2)))
+tuple(map(IUnknown.Release, (IBitmapFrame, IDecoder)))
 
 #Releasing the factory interfaces
 IImagingFactory.Release()
