@@ -349,7 +349,7 @@ class _BGUID:
 class _BPGUID:
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, cls) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+    return obj if isinstance(obj, cls) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
@@ -798,28 +798,66 @@ WICJPEGHUFFMANBASELINE = type('WICJPEGHUFFMANBASELINE', (_BCode, wintypes.DWORD)
 
 class WICJPEGFRAMEHEADER(ctypes.Structure):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('TransferMatrix', WICJPEGTRANSFERMATRIX), ('ScanType', WICJPEGSCANTYPE), ('cComponents', wintypes.UINT), ('ComponentIdentifiers', wintypes.DWORD), ('SampleFactors', WICJPEGSAMPLEFACTORS), ('QuantizationTableIndices', WICJPEGQUANTIZATIONBASELINE)]
+  def to_dict(self):
+    return {k[0]: (getattr(self, k[0]), tuple(iter(getattr(self, k[0]).to_bytes(4).lstrip(b'\x00')))) if k[0] == 'ComponentIdentifiers' else getattr(self, k[0]) for k in self._fields_}
+
 WICPJPEGFRAMEHEADER = ctypes.POINTER(WICJPEGFRAMEHEADER)
 
 class WICJPEGDCHUFFMANTABLE(ctypes.Structure):
   _fields_ = [('CodeCounts', wintypes.BYTE * 12), ('CodeValues', wintypes.BYTE * 12)]
+  def to_dict(self):
+    return {'CodeCounts': self.CodeCounts, 'CodeValues': self.CodeValues}
 WICPJPEGDCHUFFMANTABLE = ctypes.POINTER(WICJPEGDCHUFFMANTABLE)
 
 class WICJPEGACHUFFMANTABLE(ctypes.Structure):
   _fields_ = [('CodeCounts', wintypes.BYTE * 16), ('CodeValues', wintypes.BYTE * 162)]
+  def to_dict(self):
+    return {'CodeCounts': self.CodeCounts, 'CodeValues': self.CodeValues}
 WICPJPEGACHUFFMANTABLE = ctypes.POINTER(WICJPEGACHUFFMANTABLE)
 
 class WICJPEGQUANTIZATIONTABLE(ctypes.Structure):
   _fields_ = [('Elements', wintypes.BYTE * 64),]
 WICPJPEGQUANTIZATIONTABLE = ctypes.POINTER(WICJPEGQUANTIZATIONTABLE)
 
-class WICJPEGSCANHEADER(ctypes.Structure):
+class WICJPEGSCANHEADER(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cComponents', wintypes.UINT), ('RestartInterval', wintypes.UINT), ('ComponentSelectors', wintypes.DWORD), ('HuffmanTableIndices', WICJPEGHUFFMANBASELINE), ('StartSpectralSelection', wintypes.BYTE), ('EndSpectralSelection', wintypes.BYTE), ('SuccessiveApproximationHigh', wintypes.BYTE), ('SuccessiveApproximationLow', wintypes.BYTE)]
+  def to_dict(self):
+    return {k[0]: (getattr(self, k[0]), tuple(iter(getattr(self, k[0]).to_bytes(4).lstrip(b'\x00')))) if k[0] == 'ComponentSelectors' else getattr(self, k[0]) for k in self._fields_}
 WICPJPEGSCANHEADER = ctypes.POINTER(WICJPEGSCANHEADER)
+
+DXGIFormat = {'UNKNOWN': 0, 'R32G32B32A32_TYPELESS': 1, 'R32G32B32A32_FLOAT': 2, 'R32G32B32A32_UINT': 3, 'R32G32B32A32_SINT': 4, 'R32G32B32_TYPELESS': 5, 'R32G32B32_FLOAT': 6, 'R32G32B32_UINT': 7, 'R32G32B32_SINT': 8, 'R16G16B16A16_TYPELESS': 9, 'R16G16B16A16_FLOAT': 10, 'R16G16B16A16_UNORM': 11, 'R16G16B16A16_UINT': 12, 'R16G16B16A16_SNORM': 13, 'R16G16B16A16_SINT': 14, 'R32G32_TYPELESS': 15, 'R32G32_FLOAT': 16, 'R32G32_UINT': 17, 'R32G32_SINT': 18, 'R32G8X24_TYPELESS': 19, 'D32_FLOAT_S8X24_UINT': 20, 'R32_FLOAT_X8X24_TYPELESS': 21, 'X32_TYPELESS_G8X24_UINT': 22, 'R10G10B10A2_TYPELESS': 23, 'R10G10B10A2_UNORM': 24, 'R10G10B10A2_UINT': 25, 'R11G11B10_FLOAT': 26, 'R8G8B8A8_TYPELESS': 27, 'R8G8B8A8_UNORM': 28, 'R8G8B8A8_UNORM_SRGB': 29, 'R8G8B8A8_UINT': 30, 'R8G8B8A8_SNORM': 31, 'R8G8B8A8_SINT': 32, 'R16G16_TYPELESS': 33, 'R16G16_FLOAT': 34, 'R16G16_UNORM': 35, 'R16G16_UINT': 36, 'R16G16_SNORM': 37, 'R16G16_SINT': 38, 'R32_TYPELESS': 39, 'D32_FLOAT': 40, 'R32_FLOAT': 41, 'R32_UINT': 42, 'R32_SINT': 43, 'R24G8_TYPELESS': 44, 'D24_UNORM_S8_UINT': 45, 'R24_UNORM_X8_TYPELESS': 46, 'X24_TYPELESS_G8_UINT': 47, 'R8G8_TYPELESS': 48, 'R8G8_UNORM': 49, 'R8G8_UINT': 50, 'R8G8_SNORM': 51, 'R8G8_SINT': 52, 'R16_TYPELESS': 53, 'R16_FLOAT': 54, 'D16_UNORM': 55, 'R16_UNORM': 56, 'R16_UINT': 57, 'R16_SNORM': 58, 'R16_SINT': 59, 'R8_TYPELESS': 60, 'R8_UNORM': 61, 'R8_UINT': 62, 'R8_SNORM': 63, 'R8_SINT': 64, 'A8_UNORM': 65, 'R1_UNORM': 66, 'R9G9B9E5_SHAREDEXP': 67, 'R8G8_B8G8_UNORM': 68, 'G8R8_G8B8_UNORM': 69, 'BC1_TYPELESS': 70, 'BC1_UNORM': 71, 'BC1_UNORM_SRGB': 72, 'BC2_TYPELESS': 73, 'BC2_UNORM': 74, 'BC2_UNORM_SRGB': 75, 'BC3_TYPELESS': 76, 'BC3_UNORM': 77, 'BC3_UNORM_SRGB': 78, 'BC4_TYPELESS': 79, 'BC4_UNORM': 80, 'BC4_SNORM': 81, 'BC5_TYPELESS': 82, 'BC5_UNORM': 83, 'BC5_SNORM': 84, 'B5G6R5_UNORM': 85, 'B5G5R5A1_UNORM': 86, 'B8G8R8A8_UNORM': 87, 'B8G8R8X8_UNORM': 88, 'R10G10B10_XR_BIAS_A2_UNORM': 89, 'B8G8R8A8_TYPELESS': 90, 'B8G8R8A8_UNORM_SRGB': 91, 'B8G8R8X8_TYPELESS': 92, 'B8G8R8X8_UNORM_SRGB': 93, 'BC6H_TYPELESS': 94, 'BC6H_UF16': 95, 'BC6H_SF16': 96, 'BC7_TYPELESS': 97, 'BC7_UNORM': 98, 'BC7_UNORM_SRGB': 99, 'AYUV': 100, 'Y410': 101, 'Y416': 102, 'NV12': 103, 'P010': 104, 'P016': 105, '420_OPAQUE': 106, 'YUY2': 107, 'Y210': 108, 'Y216': 109, 'NV11': 110, 'AI44': 111, 'IA44': 112, 'P8': 113, 'A8P8': 114, 'B4G4R4A4_UNORM': 115, 'P208': 130, 'V208': 131, 'V408': 132, 'SAMPLER_FEEDBACK_MIN_MIP_OPAQUE': 189, 'SAMPLER_FEEDBACK_MIP_REGION_USED_OPAQUE': 190, 'A4B4G4R4_UNORM': 191}
+DXGIFORMAT = type('DXGIFORMAT', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIFormat.items()}, '_tab_cn': {c: n for n, c in DXGIFormat.items()}, '_def': 0})
+
+WICDdsDimension = {'1D': 0, '2D': 1, '3D': 2, 'Cube': 3}
+WICDDSDIMENSION = type('WICDDSDIMENSION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDdsDimension.items()}, '_tab_cn': {c: n for n, c in WICDdsDimension.items()}, '_def': 0})
+
+WICDdsAlphaMode = {'Unknown': 0, 'Straight': 1, 'Premultiplied': 2, 'Opaque': 3, 'Custom': 4}
+WICDDSALPHAMODE = type('WICDDSALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDdsAlphaMode.items()}, '_tab_cn': {c: n for n, c in WICDdsAlphaMode.items()}, '_def': 0})
+
+class WICDDSFORMATINFO(ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('DxgiFormat', DXGIFORMAT), ('BytesPerBlock', wintypes.UINT), ('BlockWidth', wintypes.UINT), ('BlockHeight', wintypes.UINT)]
+  def to_dict(self):
+    return {k[0]: getattr(self, k[0]) for k in self._fields_}
+WICPDDSFORMATINFO = ctypes.POINTER(WICDDSFORMATINFO)
+
+class WICDDSPARAMETERS(ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('Depth', wintypes.UINT), ('MipLevels', wintypes.UINT), ('ArraySize', wintypes.UINT), ('DxgiFormat', DXGIFORMAT), ('Dimension', WICDDSDIMENSION), ('AlphaMode', WICDDSALPHAMODE)]
+  @classmethod
+  def from_param(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, dict):
+      return cls(obj.get('Width', 0), obj.get('Height', 0), obj.get('Depth', 0), obj.get('MipLevels', 0), obj.get('ArraySize', 0), obj.get('DxgiFormat', 'UNKNOWN'), obj.get('Dimension', 0), obj.get('AlphaMode', 0))
+    else:
+      return cls(*obj)
+  def to_dict(self):
+    return {k[0]: getattr(self, k[0]) for k in self._fields_}
+WICPDDSPARAMETERS = ctypes.POINTER(WICDDSPARAMETERS)
 
 class WICBITMAPPLANE(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Format', WICPIXELFORMAT), ('pbBuffer', wintypes.LPVOID), ('cbStride', wintypes.UINT), ('cbBufferSize', wintypes.UINT)]
   @classmethod
-  def create(cls, obj):
+  def from_param(cls, obj):
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, IWICBitmapLock):
@@ -842,9 +880,6 @@ WICHEIFCOMPRESSIONOPTION = type('WICHEIFCOMPRESSIONOPTION', (_BCode, wintypes.DW
 WICCreateCacheOption = {'None': 0, 'No': 0, 'Demand': 1, 'OnDemand': 1, 'Load': 2, 'OnLoad': 2}
 WICCREATECACHEOPTION = type('WICCREATECACHEOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICCreateCacheOption.items()}, '_tab_cn': {c: n for n, c in WICCreateCacheOption.items()}, '_def': 0})
 
-DXGIFormat = {'UNKNOWN': 0, 'R32G32B32A32_TYPELESS': 1, 'R32G32B32A32_FLOAT': 2, 'R32G32B32A32_UINT': 3, 'R32G32B32A32_SINT': 4, 'R32G32B32_TYPELESS': 5, 'R32G32B32_FLOAT': 6, 'R32G32B32_UINT': 7, 'R32G32B32_SINT': 8, 'R16G16B16A16_TYPELESS': 9, 'R16G16B16A16_FLOAT': 10, 'R16G16B16A16_UNORM': 11, 'R16G16B16A16_UINT': 12, 'R16G16B16A16_SNORM': 13, 'R16G16B16A16_SINT': 14, 'R32G32_TYPELESS': 15, 'R32G32_FLOAT': 16, 'R32G32_UINT': 17, 'R32G32_SINT': 18, 'R32G8X24_TYPELESS': 19, 'D32_FLOAT_S8X24_UINT': 20, 'R32_FLOAT_X8X24_TYPELESS': 21, 'X32_TYPELESS_G8X24_UINT': 22, 'R10G10B10A2_TYPELESS': 23, 'R10G10B10A2_UNORM': 24, 'R10G10B10A2_UINT': 25, 'R11G11B10_FLOAT': 26, 'R8G8B8A8_TYPELESS': 27, 'R8G8B8A8_UNORM': 28, 'R8G8B8A8_UNORM_SRGB': 29, 'R8G8B8A8_UINT': 30, 'R8G8B8A8_SNORM': 31, 'R8G8B8A8_SINT': 32, 'R16G16_TYPELESS': 33, 'R16G16_FLOAT': 34, 'R16G16_UNORM': 35, 'R16G16_UINT': 36, 'R16G16_SNORM': 37, 'R16G16_SINT': 38, 'R32_TYPELESS': 39, 'D32_FLOAT': 40, 'R32_FLOAT': 41, 'R32_UINT': 42, 'R32_SINT': 43, 'R24G8_TYPELESS': 44, 'D24_UNORM_S8_UINT': 45, 'R24_UNORM_X8_TYPELESS': 46, 'X24_TYPELESS_G8_UINT': 47, 'R8G8_TYPELESS': 48, 'R8G8_UNORM': 49, 'R8G8_UINT': 50, 'R8G8_SNORM': 51, 'R8G8_SINT': 52, 'R16_TYPELESS': 53, 'R16_FLOAT': 54, 'D16_UNORM': 55, 'R16_UNORM': 56, 'R16_UINT': 57, 'R16_SNORM': 58, 'R16_SINT': 59, 'R8_TYPELESS': 60, 'R8_UNORM': 61, 'R8_UINT': 62, 'R8_SNORM': 63, 'R8_SINT': 64, 'A8_UNORM': 65, 'R1_UNORM': 66, 'R9G9B9E5_SHAREDEXP': 67, 'R8G8_B8G8_UNORM': 68, 'G8R8_G8B8_UNORM': 69, 'BC1_TYPELESS': 70, 'BC1_UNORM': 71, 'BC1_UNORM_SRGB': 72, 'BC2_TYPELESS': 73, 'BC2_UNORM': 74, 'BC2_UNORM_SRGB': 75, 'BC3_TYPELESS': 76, 'BC3_UNORM': 77, 'BC3_UNORM_SRGB': 78, 'BC4_TYPELESS': 79, 'BC4_UNORM': 80, 'BC4_SNORM': 81, 'BC5_TYPELESS': 82, 'BC5_UNORM': 83, 'BC5_SNORM': 84, 'B5G6R5_UNORM': 85, 'B5G5R5A1_UNORM': 86, 'B8G8R8A8_UNORM': 87, 'B8G8R8X8_UNORM': 88, 'R10G10B10_XR_BIAS_A2_UNORM': 89, 'B8G8R8A8_TYPELESS': 90, 'B8G8R8A8_UNORM_SRGB': 91, 'B8G8R8X8_TYPELESS': 92, 'B8G8R8X8_UNORM_SRGB': 93, 'BC6H_TYPELESS': 94, 'BC6H_UF16': 95, 'BC6H_SF16': 96, 'BC7_TYPELESS': 97, 'BC7_UNORM': 98, 'BC7_UNORM_SRGB': 99, 'AYUV': 100, 'Y410': 101, 'Y416': 102, 'NV12': 103, 'P010': 104, 'P016': 105, '420_OPAQUE': 106, 'YUY2': 107, 'Y210': 108, 'Y216': 109, 'NV11': 110, 'AI44': 111, 'IA44': 112, 'P8': 113, 'A8P8': 114, 'B4G4R4A4_UNORM': 115, 'P208': 130, 'V208': 131, 'V408': 132, 'SAMPLER_FEEDBACK_MIN_MIP_OPAQUE': 189, 'SAMPLER_FEEDBACK_MIP_REGION_USED_OPAQUE': 190, 'A4B4G4R4_UNORM': 191}
-DXGIFORMAT = type('DXGIFORMAT', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIFormat.items()}, '_tab_cn': {c: n for n, c in DXGIFormat.items()}, '_def': 0})
-
 D2D1AlphaMode = {'Unknown': 0, 'Premultiplied': 1, 'Straight': 2, 'Ignore': 3}
 D2D1ALPHAMODE = type('D2D1ALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1AlphaMode.items()}, '_tab_cn': {c: n for n, c in D2D1AlphaMode.items()}, '_def': 0})
 
@@ -854,7 +889,7 @@ class D2D1PIXELFORMAT(ctypes.Structure, metaclass=_WSMeta):
 class WICIMAGEPARAMETERS(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('PixelFormat', D2D1PIXELFORMAT), ('DpiX', wintypes.FLOAT), ('DpiY', wintypes.FLOAT), ('Top', wintypes.FLOAT), ('Left', wintypes.FLOAT), ('PixelWidth', wintypes.UINT), ('PixelHeight', wintypes.UINT)]
   @classmethod
-  def create(cls, obj):
+  def from_param(cls, obj):
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, dict):
@@ -887,6 +922,8 @@ WICPLANAROPTION = type('WICPLANAROPTION', (_BCode, wintypes.DWORD), {'_tab_nc': 
 
 class WICBITMAPPLANEDESCRIPTION(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Format', WICPIXELFORMAT), ('Width', wintypes.UINT), ('Height', wintypes.UINT)]
+  def to_dict(self):
+    return {'Format': self.Format, 'Width': self.Width, 'Height': self.Height}
 WICPBITMAPPLANEDESCRIPTION = ctypes.POINTER(WICBITMAPPLANEDESCRIPTION)
 
 WICComponentType = {'BitmapDecoder': 0x1, 'Decoder': 0x1, 'BitmapEncoder': 0x2, 'Encoder': 0x2, 'FormatConverter': 0x4 , 'PixelFormatConverter': 0x4, 'MetadataReader': 0x8, 'MetadataWriter': 0x10, 'PixelFormat': 0x20, 'Component': 0x3f, 'AllComponents': 0x3f}
@@ -902,6 +939,8 @@ WICCOMPONENTENUMERATEOPTIONS = type('WICCOMPONENTENUMERATEOPTIONS', (_BCodeOr, w
 
 class WICBITMAPPATTERN(ctypes.Structure):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Pattern', wintypes.LPVOID), ('Mask', wintypes.LPVOID), ('EndOfStream', wintypes.BOOLE)]
+  def to_dict(self):
+    return {'Position': self.Position, 'Pattern': ctypes.string_at(self.Pattern, self.Length), 'Mask': ctypes.string_at(self.Mask, self.Length), 'EndofStream': self.EndOfStream.value}
 
 WICPixelFormatNumericRepresentation = {'Unspecified': 0, 'Indexed': 1, 'UnsignedInteger': 2, 'SignedInteger': 3, 'Fixed': 4, 'Float': 5}
 WICPIXELFORMATNUMERICREPRESENTATION = type('WICPIXELFORMATNUMERICREPRESENTATION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPixelFormatNumericRepresentation.items()}, '_tab_cn': {c: n for n, c in WICPixelFormatNumericRepresentation.items()}, '_def': 0})
@@ -909,9 +948,13 @@ WICPPIXELFORMATNUMERICREPRESENTATION = ctypes.POINTER(WICPIXELFORMATNUMERICREPRE
 
 class WICMETADATAPATTERN(ctypes.Structure):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Pattern', wintypes.LPVOID), ('Mask', wintypes.LPVOID), ('DataOffset', wintypes.ULARGE_INTEGER)]
+  def to_dict(self):
+    return {'Position': self.Position, 'Pattern': ctypes.string_at(self.Pattern, self.Length), 'Mask': ctypes.string_at(self.Mask, self.Length), 'DataOffset': self.DataOffset}
 
 class WICMETADATAHEADER(ctypes.Structure):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Header', wintypes.LPVOID), ('DataOffset', wintypes.ULARGE_INTEGER)]
+  def to_dict(self):
+    return {'Position': self.Position, 'Header': ctypes.string_at(self.Header, self.Length), 'DataOffset': self.DataOffset}
 
 class PXYWH(wintypes.INT * 4):
   @classmethod
@@ -2150,6 +2193,10 @@ class IWICBitmapFrameDecode(IWICBitmapSource):
     return self.QueryInterface(IWICBitmapSourceTransform, self.factory)
   def GetPlanarBitmapSourceTransform(self):
     return self.QueryInterface(IWICPlanarBitmapSourceTransform, self.factory)
+  def GetDdsFrameDecode(self):
+    return self.QueryInterface(IWICDdsFrameDecode, self.factory)
+  def GetProgressiveLevelControl(self):
+    return self.QueryInterface(IWICProgressiveLevelControl, self.factory)
   def GetStreamProvider(self):
     return self.QueryInterface(IWICStreamProvider, self.factory)
 
@@ -2184,12 +2231,13 @@ class IWICPlanarBitmapSourceTransform(IUnknown):
     if pixel_formats is not None and not isinstance(pixel_formats, ctypes.Array):
       pixel_formats = (WICPIXELFORMAT * planes_number)(*(WICPIXELFORMAT(pf) for pf in pixel_formats))
     planes_descriptions = (WICBITMAPPLANEDESCRIPTION * planes_number)()
-    return None if (r := self.__class__._protos['DoesSupportTransform'](self.pI, w, h, transform_options, planar_option, (pixel_formats[0] if pixel_formats else None), (planes_descriptions[0] if planes_descriptions else None), planes_number)) is None else r, w.value, h.value, tuple({'Format': pd.Format, 'Width': pd.Width, 'Height': pd.Height} for pd in planes_descriptions)
+    r = self.__class__._protos['DoesSupportTransform'](self.pI, w, h, transform_options, planar_option, pixel_formats, planes_descriptions, planes_number)
+    return None if r is None else r, w.value, h.value, tuple(pd.to_dict() for pd in planes_descriptions)
   def CopyPixels(self, xywh, width, height, transform_options, planar_option, planes_buffers):
     planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.create(pb) for pb in planes_buffers))
-    return self.__class__._protos['CopyPixels'](self.pI, xywh, width, height, transform_options, planar_option, (planes_buffers[0] if planes_buffers else None), planes_number)
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.from_param(pb) for pb in planes_buffers))
+    return self.__class__._protos['CopyPixels'](self.pI, xywh, width, height, transform_options, planar_option, planes_buffers, planes_number)
 
 class IWICBitmapDecoder(IUnknown):
   IID = GUID(0x9edde9e7, 0x8dee, 0x47ea, 0x99, 0xdf, 0xe6, 0xfa, 0xf2, 0xed, 0x44, 0xbf)
@@ -2239,6 +2287,8 @@ class IWICBitmapDecoder(IUnknown):
     return IWICBitmapFrameDecode(self.__class__._protos['GetFrame'](self.pI, index), self.factory)
   def GetDecoderInfo(self):
     return IWICBitmapDecoderInfo(self.__class__._protos['GetDecoderInfo'](self.pI), self.factory)
+  def GetDdsDecoder(self):
+    return self.QueryInterface(IWICDdsDecoder, self.factory)
   def GetStreamProvider(self):
     return self.QueryInterface(IWICStreamProvider, self.factory)
 
@@ -2261,19 +2311,19 @@ class IWICJpegFrameDecode(IUnknown):
     return self.__class__._protos['ClearIndexing'](self.pI)
   def GetFrameHeader(self):
     fh = self.__class__._protos['GetFrameHeader'](self.pI)
-    return None if fh is None else {n: (v, tuple(iter(v.to_bytes(4).lstrip(b'\x00')))) if n == 'ComponentIdentifiers' else getattr(v, 'value', v) for f in WICJPEGFRAMEHEADER._fields_ for n, v in ((f[0], getattr(fh, f[0])),)}
+    return None if fh is None else fh.to_dict()
   def GetAcHuffmanTable(self, scan_index, table_index):
     ht = self.__class__._protos['GetAcHuffmanTable'](self.pI, scan_index, table_index)
-    return None if ht is None else {'CodeCounts': ht.CodeCounts, 'CodeValues': ht.CodeValues}
+    return None if ht is None else ht.to_dict()
   def GetDcHuffmanTable(self, scan_index, table_index):
     ht = self.__class__._protos['GetDcHuffmanTable'](self.pI, scan_index, table_index)
-    return None if ht is None else {'CodeCounts': ht.CodeCounts, 'CodeValues': ht.CodeValues}
+    return None if ht is None else ht.to_dict()
   def GetQuantizationTable(self, scan_index, table_index):
     qt = self.__class__._protos['GetQuantizationTable'](self.pI, scan_index, table_index)
     return None if qt is None else qt.Elements
   def GetScanHeader(self, scan_index):
     sh = self.__class__._protos['GetScanHeader'](self.pI, scan_index)
-    return None if sh is None else {n: (v, tuple(iter(v.to_bytes(4).lstrip(b'\x00')))) if n == 'ComponentSelectors' else getattr(v, 'value', v) for f in WICJPEGSCANHEADER._fields_ for n, v in ((f[0], getattr(sh, f[0])),)}
+    return None if sh is None else sh.to_dict()
   def CopyScan(self, scan_index):
     s = []
     scan_offset = 0
@@ -2289,6 +2339,43 @@ class IWICJpegFrameDecode(IUnknown):
         return b''.join(s)
   def GetPlanarBitmapSourceTransform(self):
     return self.QueryInterface(IWICPlanarBitmapSourceTransform, self.factory)
+  def GetProgressiveLevelControl(self):
+    return self.QueryInterface(IWICProgressiveLevelControl, self.factory)
+
+class IWICDdsFrameDecode(IUnknown):
+  IID = GUID(0x3d4c0c61, 0x18a4, 0x41e4, 0xbd, 0x80, 0x48, 0x1a, 0x4f, 0xc9, 0xf4, 0x64)
+  _protos['GetSizeInBlocks'] = 3, (), (wintypes.PUINT, wintypes.PUINT)
+  _protos['GetFormatInfo'] = 4, (), (WICPDDSFORMATINFO,)
+  _protos['CopyBlocks'] = 5, (PXYWH, wintypes.UINT, wintypes.UINT, PBUFFER), ()
+  def GetFormatInfo(self):
+    fi = self.__class__._protos['GetFormatInfo'](self.pI)
+    return None if fi is None else fi.to_dict()
+  def GetSizeInBlocks(self):
+    return self.__class__._protos['GetSizeInBlocks'](self.pI)
+  def CopyBlocks(self, xywh, stride, buffer):
+    return self.__class__._protos['CopyBlocks'](self.pI, xywh, stride, PBUFFER.length(buffer), buffer)
+
+class IWICDdsDecoder(IUnknown):
+  IID = GUID(0x409cd537, 0x8532, 0x40cb, 0x97, 0x74, 0xe2, 0xfe, 0xb2, 0xdf, 0x4e, 0x9c)
+  _protos['GetParameters'] = 3, (), (WICPDDSPARAMETERS,)
+  _protos['GetFrame'] = 4, (wintypes.UINT, wintypes.UINT, wintypes.UINT), (wintypes.PLPVOID,)
+  def GetParameters(self):
+    p = self.__class__._protos['GetParameters'](self.pI)
+    return None if p is None else p.to_dict()
+  def GetFrame(self, array_index, mip_level, slice_index):
+    return IWICBitmapFrameDecode(self.__class__._protos['GetFrame'](self.pI, array_index, mip_level, slice_index), self.factory)
+
+class IWICProgressiveLevelControl(IUnknown):
+  IID = GUID(0xdaac296f, 0x7aa5, 0x4dbf, 0x8d, 0x15, 0x22, 0x5c, 0x59, 0x76, 0xf8, 0x91)
+  _protos['GetLevelCount'] = 3, (), (wintypes.PUINT,)
+  _protos['GetCurrentLevel'] = 4, (), (wintypes.PUINT,)
+  _protos['SetCurrentLevel'] = 5, (wintypes.UINT,), ()
+  def GetLevelCount(self):
+    return self.__class__._protos['GetLevelCount'](self.pI)
+  def GetCurrentLevel(self):
+    return self.__class__._protos['GetCurrentLevel'](self.pI)
+  def SetCurrentLevel(self, level):
+    return self.__class__._protos['SetCurrentLevel'](self.pI, level)
 
 class IWICMetadataQueryWriter(IWICMetadataQueryReader):
   IID = GUID(0xa721791a, 0x0def, 0x4d06, 0xbd, 0x91, 0x21, 0x18, 0xbf, 0x1d, 0xb1, 0x0b)
@@ -2472,6 +2559,8 @@ class IWICBitmapEncoder(IUnknown):
     return self.__class__._protos['Commit'](self.pI)
   def GetEncoderInfo(self):
     return IWICBitmapEncoderInfo(self.__class__._protos['GetEncoderInfo'](self.pI), self.factory)
+  def GetDdsEncoder(self):
+    return self.QueryInterface(IWICDdsEncoder, self.factory)
 
 class IWICJpegFrameEncode(IUnknown):
   IID = GUID(0x2f0c601f, 0xd2c6, 0x468c, 0xab, 0xfa, 0x49, 0x49, 0x5d, 0x98, 0x3e, 0xd1)
@@ -2505,8 +2594,22 @@ class IWICPlanarBitmapFrameEncode(IUnknown):
   def WritePixels(self, lines_number, planes_buffers):
     planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.create(pb) for pb in planes_buffers))
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.from_param(pb) for pb in planes_buffers))
     return self.__class__._protos['WritePixels'](self.pI, lines_number, planes_buffers, planes_number)
+
+class IWICDdsEncoder(IUnknown):
+  IID = GUID(0x5cacdb4c, 0x407e, 0x41b3, 0xb9, 0x36, 0xd0, 0xf0, 0x10, 0xcd, 0x67, 0x32)
+  _protos['SetParameters'] = 3, (WICPDDSPARAMETERS,), ()
+  _protos['GetParameters'] = 4, (), (WICPDDSPARAMETERS,)
+  _protos['CreateNewFrame'] = 5, (), (wintypes.PLPVOID, wintypes.PUINT, wintypes.PUINT, wintypes.PUINT)
+  def GetParameters(self):
+    p = self.__class__._protos['GetParameters'](self.pI)
+    return None if p is None else p.to_dict()
+  def SetParameters(self, parameters):
+    return self.__class__._protos['SetParameters'](self.pI, WICDDSPARAMETERS.from_param(parameters))
+  def CreateNewFrame(self):
+    pIBitmapFrameEncode_ai_ml_si = self.__class__._protos['CreateNewFrame'](self.pI)
+    return None if pIBitmapFrameEncode_ai_ml_si is None else (IWICBitmapFrameEncode(pIBitmapFrameEncode_ai_ml_si[0], self.factory), dict(zip(('ArrayIndex', 'MipLevel', 'SliceIndex'), pIBitmapFrameEncode_ai_ml_si[1:4])))
 
 class IWICImageEncoder(IUnknown):
   IID = GUID(0x04c75bf8, 0x3ce1, 0x473b, 0xac, 0xc5, 0x3c, 0xc4, 0xf5, 0xe9, 0x49, 0x99)
@@ -2514,11 +2617,11 @@ class IWICImageEncoder(IUnknown):
   _protos['WriteFrameThumbnail'] = 4, (wintypes.LPVOID, wintypes.LPVOID, WICPIMAGEPARAMETERS), ()
   _protos['WriteThumbnail'] = 5, (wintypes.LPVOID, wintypes.LPVOID, WICPIMAGEPARAMETERS), ()
   def WriteThumbnail(self, image, encoder, image_parameters=None):
-    return self.__class__._protos['WriteThumbnail'](self.pI, image, encoder, WICIMAGEPARAMETERS.create(image_parameters))
+    return self.__class__._protos['WriteThumbnail'](self.pI, image, encoder, WICIMAGEPARAMETERS.from_param(image_parameters))
   def WriteFrame(self, image, frame_encode, image_parameters=None):
-    return self.__class__._protos['WriteFrame'](self.pI, image, frame_encode, WICIMAGEPARAMETERS.create(image_parameters))
+    return self.__class__._protos['WriteFrame'](self.pI, image, frame_encode, WICIMAGEPARAMETERS.from_param(image_parameters))
   def WriteFrameThumbnail(self, image, frame_encode, image_parameters=None):
-    return self.__class__._protos['WriteFrameThumbnail'](self.pI, image, frame_encode, WICIMAGEPARAMETERS.create(image_parameters))
+    return self.__class__._protos['WriteFrameThumbnail'](self.pI, image, frame_encode, WICIMAGEPARAMETERS.from_param(image_parameters))
 
 class IWICFormatConverter(IWICBitmapSource):
   IID = GUID(0x00000301, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -2539,7 +2642,7 @@ class IWICPlanarFormatConverter(IWICBitmapSource):
     planes_number = len(source_pixel_formats) if source_pixel_formats is not None else 0
     if source_pixel_formats is not None and not isinstance(source_pixel_formats, ctypes.Array):
       source_pixel_formats = (WICPIXELFORMAT * planes_number)(*(WICPIXELFORMAT(pf) for pf in source_pixel_formats))
-    return self.__class__._protos['CanConvert'](self.pI, (source_pixel_formats[0] if source_pixel_formats else None), planes_number, destination_pixel_format)
+    return self.__class__._protos['CanConvert'](self.pI, source_pixel_formats, planes_number, destination_pixel_format)
   def Initialize(self, planes_sources, destination_pixel_format, dither_type=0, palette=None, alpha_threshold=0, palette_type=0):
     planes_number = len(planes_sources) if planes_sources is not None else 0
     if planes_sources is not None and not isinstance(planes_sources, ctypes.Array):
@@ -2738,7 +2841,7 @@ class IWICBitmapDecoderInfo(IWICBitmapCodecInfo):
       return ()
     p = ctypes.create_string_buffer(acs[1])
     f = (WICBITMAPPATTERN * acs[0]).from_buffer(p)
-    return None if self.__class__._protos['GetPatterns'](self.pI, acs[1], ctypes.byref(p)) is None else tuple({'Position': f[p].Position, 'Pattern': ctypes.string_at(f[p].Pattern, f[p].Length), 'Mask': ctypes.string_at(f[p].Mask, f[p].Length), 'EndofStream': f[p].EndOfStream.value} for p in range(acs[0]))
+    return None if self.__class__._protos['GetPatterns'](self.pI, acs[1], ctypes.byref(p)) is None else tuple(f[p].to_dict() for p in range(acs[0]))
   def MatchesPattern(self, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, istream)
   def CreateInstance(self):
@@ -2845,7 +2948,7 @@ class IWICMetadataReaderInfo(IWICMetadataHandlerInfo):
       return ()
     p = ctypes.create_string_buffer(acs[1])
     f = (WICMETADATAPATTERN * acs[0]).from_buffer(p)
-    return None if self.__class__._protos['GetPatterns'](self.pI, container_format, acs[1], ctypes.byref(p)) is None else tuple({'Position': f[p].Position, 'Pattern': ctypes.string_at(f[p].Pattern, f[p].Length), 'Mask': ctypes.string_at(f[p].Mask, f[p].Length), 'DataOffset': f[p].DataOffset} for p in range(acs[0]))
+    return None if self.__class__._protos['GetPatterns'](self.pI, container_format, acs[1], ctypes.byref(p)) is None else tuple(f[p].to_dict() for p in range(acs[0]))
   def MatchesPattern(self, container_format, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, container_format, istream)
   def CreateInstance(self):
@@ -2862,7 +2965,7 @@ class IWICMetadataWriterInfo(IWICMetadataHandlerInfo):
       return {}
     h = ctypes.create_string_buffer(al)
     f = WICMETADATAHEADER.from_buffer(h)
-    return None if self.__class__._protos['GetHeader'](self.pI, container_format, al, ctypes.byref(h)) is None else {'Position': f.Position, 'Header': ctypes.string_at(f.Header, f.Length), 'DataOffset': f.DataOffset}
+    return None if self.__class__._protos['GetHeader'](self.pI, container_format, al, ctypes.byref(h)) is None else f.to_dict()
   def CreateInstance(self):
     return IWICMetadataWriter(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
