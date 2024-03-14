@@ -1,4 +1,7 @@
-from wic import *
+try:
+  from WICPy import *
+except:
+  from wic import *
 import os.path
 import msvcrt
 import array
