@@ -31,10 +31,17 @@ def ISetLastError(e):
   ctypes.set_last_error(e)
   return e
 
-def GUID(*g):
-  return struct.pack('=LHH8B', *(struct.unpack('>LHH8B', bytes.fromhex(g[0].replace('-', ''))) if len(g) == 1 else g))
-def GUID_S(g):
-  return '%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x' % struct.unpack('=LHH8B', g)
+class GUID(bytes):
+  def __new__(cls, *g):
+    return bytes.__new__(cls, (struct.pack('=LHH8B', *((struct.unpack('>LHH8B', bytes.fromhex(g[0].strip('{}').replace('-', ''))) if isinstance(g[0], str) else struct.unpack('=LHH8B', g[0])) if len(g) == 1 else g))))
+  def to_bytes(self):
+    return bytes(self)
+  def to_string(self):
+    return '%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x' % struct.unpack('=LHH8B', self)
+  def __str__(self):
+    return self.to_string()
+  def __repr__(self):
+    return str(self)
 
 class _IUtil:
   _local = threading.local()
@@ -309,10 +316,19 @@ class IWICStream(IStream):
 class _BGUID:
   @classmethod
   def name_guid(cls, n):
-    return cls._tab_ng.get(n.lower(), cls._def) if isinstance(n, str) else n
+    if isinstance(n, str):
+      g = cls._tab_ng.get(n.lower())
+      if g is None:
+        try:
+          g = GUID(n)
+        except:
+          g = cls._def
+    else:
+      g = n
+    return g
   @classmethod
   def guid_name(cls, g):
-    return cls._tab_gn.get(g, GUID_S(g))
+    return cls._tab_gn.get(g, GUID.to_string(g))
   @classmethod
   def to_bytes(cls, obj):
     return obj.raw if isinstance(obj, cls) else (cls.name_guid(obj) or (b'\x00' * 16))
@@ -324,10 +340,10 @@ class _BGUID:
     self.raw = val.raw
   @property
   def guid(self):
-    return self.raw
+    return GUID(self.raw)
   @guid.setter
   def guid(self, val):
-    self.raw = (val or (b'\x00' * 16))
+    self.raw = val.to_bytes() if isinstance(val, GUID) else (val or (b'\x00' * 16))
   @property
   def name(self):
     return self.__class__.guid_name(self.raw)
@@ -886,6 +902,39 @@ class WICBITMAPPLANE(ctypes.Structure, metaclass=_WSMeta):
     else:
       return cls(obj[0], ctypes.cast(PBUFFER.from_param(obj[1]), wintypes.LPVOID), obj[2], PBUFFER.length(obj[1]))
 WICPBITMAPPLANE = ctypes.POINTER(WICBITMAPPLANE)
+
+WICRawCapabilities = {'NotSupported': 0, 'GetSupported': 1, 'FullySupported': 2}
+WICRAWCAPABILITIES = type('WICRAWCAPABILITIES', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawCapabilities.items()}, '_tab_cn': {c: n for n, c in WICRawCapabilities.items()}, '_def': 0})
+
+WICNamedWhitePoint = {'None': 0x0, 'Default': 0x1, 'AsShot': 0x1, 'Daylight': 0x2, 'Cloudy': 0x4, 'Shade': 0x8, 'Tungsten': 0x10, 'Fluorescent': 0x20, 'Flash': 0x40, 'Underwater': 0x80, 'Custom': 0x100, 'AutoWhiteBalance': 0x200}
+WICNAMEDWHITEPOINT = type('WICNAMEDWHITEPOINT', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICNamedWhitePoint.items()}, '_tab_cn': {c: n for n, c in WICNamedWhitePoint.items()}, '_def': 0})
+WICPNAMEDWHITEPOINT = ctypes.POINTER(WICNAMEDWHITEPOINT)
+
+WICRawRotationCapabilities = {'NotSupported': 0, 'GetSupported': 1, 'NinetyDegreesSupported': 2, 'FullySupported': 3}
+WICRAWROTATIONCAPABILITIES = type('WICRAWROTATIONCAPABILITIES', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawRotationCapabilities.items()}, '_tab_cn': {c: n for n, c in WICRawRotationCapabilities.items()}, '_def': 0})
+
+class WICRAWCAPABILITIESINFO(ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cbSize', wintypes.UINT), ('CodecMajorVersion', wintypes.UINT), ('CodecMinorVersion', wintypes.UINT), ('ExposureCompensationSupport', WICRAWCAPABILITIES), ('ContrastSupport', WICRAWCAPABILITIES), ('RGBWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupportMask', WICNAMEDWHITEPOINT), ('KelvinWhitePointSupport', WICRAWCAPABILITIES), ('GammaSupport', WICRAWCAPABILITIES), ('TintSupport', WICRAWCAPABILITIES), ('SaturationSupport', WICRAWCAPABILITIES), ('SharpnessSupport', WICRAWCAPABILITIES), ('NoiseReductionSupport', WICRAWCAPABILITIES), ('NDestinationColorProfileSupport', WICRAWCAPABILITIES), ('ToneCurveSupport', WICRAWCAPABILITIES), ('RotationSupport', WICRAWROTATIONCAPABILITIES), ('RenderModeSupport', WICRAWCAPABILITIES)]
+  def to_dict(self):
+    return {k[0]: getattr(self, k[0]) for k in self.__class__._fields_ if k[0] != 'cbdSize'}
+WICPRAWCAPABILITIESINFO = ctypes.POINTER(WICRAWCAPABILITIESINFO)
+
+WICRawParameterSet = {'AsShot': 1, 'UserAdjusted': 2, 'AutoAdjusted': 3}
+WICRAWPARAMETERSET = type('WICRAWPARAMETERSET', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawParameterSet.items()}, '_tab_cn': {c: n for n, c in WICRawParameterSet.items()}, '_def': 1})
+
+class WICRAWTONECURVEPOINT(ctypes.Structure):
+  _fields_ = [('Input', wintypes.DOUBLE), ('Output', wintypes.DOUBLE)]
+  def to_dict(self):
+    return {k[0]: getattr(self, k[0]) for k in self.__class__._fields_}
+
+class WICRAWTONECURVE(ctypes.Structure):
+  _fields_ = [('cPoints', wintypes.UINT), ('aPoints', WICRAWTONECURVEPOINT * 0)]
+  def to_tuple(self):
+    return tuple(p.to_dict() for p in (WICRAWTONECURVEPOINT * self.cPoints).from_address(ctypes.addressof(self.aPoints)))
+
+WICRawRenderMode = {'Draft': 1, 'Normal': 2, 'BestQuality': 3}
+WICRAWRENDERMODE = type('WICRAWRENDERMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawRenderMode.items()}, '_tab_cn': {c: n for n, c in WICRawRenderMode.items()}, '_def': 2})
+WICPRAWRENDERMODE = ctypes.POINTER(WICRAWRENDERMODE)
 
 WICPngFilterOption = {'Unspecified': 0, 'None': 1, 'Sub': 2, 'Up': 3, 'Average': 4, 'Paeth': 5, 'Adaptive': 6}
 WICPNGFILTEROPTION = type('WICPNGFILTEROPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPngFilterOption.items()}, '_tab_cn': {c: n for n, c in WICPngFilterOption.items()}, '_def': 0})
@@ -1511,11 +1560,11 @@ class PROPBAG2(ctypes.Structure):
   @vt.deleter
   def vt(self):
     self.__class__._vt.__delete__(self)
-  def set(self, name, vtype, hint=0):
+  def set(self, name, vtype, hint=0, ptype=0):
     vtype = VariantType.vtype_code(vtype)
     if vtype is None:
       return False
-    self.dwType = 0
+    self.dwType = ptype
     self.pstrName = wintypes.LPOLESTR(name)
     self._vt = vtype
     self.dwHint = hint
@@ -1528,6 +1577,7 @@ class IPropertyBag2(IUnknown):
   _protos['Write'] = 4, (wintypes.ULONG, PPROPBAG2, PVARIANT), ()
   _protos['CountProperties'] = 5, (), (wintypes.PULONG,)
   _protos['GetPropertyInfo'] = 6, (wintypes.ULONG, wintypes.ULONG, PPROPBAG2), (wintypes.PULONG,)
+  _ptype = 0
   def CountProperties(self):
     return self.__class__._protos['CountProperties'](self.pI)
   def GetPropertyInfo(self, first=0, number=None):
@@ -1542,7 +1592,7 @@ class IPropertyBag2(IUnknown):
     values = (VARIANT * n)()
     results = (wintypes.ULONG * n)()
     for pb, prop in zip(propbags, property_infos.items()):
-      if not (pb.set(prop[0], *prop[1]) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1])):
+      if not (pb.set(prop[0], *prop[1], self.__class__._ptype) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1], self.__class__._ptype)):
         ISetLastError(0x80070057)
         return None
     if self.__class__._protos['Read'](self.pI, n, propbags, None, values, results) is None:
@@ -1554,7 +1604,7 @@ class IPropertyBag2(IUnknown):
     propbags = (PROPBAG2 * n)()
     values = (VARIANT * n)()
     for pb, val, prop in zip(propbags, values, properties.items()):
-      if not (pb.set(prop[0], *prop[1][0]) if isinstance(prop[1][0], (tuple, list)) else pb.set(prop[0], prop[1][0])) or not val.set(pb.vt, prop[1][1]):
+      if not (pb.set(prop[0], *prop[1][0], self.__class__._ptype) if isinstance(prop[1][0], (tuple, list)) else pb.set(prop[0], prop[1][0]), self.__class__._ptype) or not val.set(pb.vt, prop[1][1]):
         ISetLastError(0x80070057)
         return None
     if self.__class__._protos['Write'](self.pI, n, propbags, values) is None:
@@ -2216,6 +2266,8 @@ class IWICBitmapFrameDecode(IWICBitmapSource):
     return self.QueryInterface(IWICDdsFrameDecode, self.factory)
   def GetProgressiveLevelControl(self):
     return self.QueryInterface(IWICProgressiveLevelControl, self.factory)
+  def GetDevelopRaw(self):
+    return self.QueryInterface(IWICDevelopRaw, self.factory)
   def GetStreamProvider(self):
     return self.QueryInterface(IWICStreamProvider, self.factory)
 
@@ -2395,6 +2447,116 @@ class IWICProgressiveLevelControl(IUnknown):
     return self.__class__._protos['GetCurrentLevel'](self.pI)
   def SetCurrentLevel(self, level):
     return self.__class__._protos['SetCurrentLevel'](self.pI, level)
+
+class IWICDevelopRaw(IWICBitmapFrameDecode):
+  IID = GUID(0xfbec5e44, 0xf7be, 0x4b65, 0xb7, 0xf8, 0xc0, 0xc8, 0x1f, 0xef, 0x02, 0x6d)
+  _protos['QueryRawCapabilitiesInfo'] = 11, (WICPRAWCAPABILITIESINFO,), ()
+  _protos['LoadParameterSet'] = 12, (WICRAWPARAMETERSET,), ()
+  _protos['GetCurrentParameterSet'] = 13, (), (wintypes.PLPVOID,)
+  _protos['SetExposureCompensation'] = 14, (wintypes.DOUBLE,), ()
+  _protos['GetExposureCompensation'] = 15, (), (wintypes.PDOUBLE,)
+  _protos['SetWhitePointRGB'] = 16, (wintypes.UINT, wintypes.UINT, wintypes.UINT), ()
+  _protos['GetWhitePointRGB'] = 17, (), (wintypes.PUINT, wintypes.PUINT, wintypes.PUINT)
+  _protos['SetNamedWhitePoint'] = 18, (WICNAMEDWHITEPOINT,), ()
+  _protos['GetNamedWhitePoint'] = 19, (), (WICPNAMEDWHITEPOINT,)
+  _protos['SetWhitePointKelvin'] = 20, (wintypes.UINT,), ()
+  _protos['GetWhitePointKelvin'] = 21, (), (wintypes.PUINT,)
+  _protos['GetKelvinRangeInfo'] = 22, (), (wintypes.PUINT, wintypes.PUINT, wintypes.PUINT)
+  _protos['SetContrast'] = 23, (wintypes.DOUBLE,), ()
+  _protos['GetContrast'] = 24, (), (wintypes.PDOUBLE,)
+  _protos['SetGamma'] = 25, (wintypes.DOUBLE,), ()
+  _protos['GetGamma'] = 26, (), (wintypes.PDOUBLE,)
+  _protos['SetSharpness'] = 27, (wintypes.DOUBLE,), ()
+  _protos['GetSharpness'] = 28, (), (wintypes.PDOUBLE,)
+  _protos['SetSaturation'] = 29, (wintypes.DOUBLE,), ()
+  _protos['GetSaturation'] = 30, (), (wintypes.PDOUBLE,)
+  _protos['SetTint'] = 31, (wintypes.DOUBLE,), ()
+  _protos['GetTint'] = 32, (), (wintypes.PDOUBLE,)
+  _protos['SetNoiseReduction'] = 33, (wintypes.DOUBLE,), ()
+  _protos['GetNoiseReduction'] = 34, (), (wintypes.PDOUBLE,)
+  _protos['SetDestinationColorContext'] = 35, (wintypes.LPVOID,), ()
+  _protos['SetToneCurve'] = 36, (wintypes.UINT, wintypes.LPVOID), ()
+  _protos['GetToneCurve'] = 37, (wintypes.UINT, wintypes.LPVOID), (wintypes.PUINT,)
+  _protos['SetRotation'] = 38, (wintypes.DOUBLE,), ()
+  _protos['GetRotation'] = 39, (), (wintypes.PDOUBLE,)
+  _protos['SetRenderMode'] = 40, (WICRAWRENDERMODE,), ()
+  _protos['GetRenderMode'] = 41, (), (WICPRAWRENDERMODE,)
+  def QueryRawCapabilitiesInfo(self):
+    ci = WICRAWCAPABILITIESINFO()
+    ci.cbSize = ctypes.sizeof(WICRAWCAPABILITIESINFO)
+    return None if self.__class__._protos['QueryRawCapabilitiesInfo'](self.pI, ci) is None else ci.to_dict()
+  def GetCurrentParameterSet(self):
+    return IPropertyBag2(self.__class__._protos['GetCurrentParameterSet'](self.pI))
+  def LoadParameterSet(self, parameter_set):
+    return self.__class__._protos['LoadParameterSet'](self.pI, parameter_set)
+  def GetExposureCompensation(self):
+    return self.__class__._protos['GetExposureCompensation'](self.pI)
+  def SetExposureCompensation(self, exposure_compensation):
+    return self.__class__._protos['SetExposureCompensation'](self.pI, exposure_compensation)
+  def GetContrast(self):
+    return self.__class__._protos['GetContrast'](self.pI)
+  def SetContrast(self, contrast):
+    return self.__class__._protos['SetContrast'](self.pI, contrast)
+  def GetWhitePointRGB(self):
+    return self.__class__._protos['GetWhitePointRGB'](self.pI)
+  def SetWhitePointRGB(self, red, green, blue):
+    return self.__class__._protos['SetWhitePointRGB'](self.pI, red, green, blue)
+  def GetNamedWhitePoint(self):
+    return self.__class__._protos['GetNamedWhitePoint'](self.pI)
+  def SetNamedWhitePoint(self, white_point):
+    return self.__class__._protos['SetNamedWhitePoint'](self.pI, white_point)
+  def GetWhitePointKelvin(self):
+    return self.__class__._protos['GetWhitePointKelvin'](self.pI)
+  def SetWhitePointKelvin(self, white_point):
+    return self.__class__._protos['SetWhitePointKelvin'](self.pI, white_point)
+  def GetKelvinRangeInfo(self):
+    return self.__class__._protos['GetKelvinRangeInfo'](self.pI)
+  def GetGamma(self):
+    return self.__class__._protos['GetGamma'](self.pI)
+  def SetGamma(self, gamma):
+    return self.__class__._protos['SetGamma'](self.pI, gamma)
+  def GetTint(self):
+    return self.__class__._protos['GetTint'](self.pI)
+  def SetTint(self, tint):
+    return self.__class__._protos['SetTint'](self.pI, tint)
+  def GetSaturation(self):
+    return self.__class__._protos['GetSaturation'](self.pI)
+  def SetSaturation(self, saturation):
+    return self.__class__._protos['SetSaturation'](self.pI, saturation)
+  def GetSharpness(self):
+    return self.__class__._protos['GetSharpness'](self.pI)
+  def SetSharpness(self, sharpness):
+    return self.__class__._protos['SetSharpness'](self.pI, sharpness)
+  def GetNoiseReduction(self):
+    return self.__class__._protos['GetNoiseReduction'](self.pI)
+  def SetNoiseReduction(self, noise_reduction):
+    return self.__class__._protos['SetNoiseReduction'](self.pI, noise_reduction)
+  def SetDestinationColorContext(self, color_context):
+    return self.__class__._protos['SetDestinationColorContext'](self.pI, color_context)
+  def GetToneCurve(self):
+    if (al := self.__class__._protos['GetToneCurve'](self.pI, 0, None)) is None:
+      return None
+    if al == 0:
+      return ()
+    c = ctypes.create_string_buffer(al)
+    return None if self.__class__._protos['GetToneCurve'](self.pI, al, c) is None else WICRAWTONECURVE.from_buffer(c).to_tuple()
+  def SetToneCurve(self, tone_curve):
+    l = len(tone_curve)
+    cps = WICRAWTONECURVEPOINT * l
+    al = ctypes.sizeof(WICRAWTONECURVE) + ctypes.sizeof(cps)
+    c = ctypes.create_string_buffer(al)
+    tc = WICRAWTONECURVE.from_buffer(c)
+    tc.cPoints = l
+    cps.from_address(ctypes.addressof(tc.aPoints)).__init__(*(p if isinstance(p, WICRAWTONECURVEPOINT) else (WICRAWTONECURVEPOINT(p['Input'], p['Output']) if isinstance(p, dict) else WICRAWTONECURVEPOINT(*p)) for p in tone_curve))
+    return self.__class__._protos['SetToneCurve'](self.pI, al, c)
+  def GetRotation(self):
+    return self.__class__._protos['GetRotation'](self.pI)
+  def SetRotation(self, rotation_angle):
+    return self.__class__._protos['SetRotation'](self.pI, rotation_angle)
+  def GetRenderMode(self):
+    return self.__class__._protos['GetRenderMode'](self.pI)
+  def SetRenderMode(self, render_mode):
+    return self.__class__._protos['SetRenderMode'](self.pI, render_mode)
 
 class IWICMetadataQueryWriter(IWICMetadataQueryReader):
   IID = GUID(0xa721791a, 0x0def, 0x4d06, 0xbd, 0x91, 0x21, 0x18, 0xbf, 0x1d, 0xb1, 0x0b)
