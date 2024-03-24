@@ -343,7 +343,7 @@ class _BGUID:
     return GUID(self.raw)
   @guid.setter
   def guid(self, val):
-    self.raw = val.to_bytes() if isinstance(val, GUID) else (val or (b'\x00' * 16))
+    self.raw = val or (b'\x00' * 16)
   @property
   def name(self):
     return self.__class__.guid_name(self.raw)
@@ -358,7 +358,7 @@ class _BGUID:
   def __eq__(self, other):
     return self.guid == (other.guid if isinstance(other, _BGUID) else self.__class__.name_guid(other))
   def __str__(self):
-    return '<b\'\\x%s\': %s>' % ('\\x'.join(b.hex() for b in self), self.__class__.guid_name(self.raw))
+    return '<%s: %s>' % (self.guid, self.name)
   def __repr__(self):
     return str(self)
 

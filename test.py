@@ -133,7 +133,7 @@ IDecoder.Release()
 IDecoder = IImagingFactory.CreateDecoderFromStream(IStream1, metadata_option='onload')
 #Retrieving format
 f = IDecoder.GetContainerFormat()
-print(GUID.to_string(f.guid), f, ' - ', IDecoder.GetFrameCount(), 'frame')
+print(f.guid.to_string(), f, ' - ', IDecoder.GetFrameCount(), 'frame')
 #Releasing interfaces
 IDecoder.Release()
 IStream1.Release()
@@ -458,7 +458,7 @@ tuple(map(IUnknown.Release, (IMetadataQueryReader2, IMetadataQueryReader, IBitma
 p = path + r'\test.png'
 IDecoder = IImagingFactory.CreateDecoderFromFilename(p, metadata_option='onload')
 f = IDecoder.GetContainerFormat()
-print(GUID.to_string(f.guid), f, ' - ', IDecoder.GetFrameCount(), 'frame')
+print(f.guid.to_bytes(), f, ' - ', IDecoder.GetFrameCount(), 'frame')
 IBitmapFrame = IDecoder.GetFrame(0)
 print(IBitmapFrame.GetSize(), IBitmapFrame.GetResolution(), IBitmapFrame.GetPixelFormat().name)
 print(IBitmapFrame.GetColorContexts())
