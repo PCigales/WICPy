@@ -916,7 +916,7 @@ WICRAWROTATIONCAPABILITIES = type('WICRAWROTATIONCAPABILITIES', (_BCode, wintype
 class WICRAWCAPABILITIESINFO(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbSize', wintypes.UINT), ('CodecMajorVersion', wintypes.UINT), ('CodecMinorVersion', wintypes.UINT), ('ExposureCompensationSupport', WICRAWCAPABILITIES), ('ContrastSupport', WICRAWCAPABILITIES), ('RGBWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupportMask', WICNAMEDWHITEPOINT), ('KelvinWhitePointSupport', WICRAWCAPABILITIES), ('GammaSupport', WICRAWCAPABILITIES), ('TintSupport', WICRAWCAPABILITIES), ('SaturationSupport', WICRAWCAPABILITIES), ('SharpnessSupport', WICRAWCAPABILITIES), ('NoiseReductionSupport', WICRAWCAPABILITIES), ('NDestinationColorProfileSupport', WICRAWCAPABILITIES), ('ToneCurveSupport', WICRAWCAPABILITIES), ('RotationSupport', WICRAWROTATIONCAPABILITIES), ('RenderModeSupport', WICRAWCAPABILITIES)]
   def to_dict(self):
-    return {k[0]: getattr(self, k[0]) for k in self.__class__._fields_ if k[0] != 'cbdSize'}
+    return {k[0]: getattr(self, k[0]) for k in self.__class__._fields_ if k[0] != 'cbSize'}
 WICPRAWCAPABILITIESINFO = ctypes.POINTER(WICRAWCAPABILITIESINFO)
 
 WICRawParameterSet = {'AsShot': 1, 'UserAdjusted': 2, 'AutoAdjusted': 3}
