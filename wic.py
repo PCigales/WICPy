@@ -22,10 +22,24 @@ ole32 = ctypes.WinDLL('ole32', use_last_error=True)
 oleauto32 = ctypes.WinDLL('oleaut32', use_last_error=True)
 shl = ctypes.WinDLL('shlwapi', use_last_error=True)
 
+class WError(int):
+  def __new__(cls, code):
+    e = wintypes.DWORD(code)
+    self = int.__new__(cls, e.value)
+    self.code = int(self)
+    pm = wintypes.LPWSTR()
+    if kernel32.FormatMessageW(wintypes.DWORD(0x000013ff), 0, e, 0, ctypes.byref(pm), 0, 0):
+      self.message = pm.value.rstrip(' .')
+      kernel32.LocalFree(pm)
+    else:
+      self.message = ''
+    return self
+  def __str__(self):
+    return '<%s: %s>' % (hex(self.code), self.message)
+  def __repr__(self):
+    return str(self)
 def IGetLastError():
-  m = wintypes.LPWSTR()
-  e = wintypes.DWORD(ctypes.get_last_error())
-  return e.value, hex(e.value), (m.value.rstrip(' .') if kernel32.FormatMessageW(wintypes.DWORD(0x000011ff), 0, e, 0, ctypes.byref(m), 0, 0) else '')
+  return WError(ctypes.get_last_error())
 def ISetLastError(e):
   e = ctypes.c_long(e).value
   ctypes.set_last_error(e)
@@ -149,7 +163,13 @@ class IEnumString(IUnknown):
     a = (wintypes.LPOLESTR * number)()
     if self.__class__._protos['Next'](self.pI, number, a, r) > 1:
       return None
-    return tuple(a[s] for s in range(r.value))
+    if (r := r.value) == 0:
+      return ()
+    ss = tuple(a[s] for s in range(r))
+    a = (wintypes.LPVOID * r).from_buffer(a)
+    for p in a:
+      ole32.CoTaskMemFree(wintypes.LPVOID(p))
+    return ss
   def Skip(self, number):
     try:
       if self.__class__._protos['Skip'](self.pI, number) > 1:
@@ -1383,7 +1403,7 @@ class _BVUtil:
 
 class _BVMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return type('VARIANT_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__del__': _BVUtil._adel})
+    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__del__': _BVUtil._adel})
   def __new__(mcls, name, bases, namespace, **kwds):
     if (code_name := namespace.get('code_name')) is not None:
       cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for na, co in {na: co for co, na in code_name.items() if co != 14}.items()), ('pad', wintypes.BYTES16)]})
@@ -1549,7 +1569,19 @@ class PROPVARIANT(_BVARIANT, ctypes.Structure):
   _clear = ole32.PropVariantClear
 PPROPVARIANT = ctypes.POINTER(PROPVARIANT)
 
-class PROPBAG2(ctypes.Structure):
+class _PBUtil:
+  @staticmethod
+  def _adel(arr):
+    if getattr(arr, '_needsclear', False):
+      for s in arr:
+        ole32.CoTaskMemFree(wintypes.LPVOID.from_buffer(s, s.__class__.pstrName.offset))
+    getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
+
+class _PBMeta(ctypes.Structure.__class__):
+  def __mul__(bcls, size):
+    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__del__': _PBUtil._adel})
+
+class PROPBAG2(ctypes.Structure, metaclass=_PBMeta):
   _fields_ = [('dwType', wintypes.DWORD), ('_vt', ctypes.c_ushort), ('cfType', wintypes.DWORD), ('dwHint', wintypes.DWORD), ('pstrName', wintypes.LPOLESTR), ('clsid', wintypes.GUID)]
   @property
   def vt(self):
@@ -1569,6 +1601,10 @@ class PROPBAG2(ctypes.Structure):
     self._vt = vtype
     self.dwHint = hint
     return True
+  def  __del__(self):
+    if getattr(self, '_needsclear', False):
+      ole32.CoTaskMemFree(wintypes.LPVOID.from_buffer(self, self.__class__.pstrName.offset))
+    getattr(self.__class__.__bases__[0], '__del__', id)(self)
 PPROPBAG2 = ctypes.POINTER(PROPBAG2)
 
 class IPropertyBag2(IUnknown):
@@ -1584,8 +1620,10 @@ class IPropertyBag2(IUnknown):
     if number is None:
       number = self.CountProperties() - first
     propbags = (PROPBAG2 * number)()
-    n = self.__class__._protos['GetPropertyInfo'](self.pI, first, number, propbags)
-    return None if n is None else {pb.pstrName: (pb.vt, pb.dwHint) for pb in propbags[:n]}
+    if (n := self.__class__._protos['GetPropertyInfo'](self.pI, first, number, propbags)) is None:
+      return None
+    propbags._needsclear = True
+    return {pb.pstrName: (pb.vt, pb.dwHint) for pb in propbags[:n]}
   def Read(self, property_infos):
     n = len(property_infos)
     propbags = (PROPBAG2 * n)()
@@ -1598,7 +1636,7 @@ class IPropertyBag2(IUnknown):
     if self.__class__._protos['Read'](self.pI, n, propbags, None, values, results) is None:
       return None
     values._needsclear = True
-    return {pb.pstrName: ((pb.vt, pb.dwHint), val.value) for pb, val in zip(propbags, values)}
+    return {pb.pstrName: ((pb.vt, pb.dwHint), val.value) for pb, val, res in zip(propbags, values, results) if res == 0}
   def Write(self, properties):
     n = len(properties)
     propbags = (PROPBAG2 * n)()
