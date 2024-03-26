@@ -1379,7 +1379,6 @@ class PropVariantType(_BVType):
 
 class _BVUtil:
   @staticmethod
-
   def _ainit(arr, *args, needsclear=False, **kwargs):
     getattr(arr.__class__.__bases__[0], '__init__')(arr, *args, **kwargs)
     arr._needsclear = needsclear
@@ -1391,7 +1390,7 @@ class _BVUtil:
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
   @staticmethod
   def _idup(addr, icls):
-    i = icls(wintypes.LPVOID(addr))
+    i = icls(addr)
     if i is not None and i.AddRef() is not None:
       i.refs -= 1
     return i
@@ -1581,7 +1580,6 @@ PPROPVARIANT = ctypes.POINTER(PROPVARIANT)
 
 class _PBUtil:
   @staticmethod
-
   def _ainit(arr, *args, needsclear=False, **kwargs):
     getattr(arr.__class__.__bases__[0], '__init__')(arr, *args, **kwargs)
     arr._needsclear = needsclear
