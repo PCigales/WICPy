@@ -5,7 +5,7 @@
 import ctypes, ctypes.wintypes as wintypes
 wintypes.PLPVOID = ctypes.POINTER(wintypes.LPVOID)
 wintypes.PDOUBLE = ctypes.POINTER(wintypes.DOUBLE)
-wintypes.BOOLE = type('BOOLE', (wintypes.BOOLEAN,), {'value': property(lambda s: bool(wintypes.BOOLEAN.value.__get__(s)), lambda s, v: wintypes.BOOLEAN.value.__set__(s, v))})
+wintypes.BOOLE = type('BOOLE', (wintypes.BOOLEAN,), {'value': property(lambda s: bool(wintypes.BOOLEAN.value.__get__(s)), lambda s, v: wintypes.BOOLEAN.value.__set__(s, v)), '__ctypes_from_outparam__': lambda s: s.value})
 wintypes.PBOOLE = ctypes.POINTER(wintypes.BOOLE)
 wintypes.ULONG_PTR = ctypes.c_size_t
 wintypes.GUID = ctypes.c_char * 16
@@ -60,11 +60,11 @@ class GUID(bytes):
 class _IUtil:
   _local = threading.local()
   @staticmethod
-  def _errcheck(r, f, a):
-    ISetLastError(r)
-    if r:
-      return None
-    return True if f._nout == 0 else (next if f._nout == 1 else tuple)(getattr(a[o], 'value', a[o]) if not isinstance(a[o], (ctypes.c_void_p, ctypes.Structure)) else a[o] for o in range(len(a) - f._nout, len(a)))
+  def _errcheck_no(r, f, a):
+    return None if ISetLastError(r) else True
+  @staticmethod
+  def _errcheck_o(r, f, a):
+    return None if ISetLastError(r) else a
 
 class _IMeta(type):
   @classmethod
@@ -75,8 +75,7 @@ class _IMeta(type):
     super().__init__(*args, **kwargs)
     for n, (p, i, o) in tuple((n, pro) for n, pro in cls._protos.items() if isinstance(pro, tuple)):
       cls._protos[n] = ctypes.WINFUNCTYPE(wintypes.ULONG, *i, *o)(p, n, (*((1,) for _i in i), *((2,) for _o in o)))
-      cls._protos[n]._nout = len(o)
-      cls._protos[n].errcheck = _IUtil._errcheck
+      cls._protos[n].errcheck = _IUtil._errcheck_no if len(o) == 0 else _IUtil._errcheck_o
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -89,7 +88,9 @@ class IUnknown(metaclass=_IMeta):
     if not clsid_component:
       if (clsid_component := getattr(cls, 'CLSID', None)) is None:
         raise TypeError('%s does not have an implicit constructor' % cls.__name__)
-    if isinstance(clsid_component, wintypes.LPVOID):
+    if isinstance(clsid_component, int):
+      pI = wintypes.LPVOID(clsid_component)
+    elif isinstance(clsid_component, wintypes.LPVOID):
       pI = clsid_component
     else:
       pI = wintypes.LPVOID()
@@ -202,9 +203,9 @@ class IEnumUnknown(IUnknown):
     if self.__class__._protos['Next'](self.pI, number, a, r) > 1:
       return None
     if self.__class__.IClass is IUnknown:
-      return tuple(IUnknown(wintypes.LPVOID(a[i]), self.factory) for i in range(r.value))
+      return tuple(IUnknown(a[i], self.factory) for i in range(r.value))
     else:
-      return tuple(IUnknown(wintypes.LPVOID(a[i]), self.factory).QueryInterface(self.__class__.IClass) for i in range(r.value))
+      return tuple(IUnknown(a[i], self.factory).QueryInterface(self.__class__.IClass) for i in range(r.value))
   def Skip(self, number):
     try:
       if self.__class__._protos['Skip'](self.pI, number) > 1:
@@ -1378,6 +1379,11 @@ class PropVariantType(_BVType):
 
 class _BVUtil:
   @staticmethod
+
+  def _ainit(arr, *args, needsclear=False, **kwargs):
+    getattr(arr.__class__.__bases__[0], '__init__')(arr, *args, **kwargs)
+    arr._needsclear = needsclear
+  @staticmethod
   def _adel(arr):
     if getattr(arr, '_needsclear', False):
       for s in arr:
@@ -1403,7 +1409,7 @@ class _BVUtil:
 
 class _BVMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__del__': _BVUtil._adel})
+    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel})
   def __new__(mcls, name, bases, namespace, **kwds):
     if (code_name := namespace.get('code_name')) is not None:
       cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for na, co in {na: co for co, na in code_name.items() if co != 14}.items()), ('pad', wintypes.BYTES16)]})
@@ -1550,12 +1556,16 @@ class _BVARIANT(metaclass=_BVMeta):
     if vtype is not None and not cls.set(self, vtype, data):
       return None
     return self
-  def __init__(self, vtype=None, data=None):
+  def __init__(self, vtype=None, data=None, needsclear=False):
     ctypes.Structure.__init__(self)
+    self._needsclear = needsclear
   def __del__(self):
     if getattr(self, '_needsclear', False):
       self.__class__._clear(ctypes.byref(self))
     getattr(self.__class__.__bases__[1], '__del__', id)(self)
+  def __ctypes_from_outparam__(self):
+    self._needsclear = True
+    return self
 
 class VARIANT(_BVARIANT, ctypes.Structure):
   code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
@@ -1571,6 +1581,11 @@ PPROPVARIANT = ctypes.POINTER(PROPVARIANT)
 
 class _PBUtil:
   @staticmethod
+
+  def _ainit(arr, *args, needsclear=False, **kwargs):
+    getattr(arr.__class__.__bases__[0], '__init__')(arr, *args, **kwargs)
+    arr._needsclear = needsclear
+  @staticmethod
   def _adel(arr):
     if getattr(arr, '_needsclear', False):
       for s in arr:
@@ -1579,7 +1594,7 @@ class _PBUtil:
 
 class _PBMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__del__': _PBUtil._adel})
+    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _PBUtil._ainit, '__del__': _PBUtil._adel})
 
 class PROPBAG2(ctypes.Structure, metaclass=_PBMeta):
   _fields_ = [('dwType', wintypes.DWORD), ('_vt', ctypes.c_ushort), ('cfType', wintypes.DWORD), ('dwHint', wintypes.DWORD), ('pstrName', wintypes.LPOLESTR), ('clsid', wintypes.GUID)]
@@ -1601,10 +1616,16 @@ class PROPBAG2(ctypes.Structure, metaclass=_PBMeta):
     self._vt = vtype
     self.dwHint = hint
     return True
+  def __init__(self, needsclear=False):
+    ctypes.Structure.__init__(self)
+    self._needsclear = needsclear
   def  __del__(self):
     if getattr(self, '_needsclear', False):
       ole32.CoTaskMemFree(wintypes.LPVOID.from_buffer(self, self.__class__.pstrName.offset))
     getattr(self.__class__.__bases__[0], '__del__', id)(self)
+  def __ctypes_from_outparam__(self):
+    self._needsclear = True
+    return self
 PPROPBAG2 = ctypes.POINTER(PROPBAG2)
 
 class IPropertyBag2(IUnknown):
@@ -1619,15 +1640,14 @@ class IPropertyBag2(IUnknown):
   def GetPropertyInfo(self, first=0, number=None):
     if number is None:
       number = self.CountProperties() - first
-    propbags = (PROPBAG2 * number)()
+    propbags = (PROPBAG2 * number)(needsclear=True)
     if (n := self.__class__._protos['GetPropertyInfo'](self.pI, first, number, propbags)) is None:
       return None
-    propbags._needsclear = True
     return {pb.pstrName: (pb.vt, pb.dwHint) for pb in propbags[:n]}
   def Read(self, property_infos):
     n = len(property_infos)
     propbags = (PROPBAG2 * n)()
-    values = (VARIANT * n)()
+    values = (VARIANT * n)(needsclear=True)
     results = (wintypes.ULONG * n)()
     for pb, prop in zip(propbags, property_infos.items()):
       if not (pb.set(prop[0], *prop[1], self.__class__._ptype) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1], self.__class__._ptype)):
@@ -1635,7 +1655,6 @@ class IPropertyBag2(IUnknown):
         return None
     if self.__class__._protos['Read'](self.pI, n, propbags, None, values, results) is None:
       return None
-    values._needsclear = True
     return {pb.pstrName: ((pb.vt, pb.dwHint), val.value) for pb, val, res in zip(propbags, values, results) if res == 0}
   def Write(self, properties):
     n = len(properties)
@@ -1752,16 +1771,13 @@ class IWICEnumMetadataItem(IUnknown):
     return self.__class__._protos['Reset'](self.pI)
   def Next(self, number):
     r = wintypes.ULONG()
-    schemas = (PROPVARIANT * number)()
-    idents = (PROPVARIANT * number)()
-    values = (PROPVARIANT * number)()
+    schemas = (PROPVARIANT * number)(needsclear=True)
+    idents = (PROPVARIANT * number)(needsclear=True)
+    values = (PROPVARIANT * number)(needsclear=True)
     if self.__class__._protos['Next'](self.pI, number, schemas, idents, values, r) > 1:
       return None
     if (r := r.value) == 0:
       return ()
-    schemas._needsclear = True
-    idents._needsclear = True
-    values._needsclear = True
     return tuple((s.value, i.value, (v.value.QueryInterface(self.__class__.IClass, self.factory) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r))) if not self.__class__.WithType else tuple(((s.vt , s.value), (i.vt, i.value), (v.vt, (v.value.QueryInterface(self.__class__.IClass, self.factory) if v.vt == 13 else v.value))) for s, i, v, _r in zip(schemas, idents, values, range(r)))
   def Skip(self, number):
     try:
@@ -2186,17 +2202,14 @@ class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
   def GetMetadataByName(self, name):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
-    v._needsclear = True
     return v.value.QueryInterface(self.__class__, self.factory) if v.vt == 13 else v.value
   def GetMetadataTypeByName(self, name):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
-    v._needsclear = True
     return v.vt
   def GetMetadataWithTypeByName(self, name):
     if (v := self.__class__._protos['GetMetadataByName'](self.pI, name)) is None:
       return None
-    v._needsclear = True
     return v.vt, (v.value.QueryInterface(self.__class__, self.factory) if v.vt == 13 else v.value)
 
 class IWICMetadataReader(IUnknown):
@@ -2222,17 +2235,14 @@ class IWICMetadataReader(IUnknown):
       ident = PROPVARIANT(*ident)
     if (v := self.__class__._protos['GetValue'](self.pI, schema, ident)) is None:
       return None
-    v._needsclear = True
     return v.value.QueryInterface(self.__class__, self.factory) if v.vt == 13 else v.value
   def GetValueByIndex(self, index):
     if (siv := self.__class__._protos['GetValueByIndex'](self.pI, index)) is None:
       return None
-    siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
     return tuple(p.value.QueryInterface(self.__class__, self.factory) if p.vt == 13 else p.value for p in siv)
   def GetValueWithTypeByIndex(self, index):
     if (siv := self.__class__._protos['GetValueByIndex'](self.pI, index)) is None:
       return None
-    siv[0]._needsclear = siv[1]._needsclear = siv[2]._needsclear = True
     return tuple((p.vt, (p.value.QueryInterface(self.__class__, self.factory) if p.vt == 13 else p.value)) for p in siv)
   def GetMetadataHandlerInfo(self):
     return IWICMetadataHandlerInfo(self.__class__._protos['GetMetadataHandlerInfo'](self.pI)).QueryInterface(IWICMetadataReaderInfo, self.factory)
@@ -2892,7 +2902,7 @@ class IWICBitmapLock(IUnknown):
     s_d = self.__class__._protos['GetDataPointer'](self.pI)
     if s_d is None or s_d[0] == 0:
       return None
-    return (wintypes.BYTE * s_d[0]).from_address(s_d[1].value)
+    return (wintypes.BYTE * s_d[0]).from_address(s_d[1])
 
 class IWICBitmap(IWICBitmapSource):
   IID = GUID(0x00000120, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -3256,8 +3266,7 @@ class IWICImagingFactory(IUnknown):
   def CreateBitmapFromSourceRect(self, source, xywh):
     return IWICBitmap(self.__class__._protos['CreateBitmapFromSourceRect'](self.pI, source, *xywh), self)
   def CreateBitmapFromMemory(self, width, height, pixel_format, stride, buffer):
-    l = PBUFFER.length(buffer)
-    return IWICBitmap(self.__class__._protos['CreateBitmapFromMemory'](self.pI, width, height, pixel_format, stride, l, buffer), self)
+    return IWICBitmap(self.__class__._protos['CreateBitmapFromMemory'](self.pI, width, height, pixel_format, stride, PBUFFER.length(buffer), buffer), self)
   def CreateBitmapFromHBITMAP(self, bitmap_handle, palette_handle=None, alpha_option=0):
     return IWICBitmap(self.__class__._protos['CreateBitmapFromHBITMAP'](self.pI, bitmap_handle, palette_handle, alpha_option), self)
   def CreateBitmapFromHICON(self, icon_handle):
