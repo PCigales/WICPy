@@ -7,4 +7,6 @@ WICPy defines Python (>=v3.8) classes wrapping the COM interfaces, bringing acce
 
 The COM library must be initialized for each thread creating from scratch a new component by calling Initialize() and therefore uninitialized at the end by calling Uninitialize(), after having released all interfaces.
 
+WICPy also gives access to the Windows Media Player photo library.
+
 The script test.py illustrates how to use the module through various applications.
