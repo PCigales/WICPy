@@ -1,4 +1,4 @@
-# WICPy v1.0.1 (https://github.com/PCigales/WICPy)
+# WICPy v1.1.0 (https://github.com/PCigales/WICPy)
 # Copyright © 2024 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
