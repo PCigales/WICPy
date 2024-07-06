@@ -9,8 +9,9 @@ import threading
 
 path = os.path.dirname(os.path.abspath(globals().get('__file__', ' '))) + r'\test'
 
-#IWICImagingFactory instance creation opt1
 Initialize()
+
+#IWICImagingFactory instance creation opt1
 WICImagingFactoryClassFactory = IClassFactory(IWICImagingFactory.CLSID)
 IImagingFactory = WICImagingFactoryClassFactory.CreateInstance(IWICImagingFactory)
 print(IImagingFactory, IImagingFactory.Release())
@@ -1020,4 +1021,11 @@ tuple(map(IUnknown.Release, (IBitmapFrame, IDecoder)))
 #Releasing the factory interfaces
 IImagingFactory.Release()
 IComponentFactory.Release()
+
+#Retrieving Media Photo Library
+ILibrary = IWMPCore().GetImages()
+att = ('Title', 'RecordingTimeDate', 'Width', 'Height', 'SourceURL')
+print(tuple(dict(zip((att), inf)) for inf in ILibrary.GetInfos(*att)))
+del ILibrary
+
 Uninitialize()

@@ -65,6 +65,13 @@ class _IUtil:
   @staticmethod
   def _errcheck_o(r, f, a):
     return None if ISetLastError(r) else a
+  @staticmethod
+  def CLSIDFromProgID(pid):
+    clsid = wintypes.GUID()
+    if ole32.CLSIDFromString(wintypes.LPCOLESTR(pid), ctypes.byref(clsid)):
+      return None
+    else:
+      return GUID(clsid)
 
 class _IMeta(type):
   @classmethod
@@ -93,6 +100,12 @@ class IUnknown(metaclass=_IMeta):
     elif isinstance(clsid_component, wintypes.LPVOID):
       pI = clsid_component
     else:
+      if isinstance(clsid_component, str):
+        try:
+          clsid_component = GUID(clsid_component)
+        except:
+          if (clsid_component := _IUtil.CLSIDFromProgID(clsid_component)) is None:
+            return None
       pI = wintypes.LPVOID()
       if ISetLastError(ole32.CoCreateInstance(wintypes.LPCSTR(clsid_component), None, wintypes.DWORD(1), wintypes.LPCSTR(cls.IID), ctypes.byref(pI))):
         return None
@@ -138,6 +151,12 @@ class IClassFactory(IUnknown):
   def __new__(cls, clsid):
     if not clsid:
       raise TypeError('%s does not have an implicit constructor' % cls.__name__)
+    if isinstance(clsid, str):
+      try:
+        clsid = GUID(clsid)
+      except:
+        if (clsid := _IUtil.CLSIDFromProgID(clsid)) is None:
+          return None
     pI = wintypes.LPVOID()
     if ISetLastError(ole32.CoGetClassObject(wintypes.LPCSTR(clsid), wintypes.DWORD(1), None, wintypes.LPCSTR(cls.IID), ctypes.byref(pI))):
       return None
@@ -1163,48 +1182,48 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
   oleauto32.SysAllocString.restype = wintypes.LPVOID
   oleauto32.SysAllocStringByteLen.restype = wintypes.LPVOID
   def __new__(cls, data=None):
-    self = ctypes.POINTER(wintypes.WCHAR).__new__(cls)
-    if isinstance(data, BSTR):
-      self._needsfree = False
-      bstr = data.bstr
-    elif isinstance(data, wintypes.LPVOID):
-      self._needsfree = False
-      bstr = data
-    elif isinstance(data, int):
-      self._needsfree = False
-      bstr = wintypes.LPVOID(data)
-    elif isinstance(data, wintypes.LPCWSTR):
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(data))
-    elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(ctypes.byref(data)))
-    elif isinstance(data, str):
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(wintypes.LPCWSTR(data)))
-    else:
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data)))
-    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = bstr.value
-    self.bstr = ctypes.cast(self, ctypes.c_void_p)
-    return self
+    return ctypes.POINTER(wintypes.WCHAR).__new__(cls)
   @property
   def value(self):
-    return getattr(getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p)), 'value', 0)
+    return ctypes.cast(self, ctypes.c_void_p).value
+  @value.setter
+  def value(self, val):
+    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
   @property
   def content(self):
-    if not hasattr(self, 'bstr'):
-      self.bstr = ctypes.cast(self, ctypes.c_void_p)
-    if not self.bstr:
+    if not self:
       return None
-    l = wintypes.UINT(oleauto32.SysStringLen(self.bstr))
-    return ctypes.wstring_at(self.bstr, l.value)
-  def __init__(self, *args, **kwargs):
+    l = wintypes.UINT(oleauto32.SysStringLen(self))
+    return ctypes.wstring_at(self, l.value)
+  def __init__(self, data=None):
     super().__init__()
+    if isinstance(data, (BSTR, wintypes.LPVOID)):
+      self._needsfree = False
+      self.value = data.value
+    elif data is None or isinstance(data, int):
+      self._needsfree = False
+      self.value = data
+    elif isinstance(data, wintypes.LPCWSTR):
+      self._needsfree = True
+      self.value = oleauto32.SysAllocString(data)
+    elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
+      self._needsfree = True
+      self.value = oleauto32.SysAllocString(ctypes.byref(data))
+    elif isinstance(data, str):
+      self._needsfree = True
+      self.value = oleauto32.SysAllocString(wintypes.LPCWSTR(data))
+    else:
+      self._needsfree = True
+      self.value = oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data))
   def __del__(self):
-    if (bstr := getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p))) and getattr(self, '_needsfree', False):
-      oleauto32.SysFreeString(bstr)
-      self.bstr = None
+    if self and getattr(self, '_needsfree', False):
+      oleauto32.SysFreeString(self)
+      self._needsfree = False
+      self.value = None
+  def __ctypes_from_outparam__(self):
+    self._needsfree = True
+    return self
+PBSTR = ctypes.POINTER(BSTR)
 
 class CA(ctypes.Structure):
   _fields_ = [('vc', wintypes.DWORD), ('vp', wintypes.LPVOID)]
@@ -3323,6 +3342,158 @@ class IWICComponentFactory(IWICImagingFactory):
         ISetLastError(0x80070057)
         return None
     return IWICEncoderPropertyBag(self.__class__._protos['CreateEncoderPropertyBag'](self.pI, propbags, n), self)
+
+class IWMPMedia(IUnknown):
+  IID = GUID(0xf118efc7, 0xf03a, 0x4fb4, 0x99, 0xc9, 0x1c, 0x02, 0xa5, 0xc1, 0x06, 0x5b)
+  _protos['get_name'] = 9, (), (PBSTR,)
+  _protos['get_attributeCount'] = 18, (), (wintypes.PLONG,)
+  _protos['getAttributeName'] = 19, (wintypes.LONG,), (PBSTR,)
+  _protos['getAttributeName'] = 19, (wintypes.LONG,), (PBSTR,)
+  _protos['getItemInfo'] = 20, (BSTR,), (PBSTR,)
+  _protos['getItemInfoByAtom'] = 22, (wintypes.LONG,), (PBSTR,)
+  def GetName(self):
+    return None if (na := self.__class__._protos['get_name'](self.pI)) is None else na.content
+  def GetAttributeCount(self):
+    return self.__class__._protos['get_attributeCount'](self.pI)
+  def GetAttributeName(self, index):
+    return None if (na := self.__class__._protos['getAttributeName'](self.pI, index)) is None else na.content
+  def GetItemInfo(self, attribute_name):
+    return None if (na := self.__class__._protos['getItemInfo'](self.pI, attribute_name)) is None else na.content
+  def GetItemInfoByAtom(self, attribute_atom):
+    return None if (na := self.__class__._protos['getItemInfoByAtom'](self.pI, attribute_atom)) is None else na.content
+  def GetItemInfoByName(self, attribute_name):
+    return None if (a := self.factory.GetAttributeAtom(attribute_name)) is None else self.GetItemInfoByAtom(a)
+
+class _WMPIAttribute:
+  def __set_name__(self, owner, name):
+    self.attribute_name = owner.__class__._attributes[name]
+  def __get__(self, obj, cls=None):
+    return obj.GetItemInfoByName(self.attribute_name)
+
+class _IWMPIMeta(_IMeta):
+  _attributes = {
+    'MediaType': 'MediaType',
+    'CameraManufacturer': 'CameraManufacturer',
+    'CameraModel': 'CameraModel',
+    'CanonicalFileType': 'CanonicalFileType',
+    'FileSize': 'FileSize',
+    'FileType': 'FileType',
+    'RecordingTime': 'RecordingTime',
+    'RecordingTimeDay': 'RecordingTimeDay',
+    'RecordingTimeMonth': 'RecordingTimeMonth',
+    'RecordingTimeYear': 'RecordingTimeYear',
+    'RecordingTimeDate': 'RecordingTimeYearMonthDay',
+    'SourceURL': 'SourceURL',
+    'Title': 'Title',
+    'Height': 'WM/VideoHeight',
+    'Width': 'WM/VideoWidth'
+  }
+  @classmethod
+  def __prepare__(mcls, name, bases, **kwds):
+    kwds = super(mcls, mcls).__prepare__(name, bases, **kwds)
+    for n in mcls._attributes:
+      kwds[n] = _WMPIAttribute()
+    return kwds
+
+class IWMPImage(IWMPMedia, metaclass=_IWMPIMeta):
+  pass
+
+class IWMPPlayList(IUnknown):
+  IID = GUID(0xd5f0f4f1, 0x130c, 0x11d3, 0xb1, 0x4e, 0x00, 0xc0, 0x4f, 0x79, 0xfa, 0xa6)
+  _protos['get_count'] = 7, (), (wintypes.PLONG,)
+  _protos['get_item'] = 12, (wintypes.LONG,), (wintypes.PLPVOID,)
+  def GetCount(self):
+    return self.__class__._protos['get_count'](self.pI)
+  def GetItem(self, index):
+    return None if (it := IUnknown(self.__class__._protos['get_item'](self.pI, index))) is None else it.QueryInterface(IWMPMedia, self.factory)
+  def GetItems(self):
+    if (c := self.GetCount()) is None:
+      return None
+    return (self.GetItem(ind) for ind in range(c))
+  def GetInfos(self, *attributes):
+    return None if (ms := self.GetItems()) is None else (tuple(m.GetItemInfoByName(a) for a in attributes) for m in ms)
+
+class IWMPIPlayList(IWMPPlayList):
+  def GetItem(self, index):
+    return None if (it := IUnknown(self.__class__._protos['get_item'](self.pI, index))) is None else it.QueryInterface(IWMPImage, self.factory)
+  def GetInfos(self, *attributes):
+    return None if (ms := self.GetItems()) is None else (tuple(getattr(m, a, m.GetItemInfoByName(a)) for a in attributes) for m in ms)
+
+class IWMPQuery(IUnknown):
+  IID = GUID(0xa00918f3, 0xa6b0, 0x4bfb, 0x91, 0x89, 0xfd, 0x83, 0x4c, 0x7b, 0xc5, 0xa5)
+  _protos['addCondition'] = 7, (BSTR, BSTR, BSTR), ()
+  _protos['beginNextGroup'] = 8, (), ()
+  def AddCondition(self, attribute_name, operator, value):
+    return self.__class__._protos['addCondition'](self.pI, attribute_name, operator, value)
+  def BeginNextGroup(self):
+    return self.__class__._protos['beginNextGroup'](self.pI)
+
+class IWMPMediaCollection(IUnknown):
+  IID = GUID(0x8ba957f5, 0xfd8c, 0x4791, 0xb8, 0x2d, 0xf8, 0x40, 0x40, 0x1e, 0xe4, 0x74)
+  _protos['getAll'] = 8, (), (wintypes.PLPVOID,)
+  _protos['getByName'] = 9, (BSTR,), (wintypes.PLPVOID,)
+  _protos['getByAttribute'] = 13, (BSTR, BSTR), (wintypes.PLPVOID,)
+  _protos['getMediaAtom'] = 16, (BSTR,), (wintypes.PLONG,)
+  _protos['createQuery'] = 19, (), (wintypes.PLPVOID,)
+  _protos['getPlaylistByQuery'] = 20, (wintypes.LPVOID, BSTR, BSTR, wintypes.VARIANT_BOOL), (wintypes.PLPVOID,)
+  _protos['getByAttributeAndMediaType'] = 22, (BSTR, BSTR, BSTR), (wintypes.PLPVOID,)
+  def __new__(cls, *args, **kwargs):
+    self = IUnknown.__new__(cls, *args, **kwargs)
+    self._attribute_atom = {}
+    return self
+  def GetAll(self):
+    return IWMPPlayList(self.__class__._protos['getAll'](self.pI), self)
+  def GetByName(self, name):
+    return IWMPPlayList(self.__class__._protos['getByName'](self.pI, name), self)
+  def GetByAttribute(self, attribute_name, value):
+    return IWMPPlayList(self.__class__._protos['getByAttribute'](self.pI, attribute_name, value), self)
+  def GetByMediaType(self, media_type):
+    return (IWMPIPlayList if media_type.lower() == 'photo' else IWMPPlayList)(self.__class__._protos['getByAttribute'](self.pI, 'MediaType', media_type), self)
+  def GetByAttributeAndMediaType(self, attribute_name, value, media_type):
+    return (IWMPIPlayList if media_type.lower() == 'photo' else IWMPPlayList)(self.__class__._protos['getByAttributeAndMediaType'](self.pI, attribute_name, value, media_type), self)
+  def GetAttributeAtom(self, attribute_name):
+    if attribute_name not in self._attribute_atom:
+      self._attribute_atom[attribute_name] = self.__class__._protos['getMediaAtom'](self.pI, attribute_name)
+    return self._attribute_atom[attribute_name]
+  def CreateQuery(self, *conditions_groups):
+    if (IQuery := IWMPQuery(self.__class__._protos['createQuery'](self.pI), self)) is None:
+      return None
+    n = False
+    for cs in conditions_groups:
+      if n:
+        if IQuery.BeginNextGroup() is None:
+          return None
+      else:
+        n = True
+      if not isinstance(cs[0], (list, tuple)):
+        cs = (cs,)
+      for c in cs:
+        if IQuery.AddCondition(*c) is None:
+          return None
+    return IQuery
+  def GetByQuery(self, query, media_type, sort_attribute='', sort_ascending=True):
+    return (IWMPIPlayList if media_type.lower() == 'photo' else IWMPPlayList)(self.__class__._protos['getPlaylistByQuery'](self.pI, query, media_type, sort_attribute, sort_ascending), self)
+  def GetImages(self):
+    return self.GetByMediaType('photo')
+  def GetImagesByAttribute(self, attribute_name, value):
+    return self.GetByAttributeAndMediaType(_IWMPIMeta._attributes.get(attribute_name, attribute_name), value, 'photo')
+  def CreateImageQuery(self, *conditions_groups):
+    return self.CreateQuery(*(tuple((_IWMPIMeta._attributes.get(c[0], c[0]), c[1], c[2]) for c in (cs if isinstance(cs[0], (list, tuple)) else (cs,))) for cs in conditions_groups))
+  def GetImagesByQuery(self, query, sort_attribute='', sort_ascending=True):
+    return self.GetByQuery(query, 'photo', _IWMPIMeta._attributes.get(sort_attribute, sort_attribute), sort_ascending)
+
+class IWMPCore(IUnknown):
+  CLSID = 'WMPlayer.ocx'
+  IID = GUID(0x7587C667, 0x628f, 0x499f, 0x88, 0xe7, 0x6a, 0x6f, 0x4e, 0x88, 0x84, 0x64)
+  _protos['get_mediaCollection'] = 16, (), (wintypes.PLPVOID,)
+  def GetMediaCollection(self):
+    return None if (mc := IUnknown(self.__class__._protos['get_mediaCollection'](self.pI), self)) is None else mc.QueryInterface(IWMPMediaCollection)
+  def GetMedia(self):
+    return None if (pl := self.GetMediaCollection()) is None else pl.GetAll()
+  def GetImages(self):
+    return None if (pl := self.GetMediaCollection()) is None else pl.GetImages()
+  def GetImagesByQuery(self, conditions_groups, sort_attribute='', sort_ascending=True):
+    return None if (pl := self.GetMediaCollection()) is None else (None if (q := pl.CreateImageQuery(*conditions_groups)) is None else pl.GetImagesByQuery(q, sort_attribute, sort_ascending))
 
 def Initialize(mode=6):
   if isinstance(mode, str):
