@@ -1036,7 +1036,7 @@ IPhoto = ILibrary.GetItem(0)
 if IPhoto:
   print(IPhoto.Title, IPhoto.GetItemInfoWithTypeByType('RecordingTime'))
 #Release the interfaces
-IPhoto.Release()
+  IPhoto.Release()
 del ILibrary2
 del ILibrary
 
