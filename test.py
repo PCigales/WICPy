@@ -1023,9 +1023,21 @@ IImagingFactory.Release()
 IComponentFactory.Release()
 
 #Retrieving Media Photo Library
-ILibrary = IWMPCore().GetImages()
+ILibrary = IWMPCore().GetPhotos()
 att = ('Title', 'RecordingTimeDate', 'Width', 'Height', 'SourceURL')
 print(tuple(dict(zip((att), inf)) for inf in ILibrary.GetInfos(*att)))
+#Retrieving Media Photo Library by query on height and width greater than 1920x1080 or 1080x1920 and descending sort on recording date
+ILibrary2 = ILibrary.factory.factory.GetPhotosByQuery(((('Height', 'greaterthan', '1080'), ('width', 'greaterthan', '1920')), (('Height', 'greaterthan', '1920'), ('width', 'greaterthan', '1080'))), 'recordingtime', False)
+print(tuple(dict(zip((att), inf)) for inf in ILibrary2.GetInfos(*att)))
+#Retrieving first photo and printing its title and recording time in local format
+import locale
+locale.setlocale(locale.LC_TIME, '')
+IPhoto = ILibrary.GetItem(0)
+if IPhoto:
+  print(IPhoto.Title, IPhoto.GetItemInfoWithTypeByType('RecordingTime'))
+#Release the interfaces
+IPhoto.Release()
+del ILibrary2
 del ILibrary
 
 Uninitialize()
