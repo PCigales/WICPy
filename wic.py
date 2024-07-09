@@ -3413,34 +3413,29 @@ class _IWMPPMeta(_IMeta):
       'SourceURL': 'SourceURL',
       'FilePath': 'SourceURL',
       'Title': 'Title'
+    },
+    'photo': {
+      'CameraManufacturer': 'CameraManufacturer',
+      'CameraModel': 'CameraModel',
+      'CanonicalFileType': 'CanonicalFileType',
+      'RecordingTime': 'RecordingTime',
+      'RecordingTimeDay': 'RecordingTimeDay',
+      'RecordingTimeMonth': 'RecordingTimeMonth',
+      'RecordingTimeYear': 'RecordingTimeYear',
+      'RecordingTimeDate': 'RecordingTimeYearMonthDay',
+      'Height': 'WM/VideoHeight',
+      'Width': 'WM/VideoWidth'
     }
   }
   _scattributes = {
-    '': {
+    'photo': {
+      'RecordingTimestamp': 'RecordingTime'
     }
   }
   _mcattributes = {
-    '': {
-    }
   }
-  _attributes['photo'] = {**_attributes[''],
-    'CameraManufacturer': 'CameraManufacturer',
-    'CameraModel': 'CameraModel',
-    'CanonicalFileType': 'CanonicalFileType',
-    'RecordingTime': 'RecordingTime',
-    'RecordingTimeDay': 'RecordingTimeDay',
-    'RecordingTimeMonth': 'RecordingTimeMonth',
-    'RecordingTimeYear': 'RecordingTimeYear',
-    'RecordingTimeDate': 'RecordingTimeYearMonthDay',
-    'Height': 'WM/VideoHeight',
-    'Width': 'WM/VideoWidth'
-  }
-  _scattributes['photo'] = {**_scattributes[''],
-    'RecordingTimestamp': 'RecordingTime'
-  }
-  _mcattributes['photo'] = {**_mcattributes[''],
-  }
-  _alias = {}
+  _alias = {'': {}}
+  _alias.update({itype: {an.lower(): an for ityp in {'', itype} for a in aa if ityp in a for an in a[ityp]} for aa in ((_attributes, _scattributes, _mcattributes),) for itype in {ityp for a in aa for ityp in a}})
   def _resolve_attribute(cls, alias):
     italias = cls.__class__._alias[cls.ItemType]
     return alias if (an := italias.get(alias.lower())) is None else getattr(italias[_IWMPMMeta], an)
@@ -3453,13 +3448,13 @@ class _IWMPPMeta(_IMeta):
     return cls
 
 class _IWMPMMeta(_IWMPPMeta):
+  @classmethod
+  def _media_class(mcls, media_type=''):
+    return mcls._alias.get(media_type.lower(), mcls._alias[''])[_IWMPMMeta]
   def __new__(mcls, name, bases, namespace, **kwds):
     itype = namespace.get('ItemType', '')
     italias = mcls._alias.setdefault(itype, {})
-    for a, d in ((mcls._mcattributes[itype], _WMPMMCAttribute), (mcls._scattributes[itype], _WMPMSCAttribute), (mcls._attributes[itype], _WMPMAttribute)):
-      for an in a:
-        namespace[an] = d()
-        italias[an.lower()] = an
+    namespace.update({an: d() for a, d in zip((mcls._mcattributes, mcls._scattributes, mcls._attributes), (_WMPMMCAttribute, _WMPMSCAttribute, _WMPMAttribute)) if itype in a for an in a[itype]})
     cls = super().__new__(mcls, name, bases, namespace, **kwds)
     italias[_IWMPMMeta] = cls
     return cls
@@ -3527,7 +3522,7 @@ class IWMPPlaylist(IUnknown, metaclass=_IWMPPMeta):
   def GetCount(self):
     return self.__class__._protos['get_count'](self.pI)
   def GetItem(self, index):
-    return None if (it := IUnknown(self.__class__._protos['get_item'](self.pI, index))) is None else it.QueryInterface((IWMPPhoto if self.__class__.ItemType == 'photo' else IWMPMedia), self.factory)
+    return None if (it := IUnknown(self.__class__._protos['get_item'](self.pI, index))) is None else it.QueryInterface(_IWMPMMeta._media_class(self.__class__.ItemType), self.factory)
   def GetItems(self):
     if (c := self.GetCount()) is None:
       return None
@@ -3565,7 +3560,7 @@ class IWMPMediaCollection(IUnknown):
   def GetByName(self, name):
     return IWMPPlaylist(self.__class__._protos['getByName'](self.pI, name), self)
   def GetByAttribute(self, attribute_name, value):
-    return IWMPPlaylist(self.__class__._protos['getByAttribute'](self.pI, attribute_name, value), self)
+    return IWMPPlaylist(self.__class__._protos['getByAttribute'](self.pI, IWMPPlaylist._resolve_attribute(attribute_name), value), self)
   def GetByMediaType(self, media_type):
     return _IWMPPMeta._playlist_class(media_type)(self.__class__._protos['getByAttribute'](self.pI, 'MediaType', media_type), self)
   def GetByAttributeAndMediaType(self, attribute_name, value, media_type):
@@ -3574,9 +3569,12 @@ class IWMPMediaCollection(IUnknown):
   def GetMediaAtom(self, attribute_name):
     return self.__class__._protos['getMediaAtom'](self.pI, attribute_name)
   def GetAttributeAtom(self, attribute_name):
-    if attribute_name not in self._attribute_atom:
-      self._attribute_atom[attribute_name] = self.GetMediaAtom(attribute_name)
-    return self._attribute_atom[attribute_name]
+    if attribute_name in self._attribute_atom:
+      return self._attribute_atom[attribute_name]
+    else:
+      if (a := self.GetMediaAtom(attribute_name)) is not None and a >= 0:
+        self._attribute_atom[attribute_name] = a
+      return a
   def CreateQuery(self, *conditions_groups, media_type=''):
     if (IQuery := IWMPQuery(self.__class__._protos['createQuery'](self.pI), self)) is None:
       return None
@@ -3588,9 +3586,7 @@ class IWMPMediaCollection(IUnknown):
           return None
       else:
         n = True
-      if not isinstance(cs[0], (list, tuple)):
-        cs = (cs,)
-      for c in cs:
+      for c in (cs if isinstance(cs[0], (list, tuple)) else (cs,)):
         if IQuery.AddCondition(icls._resolve_attribute(c[0]), c[1], c[2]) is None:
           return None
     return IQuery
