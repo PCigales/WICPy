@@ -1232,6 +1232,7 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
       self.value = None
   def __ctypes_from_outparam__(self):
     self._needsfree = True
+    self.bstr = ctypes.cast(self, ctypes.c_void_p)
     return self
 PBSTR = ctypes.POINTER(BSTR)
 
