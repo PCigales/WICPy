@@ -1183,41 +1183,50 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
   oleauto32.SysAllocString.restype = wintypes.LPVOID
   oleauto32.SysAllocStringByteLen.restype = wintypes.LPVOID
   def __new__(cls, data=None):
-    return ctypes.POINTER(wintypes.WCHAR).__new__(cls)
+    self = ctypes.POINTER(wintypes.WCHAR).__new__(cls)
+    if isinstance(data, BSTR):
+      self._needsfree = False
+      bstr = data.bstr
+    elif isinstance(data, wintypes.LPVOID):
+      self._needsfree = False
+      bstr = data
+    elif data is None or isinstance(data, int):
+      self._needsfree = False
+      bstr = wintypes.LPVOID(data)
+    elif isinstance(data, wintypes.LPCWSTR):
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocString(data))
+    elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocString(ctypes.byref(data)))
+    elif isinstance(data, str):
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocString(wintypes.LPCWSTR(data)))
+    else:
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data)))
+    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = bstr.value
+    self.bstr = ctypes.cast(self, ctypes.c_void_p)
+    return self
   @property
   def value(self):
-    return ctypes.cast(self, ctypes.c_void_p).value
+    return getattr(getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p)), 'value', 0)
   @value.setter
   def value(self, val):
     ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
+    self.bstr = ctypes.cast(self, ctypes.c_void_p)
   @property
   def content(self):
-    if not self:
+    if not hasattr(self, 'bstr'):
+      self.bstr = ctypes.cast(self, ctypes.c_void_p)
+    if not self.bstr:
       return None
-    l = wintypes.UINT(oleauto32.SysStringLen(self))
-    return ctypes.wstring_at(self, l.value)
+    l = wintypes.UINT(oleauto32.SysStringLen(self.bstr))
+    return ctypes.wstring_at(self.bstr, l.value)
   def __init__(self, data=None):
     super().__init__()
-    if isinstance(data, (BSTR, wintypes.LPVOID)):
-      self._needsfree = False
-      self.value = data.value
-    elif data is None or isinstance(data, int):
-      self._needsfree = False
-      self.value = data
-    elif isinstance(data, wintypes.LPCWSTR):
-      self._needsfree = True
-      self.value = oleauto32.SysAllocString(data)
-    elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
-      self._needsfree = True
-      self.value = oleauto32.SysAllocString(ctypes.byref(data))
-    elif isinstance(data, str):
-      self._needsfree = True
-      self.value = oleauto32.SysAllocString(wintypes.LPCWSTR(data))
-    else:
-      self._needsfree = True
-      self.value = oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data))
   def __del__(self):
-    if self and getattr(self, '_needsfree', False):
+    if (bstr := getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p))) and getattr(self, '_needsfree', False):
       oleauto32.SysFreeString(self)
       self._needsfree = False
       self.value = None
