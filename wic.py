@@ -73,8 +73,32 @@ class _IUtil:
       return None
     else:
       return GUID(clsid)
+  @staticmethod
+  def _anew(acls, *args, **kwargs):
+    if len(args) == 1 and isinstance(args[0], ctypes.Array):
+      arr = tuple(map(acls._base, args[0]))
+      for i in arr:
+        if i is not None and i.AddRef() is not None:
+          i.refs -= 1
+    else:
+      arr = super(acls, acls).__new__(acls, *args, **kwargs)
+    return arr
+  @staticmethod
+  def _ainit(arr, *args, norelease=False, **kwargs):
+    for i in args:
+      if i is not None and i.AddRef() is not None:
+        i.refs -= 1
+    getattr(arr.__class__.__bases__[0], '__init__')(arr, *(v.pI for v in args), **kwargs)
+    arr._norelease = norelease
+  @staticmethod
+  def _adel(arr):
+    if not arr._norelease:
+      for p in arr:
+        if (i := IUnknown(p)) is not None:
+          i.Release()
 
 class _IMeta(type):
+  _mul_cache = {}
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
     kwds['_protos'] = {**getattr(bases[0], '_protos', {})} if len(bases) > 0 else {}
@@ -84,6 +108,8 @@ class _IMeta(type):
     for n, (p, i, o) in tuple((n, pro) for n, pro in cls._protos.items() if isinstance(pro, tuple)):
       cls._protos[n] = ctypes.WINFUNCTYPE(wintypes.ULONG, *i, *o)(p, n, (*((1,) for _i in i), *((2,) for _o in o)))
       cls._protos[n].errcheck = _IUtil._errcheck_no if len(o) == 0 else _IUtil._errcheck_o
+  def __mul__(bcls, size):
+    return bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__new__': _IUtil._anew, '__init__': _IUtil._ainit, '__del__': _IUtil._adel, '_base': bcls}))
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -1157,8 +1183,9 @@ class IWICPalette(IUnknown):
     return self.__class__._protos['InitializeFromPalette'](self.pI, palette)
 
 class _BLOBMeta(ctypes.Structure.__class__):
+  _mul_cache = {}
   def __mul__(bcls, size):
-    return type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': lambda s, *args, **kwargs: s.__class__.__bases__[0].__init__(s, *map(BLOB, args), **kwargs)})
+    return bcls.__class__._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': lambda s, *args, **kwargs: s.__class__.__bases__[0].__init__(s, *map(BLOB, args), **kwargs)}))
 
 class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   _fields_ = [('cbSize', wintypes.ULONG), ('pBlobdata', wintypes.LPVOID)]
@@ -1172,11 +1199,21 @@ class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   def __init__(self, data=None):
     super().__init__()
     if data is not None:
-      self.content = data
+      self.content = data.content if isinstance(data, BLOB) else data
+
+class _BSTRUtil:
+  @staticmethod
+  def _ainit(arr, *args, nofree=False, **kwargs):
+    bs = tuple(v if isinstance(v, BSTR) else BSTR(v) for v in args)
+    if nofree:
+      for b in bs:
+        b._needsfree = False
+    getattr(arr.__class__.__bases__[0], '__init__')(arr, *bs, **kwargs)
 
 class _BSTRMeta(ctypes._Pointer.__class__):
+  _mul_cache = {}
   def __mul__(bcls, size):
-    return type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__init__': lambda s, *args, **kwargs: s.__class__.__bases__[0].__init__(s, *map(BSTR, args), **kwargs)})
+    return bcls.__class__._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__init__': _BSTRUtil._ainit}))
 
 class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
   _type_ = wintypes.WCHAR
@@ -1186,7 +1223,7 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
     self = ctypes.POINTER(wintypes.WCHAR).__new__(cls)
     if isinstance(data, BSTR):
       self._needsfree = False
-      bstr = data.bstr
+      bstr = getattr(data, 'bstr', ctypes.cast(data, ctypes.c_void_p))
     elif isinstance(data, wintypes.LPVOID):
       self._needsfree = False
       bstr = data
@@ -1227,7 +1264,7 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
     super().__init__()
   def __del__(self):
     if (bstr := getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p))) and getattr(self, '_needsfree', False):
-      oleauto32.SysFreeString(self)
+      oleauto32.SysFreeString(bstr)
       self._needsfree = False
       self.value = None
   def __ctypes_from_outparam__(self):
@@ -1476,8 +1513,9 @@ class _BVUtil:
     return p
 
 class _BVMeta(ctypes.Structure.__class__):
+  _mul_cache = {}
   def __mul__(bcls, size):
-    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel})
+    return bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel}))
   def __new__(mcls, name, bases, namespace, **kwds):
     if (code_name := namespace.get('code_name')) is not None:
       cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for na, co in {na: co for co, na in code_name.items() if co != 14}.items()), ('pad', wintypes.BYTES16)]})
@@ -1663,8 +1701,9 @@ class _PBUtil:
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
 
 class _PBMeta(ctypes.Structure.__class__):
+  _mul_cache = {}
   def __mul__(bcls, size):
-    return type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _PBUtil._ainit, '__del__': _PBUtil._adel})
+    return bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _PBUtil._ainit, '__del__': _PBUtil._adel}))
 
 class PROPBAG2(ctypes.Structure, metaclass=_PBMeta):
   _fields_ = [('dwType', wintypes.DWORD), ('_vt', ctypes.c_ushort), ('cfType', wintypes.DWORD), ('dwHint', wintypes.DWORD), ('pstrName', wintypes.LPOLESTR), ('clsid', wintypes.GUID)]
