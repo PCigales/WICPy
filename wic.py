@@ -60,6 +60,7 @@ class GUID(bytes):
 
 class _IUtil:
   _local = threading.local()
+  _mul_cache = {}
   @staticmethod
   def _errcheck_no(r, f, a):
     return None if ISetLastError(r) else True
@@ -74,31 +75,21 @@ class _IUtil:
     else:
       return GUID(clsid)
   @staticmethod
-  def _anew(acls, *args, **kwargs):
-    if len(args) == 1 and isinstance(args[0], ctypes.Array):
-      arr = tuple(map(acls._base, args[0]))
-      for i in arr:
-        if i is not None and i.AddRef() is not None:
-          i.refs -= 1
+  def _agitem(arr, key):
+    e = arr.__class__.__bases__[0].__getitem__(arr, key)
+    if isinstance(key, int):
+      if (e := arr.__class__._base(e)) is not None:
+        e.AddRef(False)
     else:
-      arr = super(acls, acls).__new__(acls, *args, **kwargs)
-    return arr
+      for i in (e := list(map(arr.__class__._base, e))):
+        if i is not None:
+          i.AddRef(False)
+    return e
   @staticmethod
-  def _ainit(arr, *args, norelease=False, **kwargs):
-    for i in args:
-      if i is not None and i.AddRef() is not None:
-        i.refs -= 1
-    getattr(arr.__class__.__bases__[0], '__init__')(arr, *(v.pI for v in args), **kwargs)
-    arr._norelease = norelease
-  @staticmethod
-  def _adel(arr):
-    if not arr._norelease:
-      for p in arr:
-        if (i := IUnknown(p)) is not None:
-          i.Release()
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, getattr(value, 'pI', value) if isinstance(key, int) else [getattr(v, 'pI', v) for v in value])
 
 class _IMeta(type):
-  _mul_cache = {}
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
     kwds['_protos'] = {**getattr(bases[0], '_protos', {})} if len(bases) > 0 else {}
@@ -109,7 +100,7 @@ class _IMeta(type):
       cls._protos[n] = ctypes.WINFUNCTYPE(wintypes.ULONG, *i, *o)(p, n, (*((1,) for _i in i), *((2,) for _o in o)))
       cls._protos[n].errcheck = _IUtil._errcheck_no if len(o) == 0 else _IUtil._errcheck_o
   def __mul__(bcls, size):
-    return bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__new__': _IUtil._anew, '__init__': _IUtil._ainit, '__del__': _IUtil._adel, '_base': bcls}))
+    return _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__getitem__': _IUtil._agitem, '__setitem__': _IUtil._asitem, '_base': bcls}))
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -141,10 +132,11 @@ class IUnknown(metaclass=_IMeta):
     self.refs = 1
     self.factory = factory
     return self
-  def AddRef(self):
+  def AddRef(self, own_ref=True):
     if self.pI is None:
       return None
-    self.refs += 1
+    if own_ref:
+      self.refs += 1
     return self.__class__._protos['AddRef'](self.pI), self.refs
   def Release(self):
     if self.pI is None:
@@ -1182,10 +1174,15 @@ class IWICPalette(IUnknown):
   def InitializeFromPalette(self, palette):
     return self.__class__._protos['InitializeFromPalette'](self.pI, palette)
 
-class _BLOBMeta(ctypes.Structure.__class__):
+class _BLOBUtil:
   _mul_cache = {}
+  @staticmethod
+  def _ainit(arr, *args, **kwargs):
+    return arr.__class__.__bases__[0].__init__(arr, *map(BLOB, args), **kwargs)
+
+class _BLOBMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return bcls.__class__._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': lambda s, *args, **kwargs: s.__class__.__bases__[0].__init__(s, *map(BLOB, args), **kwargs)}))
+    return _BLOBUtil._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BLOBUtil._ainit}))
 
 class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   _fields_ = [('cbSize', wintypes.ULONG), ('pBlobdata', wintypes.LPVOID)]
@@ -1202,18 +1199,14 @@ class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
       self.content = data.content if isinstance(data, BLOB) else data
 
 class _BSTRUtil:
+  _mul_cache = {}
   @staticmethod
-  def _ainit(arr, *args, nofree=False, **kwargs):
-    bs = tuple(v if isinstance(v, BSTR) else BSTR(v) for v in args)
-    if nofree:
-      for b in bs:
-        b._needsfree = False
-    getattr(arr.__class__.__bases__[0], '__init__')(arr, *bs, **kwargs)
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, BSTR) else BSTR(value)) if isinstance(key, int) else [v if isinstance(v, BSTR) else BSTR(v) for v in value])
 
 class _BSTRMeta(ctypes._Pointer.__class__):
-  _mul_cache = {}
   def __mul__(bcls, size):
-    return bcls.__class__._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__init__': _BSTRUtil._ainit}))
+    return _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__setitem__': _BSTRUtil._asitem}))
 
 class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
   _type_ = wintypes.WCHAR
@@ -1428,8 +1421,15 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
     return atype.from_buffer(data)
   def __del__(self):
     if getattr(self, 'psafearray', None) is not None and getattr(self, '_needsdestroy', False):
-      oleauto32.SafeArrayDestroy(self.psafearray)
+      psafearray = self.psafearray
       self.psafearray = None
+      if self.size > 0:
+        pdata = wintypes.LPVOID()
+        if oleauto32.SafeArrayAccessData(psafearray, ctypes.byref(pdata)):
+          return
+        ctypes.memset(pdata, 0, self.size)
+        oleauto32.SafeArrayUnaccessData(psafearray)
+      oleauto32.SafeArrayDestroy(psafearray)
 
 class _BVType(int):
   @classmethod
@@ -1484,9 +1484,11 @@ class PropVariantType(_BVType):
   pass
 
 class _BVUtil:
+  _mul_cache = {}
   @staticmethod
+  
   def _ainit(arr, *args, needsclear=False, **kwargs):
-    getattr(arr.__class__.__bases__[0], '__init__')(arr, *args, **kwargs)
+    arr.__class__.__bases__[0].__init__(arr, *args, **kwargs)
     arr._needsclear = needsclear
   @staticmethod
   def _adel(arr):
@@ -1496,9 +1498,8 @@ class _BVUtil:
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
   @staticmethod
   def _idup(addr, icls):
-    i = icls(addr)
-    if i is not None and i.AddRef() is not None:
-      i.refs -= 1
+    if (i := icls(addr)) is not None:
+      i.AddRef(False)
     return i
   @staticmethod
   def _padup(parr):
@@ -1513,9 +1514,8 @@ class _BVUtil:
     return p
 
 class _BVMeta(ctypes.Structure.__class__):
-  _mul_cache = {}
   def __mul__(bcls, size):
-    return bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel}))
+    return _BVUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel}))
   def __new__(mcls, name, bases, namespace, **kwds):
     if (code_name := namespace.get('code_name')) is not None:
       cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for na, co in {na: co for co, na in code_name.items() if co != 14}.items()), ('pad', wintypes.BYTES16)]})
@@ -1691,7 +1691,7 @@ PPROPVARIANT = ctypes.POINTER(PROPVARIANT)
 class _PBUtil:
   @staticmethod
   def _ainit(arr, *args, needsclear=False, **kwargs):
-    getattr(arr.__class__.__bases__[0], '__init__')(arr, *args, **kwargs)
+    arr.__class__.__bases__[0].__init__(arr, *args, **kwargs)
     arr._needsclear = needsclear
   @staticmethod
   def _adel(arr):
