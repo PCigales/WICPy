@@ -1177,12 +1177,12 @@ class IWICPalette(IUnknown):
 class _BLOBUtil:
   _mul_cache = {}
   @staticmethod
-  def _ainit(arr, *args, **kwargs):
-    return arr.__class__.__bases__[0].__init__(arr, *map(BLOB, args), **kwargs)
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, BLOB(value) if isinstance(key, int) else list(map(BLOB, value)))
 
 class _BLOBMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return _BLOBUtil._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BLOBUtil._ainit}))
+    return _BLOBUtil._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _BLOBUtil._asitem}))
 
 class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   _fields_ = [('cbSize', wintypes.ULONG), ('pBlobdata', wintypes.LPVOID)]
