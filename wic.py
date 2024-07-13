@@ -74,20 +74,6 @@ class _IUtil:
       return None
     else:
       return GUID(clsid)
-  @staticmethod
-  def _agitem(arr, key):
-    e = arr.__class__.__bases__[0].__getitem__(arr, key)
-    if isinstance(key, int):
-      if (e := arr.__class__._base(e)) is not None:
-        e.AddRef(False)
-    else:
-      for i in (e := list(map(arr.__class__._base, e))):
-        if i is not None:
-          i.AddRef(False)
-    return e
-  @staticmethod
-  def _asitem(arr, key, value):
-    return arr.__class__.__bases__[0].__setitem__(arr, key, getattr(value, 'pI', value) if isinstance(key, int) else [getattr(v, 'pI', v) for v in value])
 
 class _IMeta(type):
   @classmethod
@@ -100,7 +86,7 @@ class _IMeta(type):
       cls._protos[n] = ctypes.WINFUNCTYPE(wintypes.ULONG, *i, *o)(p, n, (*((1,) for _i in i), *((2,) for _o in o)))
       cls._protos[n].errcheck = _IUtil._errcheck_no if len(o) == 0 else _IUtil._errcheck_o
   def __mul__(bcls, size):
-    return _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__getitem__': _IUtil._agitem, '__setitem__': _IUtil._asitem, '_base': bcls}))
+    return _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (COM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -108,9 +94,9 @@ class IUnknown(metaclass=_IMeta):
   _protos['AddRef'] = ctypes.WINFUNCTYPE(wintypes.ULONG)(1, 'AddRef')
   _protos['Release'] = ctypes.WINFUNCTYPE(wintypes.ULONG)(2, 'Release')
   def __new__(cls, clsid_component=False, factory=None):
-    if clsid_component is None:
-      return None
     if not clsid_component:
+      if clsid_component is not False:
+        return None
       if (clsid_component := getattr(cls, 'CLSID', None)) is None:
         raise TypeError('%s does not have an implicit constructor' % cls.__name__)
     if isinstance(clsid_component, int):
@@ -163,6 +149,53 @@ class IUnknown(metaclass=_IMeta):
     if __IUtil and hasattr(__IUtil._local, 'initialized'):
       while self.pI and self.refs > 0:
         self.Release()
+
+class _COMUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _agitem(arr, key):
+    acls = arr.__class__
+    e = acls.__bases__[-1].__getitem__(arr, key)
+    return _COMUtil._interface(acls._base(e), getattr(arr, '_ibase', None)) if isinstance(key, int) else [_COMUtil._interface(acls._base(c), getattr(arr, '_ibase', None)) for c in e]
+  @staticmethod
+  def _asitem(arr, key, value):
+    acls = arr.__class__
+    return acls.__bases__[-1].__setitem__(arr, key, acls._base(value) if isinstance(key, int) else [acls._base(v) for v in value])
+  @staticmethod
+  def _interface(com, icls=None):
+    if not hasattr(com, 'com'):
+      com.com = ctypes.cast(com, wintypes.LPVOID)
+    if (i := (icls or com.icls)(com.com)) is None:
+      return None
+    i.AddRef(False)
+    return i
+
+class _COMMeta(wintypes.LPVOID.__class__):
+  def __mul__(bcls, size):
+    return _COMUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__getitem__': _COMUtil._agitem, '__setitem__': _COMUtil._asitem, '_base': bcls}))
+
+class COM(wintypes.LPVOID, metaclass=_COMMeta):
+  icls = IUnknown
+  def __init__(self, interface=None):
+    if isinstance(interface, IUnknown):
+      self.interface = interface
+      self.value = getattr(interface.pI, 'value', interface.pI)
+      self.icls = interface.__class__
+    else:
+      self.interface = self.__class__.icls(None)
+      self.value = getattr(interface, 'value', interface)
+      self.icls = self.__class__.icls
+    self.com = ctypes.cast(self, wintypes.LPVOID)
+  @property
+  def value(self):
+    return getattr(getattr(self, 'com', ctypes.cast(self, wintypes.LPVOID)), 'value', None)
+  @value.setter
+  def value(self, val):
+    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
+    self.com = ctypes.cast(self, wintypes.LPVOID)
+  @property
+  def content(self):
+    return _COMUtil._interface(self)
 
 class IClassFactory(IUnknown):
   IID = GUID('00000001-0000-0000-c000-000000000046')
@@ -1177,12 +1210,16 @@ class IWICPalette(IUnknown):
 class _BLOBUtil:
   _mul_cache = {}
   @staticmethod
+  def _agitem(arr, key):
+    e = arr.__class__.__bases__[0].__getitem__(arr, key)
+    return e.content if isinstance(key, int) else [b.content for b in e]
+  @staticmethod
   def _asitem(arr, key, value):
     return arr.__class__.__bases__[0].__setitem__(arr, key, BLOB(value) if isinstance(key, int) else list(map(BLOB, value)))
 
 class _BLOBMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return _BLOBUtil._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _BLOBUtil._asitem}))
+    return _BLOBUtil._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__getitem__': _BLOBUtil._agitem, '__setitem__': _BLOBUtil._asitem}))
 
 class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   _fields_ = [('cbSize', wintypes.ULONG), ('pBlobdata', wintypes.LPVOID)]
@@ -1201,12 +1238,16 @@ class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
 class _BSTRUtil:
   _mul_cache = {}
   @staticmethod
+  def _agitem(arr, key):
+    e = arr.__class__.__bases__[0].__getitem__(arr, key)
+    return e.content if isinstance(key, int) else [b.content for b in e]
+  @staticmethod
   def _asitem(arr, key, value):
     return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, BSTR) else BSTR(value)) if isinstance(key, int) else [v if isinstance(v, BSTR) else BSTR(v) for v in value])
 
 class _BSTRMeta(ctypes._Pointer.__class__):
   def __mul__(bcls, size):
-    return _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__setitem__': _BSTRUtil._asitem}))
+    return _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
 
 class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
   _type_ = wintypes.WCHAR
@@ -1235,12 +1276,11 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
     else:
       self._needsfree = True
       bstr = wintypes.LPVOID(oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data)))
-    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = bstr.value
-    self.bstr = ctypes.cast(self, ctypes.c_void_p)
+    self.value = bstr.value
     return self
   @property
   def value(self):
-    return getattr(getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p)), 'value', 0)
+    return getattr(getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p)), 'value', None)
   @value.setter
   def value(self, val):
     ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
@@ -1266,7 +1306,7 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
     return self
 PBSTR = ctypes.POINTER(BSTR)
 
-class DATE(float):
+class FDate(float):
   def __new__(cls, dt=0):
     if isinstance(dt, str):
       try:
@@ -1284,6 +1324,8 @@ class DATE(float):
       dt = (dt - datetime.datetime(1899, 12, 30, 0, 0, 0, 0, (None if dt.tzinfo is None else datetime.timezone.utc))) / datetime.timedelta(1)
     elif isinstance(dt, (int, float)):
       pass
+    elif isinstance(dt, wintypes.DOUBLE):
+      dt = dt.value
     else:
       return None
     self = float.__new__(cls, dt)
@@ -1304,6 +1346,30 @@ class DATE(float):
       return '<%f: >' % self
   def __repr__(self):
     return str(self)
+
+class _DATEUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _agitem(arr, key):
+    e = arr.__class__.__bases__[0].__getitem__(arr, key)
+    return e.content if isinstance(key, int) else [d.content for d in e]
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, DATE) else DATE(value)) if isinstance(key, int) else [v if isinstance(v, DATE) else DATE(v) for v in value])
+
+class _DATEMeta(wintypes.DOUBLE.__class__):
+  def __mul__(bcls, size):
+    return _DATEUtil._mul_cache.setdefault((bcls, size), type('DATE_Array_%d' % size, (wintypes.DOUBLE.__class__.__mul__(bcls, size),), {'__getitem__': _DATEUtil._agitem, '__setitem__': _DATEUtil._asitem}))
+
+class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
+  def __init__(self, dt=0):
+    wintypes.DOUBLE.__init__(self, FDate(dt))
+  @property
+  def content(self):
+    return FDate(self)
+  @content.setter
+  def content(self, data):
+    self.value = FDate(data)
 
 class CA(ctypes.Structure):
   _fields_ = [('vc', wintypes.DWORD), ('vp', wintypes.LPVOID)]
@@ -1333,6 +1399,8 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
   _type_ = wintypes.USHORT
   oleauto32.SafeArrayCreate.restype = wintypes.LPVOID
   def __new__(cls, *args):
+    if len(args) == 2 and isinstance(args[1], PSAFEARRAY):
+      args = (args[1],)
     if len(args) == 1:
       if (psafearray := (args[0].psafearray if isinstance(args[0], PSAFEARRAY) else args[0])) is None:
         return None
@@ -1360,6 +1428,7 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
       self.size = self.esize
       for dim in range(self.ndims):
         self.size *= shape[dim]
+      self._pdata = args[0]
     elif len(args) == 2:
       vtype, data = args
       if (vtype := _BVType.vtype_code(vtype)) is None:
@@ -1397,6 +1466,8 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
         ctypes.memmove(pdata, ctypes.pointer(ctypes.c_byte.from_buffer(data)), self.size)
         if oleauto32.SafeArrayUnaccessData(psafearray):
           return None
+        if issubclass(_BVARIANT.code_ctype[vtype], (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, VARIANT)):
+          self._pdata = ctypes.pointer(data)
     else:
       return None
     ctypes.c_void_p.from_address(ctypes.addressof(self)).value = psafearray.value
@@ -1486,7 +1557,6 @@ class PropVariantType(_BVType):
 class _BVUtil:
   _mul_cache = {}
   @staticmethod
-  
   def _ainit(arr, *args, needsclear=False, **kwargs):
     arr.__class__.__bases__[0].__init__(arr, *args, **kwargs)
     arr._needsclear = needsclear
@@ -1512,6 +1582,8 @@ class _BVUtil:
     p = wintypes.LPVOID(addr)
     p._bvariant = bvar
     return p
+  class COMSTREAM(COM):
+    icls = IStream
 
 class _BVMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
@@ -1545,11 +1617,11 @@ class _BVMeta(ctypes.Structure.__class__):
       cls.filetime = property(lambda s: wintypes.FILETIME.from_buffer_copy(s._filetime), cls._filetime.__set__, cls._filetime.__delete__)
     if hasattr(cls, 'date'):
       cls._date = cls.date
-      cls.date = property(lambda s: DATE(s._date), lambda s, v: setattr(s, '_date', DATE(v)), cls._date.__delete__)
+      cls.date = property(lambda s: DATE(s._date).content, lambda s, v: setattr(s, '_date', DATE(v)), cls._date.__delete__)
     for n in ('punkVal', 'pdispVal', 'pStorage', 'pStream'):
       if hasattr(cls, n):
         setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property(lambda s, _n='_'+n: _BVUtil._idup(getattr(s, _n), IStream if _n == '_pStream' else IUnknown), lambda s, v, _n='_'+n: setattr(s, _n, v.pI if isinstance(v, IUnknown) else v), getattr(cls, '_' + n, '__delete__')))
+        setattr(cls, n, property(lambda s, _n='_'+n: getattr(s, _n).content, lambda s, v, _n='_'+n: setattr(s, _n, COM(v)), getattr(cls, '_' + n, '__delete__')))
     if hasattr(cls, 'pclipdata'):
       cls._pclipdata = cls.pclipdata
       cls.pclipdata = property(lambda s: _BVUtil._padup(s._pclipdata), lambda s, v: setattr(s, '_pclipdata', v if isinstance(v, wintypes.PBYTES16) else ((ctypes.pointer(v) if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16)))), cls._pclipdata.__delete__)
@@ -1569,7 +1641,7 @@ class _BVMeta(ctypes.Structure.__class__):
 class _BVARIANT(metaclass=_BVMeta):
   vtype_code = {'VT_EMPTY': 0, 'VT_NULL': 1, 'VT_I1': 16, 'VT_UI1': 17, 'VT_I2': 2, 'VT_UI2': 18, 'VT_I4': 3, 'VT_UI4': 19, 'VT_INT': 22, 'VT_UINT': 23, 'VT_I8': 20, 'VT_UI8': 21, 'VT_R4': 4, 'VT_R8': 5, 'VT_BOOL': 11, 'VT_ERROR': 10, 'VT_CY': 6, 'VT_DATE': 7, 'VT_FILETIME': 64, 'VT_CLSID': 72, 'VT_CF': 71, 'VT_BSTR': 8, 'VT_BLOB': 65, 'VT_BLOBOBJECT': 70, 'VT_LPSTR': 30, 'VT_LPWSTR': 31, 'VT_UNKNOWN': 13, 'VT_DISPATCH': 9, 'VT_STREAM': 66, 'VT_STREAMED_OBJECT': 68, 'VT_STORAGE': 67, 'VT_STORED_OBJECT': 69, 'VT_VERSIONED_STREAM': 73, 'VT_DECIMAL': 14, 'VT_VECTOR': 4096, 'VT_ARRAY': 8192, 'VT_BYREF': 16384, 'VT_VARIANT': 12}
   code_vtype = {co: vt for vt, co in vtype_code.items()}
-  code_ctype = {16: wintypes.CHAR, 17: wintypes.BYTE, 2: wintypes.SHORT, 18: wintypes.USHORT, 3: wintypes.LONG, 19: wintypes.ULONG, 22: wintypes.INT, 23: wintypes.UINT, 20: wintypes.LARGE_INTEGER, 21: wintypes.ULARGE_INTEGER, 4: wintypes.FLOAT, 5: wintypes.DOUBLE, 11: wintypes.VARIANT_BOOL, 10: wintypes.ULONG, 6: wintypes.LARGE_INTEGER, 7: wintypes.DOUBLE, 64: wintypes.FILETIME, 72: wintypes.PGUID, 71: wintypes.PBYTES16, 8: BSTR, 65: BLOB, 70: BLOB, 30: wintypes.LPSTR, 31: wintypes.LPWSTR, 13: wintypes.LPVOID, 9: wintypes.LPVOID, 66: wintypes.LPVOID, 68: wintypes.LPVOID, 67: wintypes.LPVOID, 69: wintypes.LPVOID, 73: wintypes.LPVOID, 14: wintypes.BYTES16, 12: None, 4096: CA, 8192: wintypes.LPVOID, 16384: wintypes.LPVOID}
+  code_ctype = {16: wintypes.CHAR, 17: wintypes.BYTE, 2: wintypes.SHORT, 18: wintypes.USHORT, 3: wintypes.LONG, 19: wintypes.ULONG, 22: wintypes.INT, 23: wintypes.UINT, 20: wintypes.LARGE_INTEGER, 21: wintypes.ULARGE_INTEGER, 4: wintypes.FLOAT, 5: wintypes.DOUBLE, 11: wintypes.VARIANT_BOOL, 10: wintypes.ULONG, 6: wintypes.LARGE_INTEGER, 7: wintypes.DOUBLE, 64: wintypes.FILETIME, 72: wintypes.PGUID, 71: wintypes.PBYTES16, 8: BSTR, 65: BLOB, 70: BLOB, 30: wintypes.LPSTR, 31: wintypes.LPWSTR, 13: COM, 9: COM, 66: _BVUtil.COMSTREAM, 68: _BVUtil.COMSTREAM, 67: COM, 69: COM, 73: wintypes.LPVOID, 14: wintypes.BYTES16, 12: None, 4096: CA, 8192: wintypes.LPVOID, 16384: wintypes.LPVOID}
   _vtype = _BVType
   @classmethod
   def vt_co(cls, vt):
