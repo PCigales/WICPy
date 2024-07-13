@@ -86,7 +86,7 @@ class _IMeta(type):
       cls._protos[n] = ctypes.WINFUNCTYPE(wintypes.ULONG, *i, *o)(p, n, (*((1,) for _i in i), *((2,) for _o in o)))
       cls._protos[n].errcheck = _IUtil._errcheck_no if len(o) == 0 else _IUtil._errcheck_o
   def __mul__(bcls, size):
-    return _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (COM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
+    return _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -150,31 +150,31 @@ class IUnknown(metaclass=_IMeta):
       while self.pI and self.refs > 0:
         self.Release()
 
-class _COMUtil:
+class _PCOMUtil:
   _mul_cache = {}
   @staticmethod
   def _agitem(arr, key):
     acls = arr.__class__
     e = acls.__bases__[-1].__getitem__(arr, key)
-    return _COMUtil._interface(acls._base(e), getattr(arr, '_ibase', None)) if isinstance(key, int) else [_COMUtil._interface(acls._base(c), getattr(arr, '_ibase', None)) for c in e]
+    return _PCOMUtil._interface(acls._base(e), getattr(arr, '_ibase', None)) if isinstance(key, int) else [_PCOMUtil._interface(acls._base(c), getattr(arr, '_ibase', None)) for c in e]
   @staticmethod
   def _asitem(arr, key, value):
     acls = arr.__class__
     return acls.__bases__[-1].__setitem__(arr, key, acls._base(value) if isinstance(key, int) else [acls._base(v) for v in value])
   @staticmethod
-  def _interface(com, icls=None):
-    if not hasattr(com, 'com'):
-      com.com = ctypes.cast(com, wintypes.LPVOID)
-    if (i := (icls or com.icls)(com.com)) is None:
+  def _interface(pcom, icls=None):
+    if not hasattr(pcom, 'pcom'):
+      pcom.pcom = ctypes.cast(pcom, wintypes.LPVOID)
+    if (i := (icls or pcom.icls)(pcom.pcom)) is None:
       return None
     i.AddRef(False)
     return i
 
-class _COMMeta(wintypes.LPVOID.__class__):
+class _PCOMMeta(wintypes.LPVOID.__class__):
   def __mul__(bcls, size):
-    return _COMUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__getitem__': _COMUtil._agitem, '__setitem__': _COMUtil._asitem, '_base': bcls}))
+    return _PCOMUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__getitem__': _PCOMUtil._agitem, '__setitem__': _PCOMUtil._asitem, '_base': bcls}))
 
-class COM(wintypes.LPVOID, metaclass=_COMMeta):
+class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
   icls = IUnknown
   def __init__(self, interface=None):
     if isinstance(interface, IUnknown):
@@ -185,17 +185,17 @@ class COM(wintypes.LPVOID, metaclass=_COMMeta):
       self.interface = self.__class__.icls(None)
       self.value = getattr(interface, 'value', interface)
       self.icls = self.__class__.icls
-    self.com = ctypes.cast(self, wintypes.LPVOID)
+    self.pcom = ctypes.cast(self, wintypes.LPVOID)
   @property
   def value(self):
-    return getattr(getattr(self, 'com', ctypes.cast(self, wintypes.LPVOID)), 'value', None)
+    return getattr(getattr(self, 'pcom', ctypes.cast(self, wintypes.LPVOID)), 'value', None)
   @value.setter
   def value(self, val):
     ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
-    self.com = ctypes.cast(self, wintypes.LPVOID)
+    self.pcom = ctypes.cast(self, wintypes.LPVOID)
   @property
   def content(self):
-    return _COMUtil._interface(self)
+    return _PCOMUtil._interface(self)
 
 class IClassFactory(IUnknown):
   IID = GUID('00000001-0000-0000-c000-000000000046')
@@ -1371,6 +1371,24 @@ class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
   def content(self, data):
     self.value = FDate(data)
 
+class PCOMSTREAM(PCOM):
+  icls = IStream
+
+class VERSIONEDSTREAM(ctypes.Structure):
+  _fields_ = [('guidVersion', wintypes.GUID), ('pStream', PCOMSTREAM)]
+  @property
+  def content(self):
+    return (GUID(self.guidVersion.ljust(16, b'\x00')), self.pStream.content)
+  @content.setter
+  def content(self, vs):
+    self.guidVersion = GUID(vs[0])
+    self.pStream = vs[1] if isinstance(vs[1], PCOMSTREAM) else PCOMSTREAM(vs[1])
+  def __init__(self, *args):
+    super().__init__()
+    if args:
+      self.content = args[0] if len(args) == 1 else args[:2]
+PVERSIONEDSTREAM = ctypes.POINTER(VERSIONEDSTREAM)
+
 class CA(ctypes.Structure):
   _fields_ = [('vc', wintypes.DWORD), ('vp', wintypes.LPVOID)]
   def content(self, etype):
@@ -1567,23 +1585,11 @@ class _BVUtil:
         s.__class__._clear(ctypes.byref(s))
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
   @staticmethod
-  def _idup(addr, icls):
-    if (i := icls(addr)) is not None:
-      i.AddRef(False)
-    return i
-  @staticmethod
   def _padup(parr):
     return parr._type_.from_buffer_copy(parr.contents) if parr else None
   @staticmethod
   def _adup(arr):
     return arr.__class__.from_buffer_copy(arr)
-  @staticmethod
-  def _ptie(addr, bvar):
-    p = wintypes.LPVOID(addr)
-    p._bvariant = bvar
-    return p
-  class COMSTREAM(COM):
-    icls = IStream
 
 class _BVMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
@@ -1621,7 +1627,7 @@ class _BVMeta(ctypes.Structure.__class__):
     for n in ('punkVal', 'pdispVal', 'pStorage', 'pStream'):
       if hasattr(cls, n):
         setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property(lambda s, _n='_'+n: getattr(s, _n).content, lambda s, v, _n='_'+n: setattr(s, _n, COM(v)), getattr(cls, '_' + n, '__delete__')))
+        setattr(cls, n, property(lambda s, _n='_'+n: getattr(s, _n).content, lambda s, v, _n='_'+n: setattr(s, _n, PCOM(v)), getattr(cls, '_' + n, '__delete__')))
     if hasattr(cls, 'pclipdata'):
       cls._pclipdata = cls.pclipdata
       cls.pclipdata = property(lambda s: _BVUtil._padup(s._pclipdata), lambda s, v: setattr(s, '_pclipdata', v if isinstance(v, wintypes.PBYTES16) else ((ctypes.pointer(v) if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16)))), cls._pclipdata.__delete__)
@@ -1636,12 +1642,12 @@ class _BVMeta(ctypes.Structure.__class__):
       cls.decVal = property(lambda s: _BVUtil._adup(s._decVal), lambda s, v: setattr(s, '_decVal', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._decVal.__delete__)
     if hasattr(cls, 'pVersionedStream'):
       cls._pVersionedStream = cls.pVersionedStream
-      cls.pVersionedStream = property(lambda s: _BVUtil._ptie(s._pVersionedStream, s), cls._pVersionedStream.__set__, cls._pVersionedStream.__delete__)
+      cls.pVersionedStream = property(lambda s: s._pVersionedStream.contents.content if s._pVersionedStream else None, lambda s, v: setattr(s, '_pVersionedStream', v if isinstance(v, PVERSIONEDSTREAM) else (PVERSIONEDSTREAM(v) if isinstance(v, VERSIONEDSTREAM) else PVERSIONEDSTREAM(VERSIONEDSTREAM(v)))), cls._pVersionedStream.__delete__)
 
 class _BVARIANT(metaclass=_BVMeta):
   vtype_code = {'VT_EMPTY': 0, 'VT_NULL': 1, 'VT_I1': 16, 'VT_UI1': 17, 'VT_I2': 2, 'VT_UI2': 18, 'VT_I4': 3, 'VT_UI4': 19, 'VT_INT': 22, 'VT_UINT': 23, 'VT_I8': 20, 'VT_UI8': 21, 'VT_R4': 4, 'VT_R8': 5, 'VT_BOOL': 11, 'VT_ERROR': 10, 'VT_CY': 6, 'VT_DATE': 7, 'VT_FILETIME': 64, 'VT_CLSID': 72, 'VT_CF': 71, 'VT_BSTR': 8, 'VT_BLOB': 65, 'VT_BLOBOBJECT': 70, 'VT_LPSTR': 30, 'VT_LPWSTR': 31, 'VT_UNKNOWN': 13, 'VT_DISPATCH': 9, 'VT_STREAM': 66, 'VT_STREAMED_OBJECT': 68, 'VT_STORAGE': 67, 'VT_STORED_OBJECT': 69, 'VT_VERSIONED_STREAM': 73, 'VT_DECIMAL': 14, 'VT_VECTOR': 4096, 'VT_ARRAY': 8192, 'VT_BYREF': 16384, 'VT_VARIANT': 12}
   code_vtype = {co: vt for vt, co in vtype_code.items()}
-  code_ctype = {16: wintypes.CHAR, 17: wintypes.BYTE, 2: wintypes.SHORT, 18: wintypes.USHORT, 3: wintypes.LONG, 19: wintypes.ULONG, 22: wintypes.INT, 23: wintypes.UINT, 20: wintypes.LARGE_INTEGER, 21: wintypes.ULARGE_INTEGER, 4: wintypes.FLOAT, 5: wintypes.DOUBLE, 11: wintypes.VARIANT_BOOL, 10: wintypes.ULONG, 6: wintypes.LARGE_INTEGER, 7: wintypes.DOUBLE, 64: wintypes.FILETIME, 72: wintypes.PGUID, 71: wintypes.PBYTES16, 8: BSTR, 65: BLOB, 70: BLOB, 30: wintypes.LPSTR, 31: wintypes.LPWSTR, 13: COM, 9: COM, 66: _BVUtil.COMSTREAM, 68: _BVUtil.COMSTREAM, 67: COM, 69: COM, 73: wintypes.LPVOID, 14: wintypes.BYTES16, 12: None, 4096: CA, 8192: wintypes.LPVOID, 16384: wintypes.LPVOID}
+  code_ctype = {16: wintypes.CHAR, 17: wintypes.BYTE, 2: wintypes.SHORT, 18: wintypes.USHORT, 3: wintypes.LONG, 19: wintypes.ULONG, 22: wintypes.INT, 23: wintypes.UINT, 20: wintypes.LARGE_INTEGER, 21: wintypes.ULARGE_INTEGER, 4: wintypes.FLOAT, 5: wintypes.DOUBLE, 11: wintypes.VARIANT_BOOL, 10: wintypes.ULONG, 6: wintypes.LARGE_INTEGER, 7: wintypes.DOUBLE, 64: wintypes.FILETIME, 72: wintypes.PGUID, 71: wintypes.PBYTES16, 8: BSTR, 65: BLOB, 70: BLOB, 30: wintypes.LPSTR, 31: wintypes.LPWSTR, 13: PCOM, 9: PCOM, 66: PCOMSTREAM, 68: PCOMSTREAM, 67: PCOM, 69: PCOM, 73: PVERSIONEDSTREAM, 14: wintypes.BYTES16, 12: None, 4096: CA, 8192: wintypes.LPVOID, 16384: wintypes.LPVOID}
   _vtype = _BVType
   @classmethod
   def vt_co(cls, vt):
