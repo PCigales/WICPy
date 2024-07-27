@@ -469,6 +469,9 @@ class _GMeta(wintypes.GUID.__class__):
     if hasattr(cls, 'value'):
       del cls.value
 
+UUID = _GMeta('UUID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {}, '_tab_gn': {}, '_def': None})
+PUUID = type('PUUID', (_BPGUID, ctypes.POINTER(UUID)), {'_type_': UUID})
+
 WICContainerFormat = {
   'Bmp': GUID(0xaf1d87e, 0xfcfe, 0x4188, 0xbd, 0xeb, 0xa7, 0x90, 0x64, 0x71, 0xcb, 0xe3),
   'Png': GUID(0x1b7cfaf4, 0x713f, 0x473c, 0xbb, 0xcd, 0x61, 0x37, 0x42, 0x5f, 0xae, 0xaf),
@@ -1417,41 +1420,43 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
   _type_ = wintypes.USHORT
   oleauto32.SafeArrayCreate.restype = wintypes.LPVOID
   def __new__(cls, *args):
-    if len(args) == 2 and isinstance(args[1], PSAFEARRAY):
+    l = len(args)
+    if l == 2 and isinstance(args[1], PSAFEARRAY):
+      l = 1
       args = (args[1],)
-    if len(args) == 1:
-      if (psafearray := (args[0].psafearray if isinstance(args[0], PSAFEARRAY) else args[0])) is None:
-        return None
-      self = ctypes.POINTER(wintypes.USHORT).__new__(cls)
-      vtype = ctypes.c_ushort()
-      if oleauto32.SafeArrayGetVartype(psafearray, ctypes.byref(vtype)):
-        return None
-      self.vtype = vtype.value
-      self.ndims = oleauto32.SafeArrayGetDim(psafearray)
-      if self.ndims == 0:
-        return None
-      self.esize = oleauto32.SafeArrayGetElemsize(psafearray)
-      if self.esize == 0:
-        return None
-      shape = []
-      for dim in range(1, self.ndims + 1):
-        lbound = wintypes.LONG()
-        if oleauto32.SafeArrayGetLBound(psafearray, wintypes.UINT(dim), ctypes.byref(lbound)):
+    self = ctypes.POINTER(wintypes.USHORT).__new__(cls)
+    if l == 0:
+      psafearray = wintypes.LPVOID()
+    elif l == 1:
+      if (psafearray := (args[0].psafearray if isinstance(args[0], PSAFEARRAY) else (args[0] if isinstance(args[0], wintypes.LPVOID) else wintypes.LPVOID(args[0])))):
+        vtype = ctypes.c_ushort()
+        if oleauto32.SafeArrayGetVartype(psafearray, ctypes.byref(vtype)):
           return None
-        ubound = wintypes.LONG()
-        if oleauto32.SafeArrayGetUBound(psafearray, wintypes.UINT(dim), ctypes.byref(ubound)):
+        self.vtype = vtype.value
+        self.ndims = oleauto32.SafeArrayGetDim(psafearray)
+        if self.ndims == 0:
           return None
-        shape.append(ubound.value - lbound.value + 1)
-      self.shape = tuple(shape)
-      self.size = self.esize
-      for dim in range(self.ndims):
-        self.size *= shape[dim]
+        self.esize = oleauto32.SafeArrayGetElemsize(psafearray)
+        if self.esize == 0:
+          return None
+        shape = []
+        for dim in range(1, self.ndims + 1):
+          lbound = wintypes.LONG()
+          if oleauto32.SafeArrayGetLBound(psafearray, wintypes.UINT(dim), ctypes.byref(lbound)):
+            return None
+          ubound = wintypes.LONG()
+          if oleauto32.SafeArrayGetUBound(psafearray, wintypes.UINT(dim), ctypes.byref(ubound)):
+            return None
+          shape.append(ubound.value - lbound.value + 1)
+        self.shape = tuple(shape)
+        self.size = self.esize
+        for dim in range(self.ndims):
+          self.size *= shape[dim]
       self._pdata = args[0]
-    elif len(args) == 2:
+    elif l == 2:
       vtype, data = args
       if (vtype := _BVType.vtype_code(vtype)) is None:
         return None
-      self = ctypes.POINTER(wintypes.USHORT).__new__(cls)
       vtype &= 4095
       self.vtype = vtype
       if isinstance(data, ctypes.Array):
@@ -1495,7 +1500,7 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
     super().__init__()
   @property
   def content(self):
-    if self.psafearray is None:
+    if not self.psafearray:
       return None
     data = ctypes.create_string_buffer(self.size)
     if self.size > 0:
@@ -1509,16 +1514,24 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
       atype = atype * d
     return atype.from_buffer(data)
   def __del__(self):
-    if getattr(self, 'psafearray', None) is not None and getattr(self, '_needsdestroy', False):
+    if getattr(self, 'psafearray', None) and getattr(self, '_needsdestroy', False):
       psafearray = self.psafearray
       self.psafearray = None
-      if self.size > 0:
+      if self.size > 0 and not getattr(self, '_needsclear', False):
         pdata = wintypes.LPVOID()
         if oleauto32.SafeArrayAccessData(psafearray, ctypes.byref(pdata)):
           return
         ctypes.memset(pdata, 0, self.size)
         oleauto32.SafeArrayUnaccessData(psafearray)
       oleauto32.SafeArrayDestroy(psafearray)
+  def __ctypes_from_outparam__(self):
+    self = PSAFEARRAY(ctypes.cast(self, ctypes.c_void_p))
+    if self is not None:
+      self._needsdestroy = True
+      self._needsclear = True
+    return self
+PPSAFEARRAY = ctypes.POINTER(PSAFEARRAY)
+PSAFEARRAY.duplicate = lambda s, _d=ctypes.WINFUNCTYPE(wintypes.ULONG, PSAFEARRAY, PPSAFEARRAY)(('SafeArrayCopy', oleauto32), ((1,), (2,))): _d(s)
 
 class _BVType(int):
   @classmethod
@@ -1633,7 +1646,7 @@ class _BVMeta(ctypes.Structure.__class__):
       cls.pclipdata = property(lambda s: _BVUtil._padup(s._pclipdata), lambda s, v: setattr(s, '_pclipdata', v if isinstance(v, wintypes.PBYTES16) else ((ctypes.pointer(v) if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16)))), cls._pclipdata.__delete__)
     if hasattr(cls, 'puuid'):
       cls._puuid = cls.puuid
-      cls.puuid = property(lambda s: _BVUtil._padup(s._puuid), lambda s, v: setattr(s, '_puuid', v if isinstance(v, wintypes.PGUID) else ((ctypes.pointer(v) if isinstance(v, wintypes.GUID) else ctypes.cast(ctypes.c_char_p(v), wintypes.PGUID)))), cls._puuid.__delete__)
+      cls.puuid = property(lambda s: _BVUtil._padup(s._puuid), lambda s, v: setattr(s, '_puuid', v if isinstance(v, wintypes.PGUID) else ((ctypes.cast(ctypes.pointer(v), wintypes.PGUID) if isinstance(v, wintypes.GUID) else ctypes.cast(ctypes.c_char_p(v), wintypes.PGUID)))), cls._puuid.__delete__)
     if hasattr(cls, 'pad'):
       cls._pad = cls.pad
       cls.pad = property(lambda s: _BVUtil._adup(s._pad), lambda s, v: setattr(s, '_pad', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._pad.__delete__)
@@ -3625,6 +3638,7 @@ class IWMPMedia(IUnknown, metaclass=_IWMPMMeta):
     return None if (c := self.GetAttributeCountByType(attribute_type)) is None else tuple(self.GetItemInfoByType(attribute_type, '', ind) for ind in range(c))
   def __getattr__(self, name):
     return self.__getattribute__(name) if (an := self.__class__.__class__._alias[self.__class__.ItemType].get(name.lower())) is None else getattr(self, an)
+IWMPMedia3 = IWMPMedia
 
 class IWMPPhoto(IWMPMedia):
   ItemType = 'photo'
@@ -3732,6 +3746,7 @@ class IWMPMediaCollection(IUnknown):
     return self.GetByQuery(query, 'photo', sort_attribute, sort_ascending)
   def GetPhotosByFolder(self, folder_name, sort_attribute='', sort_ascending=True):
     return self.GetByFolder(folder_name, 'photo', sort_attribute, sort_ascending)
+IWMPMediaCollection2 = IWMPMediaCollection
 
 class IWMPCore(IUnknown):
   CLSID = 'WMPlayer.ocx'
@@ -3747,6 +3762,7 @@ class IWMPCore(IUnknown):
     return None if (pl := self.GetMediaCollection()) is None else (None if (q := pl.CreatePhotoQuery(*conditions_groups)) is None else pl.GetPhotosByQuery(q, sort_attribute, sort_ascending))
   def GetPhotosByFolder(self, folder_name, sort_attribute='', sort_ascending=True):
     return None if (pl := self.GetMediaCollection()) is None else pl.GetPhotosByFolder(folder_name, sort_attribute, sort_ascending)
+IWMPCore3 = IWMPCore
 
 def Initialize(mode=6):
   if isinstance(mode, str):
