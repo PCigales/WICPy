@@ -2780,7 +2780,7 @@ class IWICDevelopRaw(IWICBitmapFrameDecode):
   _protos['SetRenderMode'] = 40, (WICRAWRENDERMODE,), ()
   _protos['GetRenderMode'] = 41, (), (WICPRAWRENDERMODE,)
   def QueryRawCapabilitiesInfo(self):
-    return self.__class__._protos['QueryRawCapabilitiesInfo'](self.pI, ci)
+    return self.__class__._protos['QueryRawCapabilitiesInfo'](self.pI)
   def GetCurrentParameterSet(self):
     return IPropertyBag2(self.__class__._protos['GetCurrentParameterSet'](self.pI))
   def LoadParameterSet(self, parameter_set):
