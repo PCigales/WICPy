@@ -1051,10 +1051,15 @@ WICRAWROTATIONCAPABILITIES = type('WICRAWROTATIONCAPABILITIES', (_BCode, wintype
 
 class WICRAWCAPABILITIESINFO(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbSize', wintypes.UINT), ('CodecMajorVersion', wintypes.UINT), ('CodecMinorVersion', wintypes.UINT), ('ExposureCompensationSupport', WICRAWCAPABILITIES), ('ContrastSupport', WICRAWCAPABILITIES), ('RGBWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupportMask', WICNAMEDWHITEPOINT), ('KelvinWhitePointSupport', WICRAWCAPABILITIES), ('GammaSupport', WICRAWCAPABILITIES), ('TintSupport', WICRAWCAPABILITIES), ('SaturationSupport', WICRAWCAPABILITIES), ('SharpnessSupport', WICRAWCAPABILITIES), ('NoiseReductionSupport', WICRAWCAPABILITIES), ('NDestinationColorProfileSupport', WICRAWCAPABILITIES), ('ToneCurveSupport', WICRAWCAPABILITIES), ('RotationSupport', WICRAWROTATIONCAPABILITIES), ('RenderModeSupport', WICRAWCAPABILITIES)]
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.cbSize = ctypes.sizeof(self.__class__)
   def to_dict(self):
     return {k[0]: getattr(self, k[0]) for k in self.__class__._fields_ if k[0] != 'cbSize'}
   @property
   def value(self):
+    return self.to_dict()
+  def __ctypes_from_outparam__(self):
     return self.to_dict()
 WICPRAWCAPABILITIESINFO = ctypes.POINTER(WICRAWCAPABILITIESINFO)
 
@@ -2743,7 +2748,7 @@ class IWICProgressiveLevelControl(IUnknown):
 
 class IWICDevelopRaw(IWICBitmapFrameDecode):
   IID = GUID(0xfbec5e44, 0xf7be, 0x4b65, 0xb7, 0xf8, 0xc0, 0xc8, 0x1f, 0xef, 0x02, 0x6d)
-  _protos['QueryRawCapabilitiesInfo'] = 11, (WICPRAWCAPABILITIESINFO,), ()
+  _protos['QueryRawCapabilitiesInfo'] = 11, (), (WICPRAWCAPABILITIESINFO,)
   _protos['LoadParameterSet'] = 12, (WICRAWPARAMETERSET,), ()
   _protos['GetCurrentParameterSet'] = 13, (), (wintypes.PLPVOID,)
   _protos['SetExposureCompensation'] = 14, (wintypes.DOUBLE,), ()
@@ -2775,9 +2780,7 @@ class IWICDevelopRaw(IWICBitmapFrameDecode):
   _protos['SetRenderMode'] = 40, (WICRAWRENDERMODE,), ()
   _protos['GetRenderMode'] = 41, (), (WICPRAWRENDERMODE,)
   def QueryRawCapabilitiesInfo(self):
-    ci = WICRAWCAPABILITIESINFO()
-    ci.cbSize = ctypes.sizeof(WICRAWCAPABILITIESINFO)
-    return None if self.__class__._protos['QueryRawCapabilitiesInfo'](self.pI, ci) is None else ci.value
+    return self.__class__._protos['QueryRawCapabilitiesInfo'](self.pI, ci)
   def GetCurrentParameterSet(self):
     return IPropertyBag2(self.__class__._protos['GetCurrentParameterSet'](self.pI))
   def LoadParameterSet(self, parameter_set):
