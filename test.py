@@ -1194,7 +1194,7 @@ print(D2D1RenderTarget.GetDeviceContext().GetTarget())
 #Starting to draw
 D2D1RenderTarget.BeginDraw()
 #Setting a rotation matrix
-D2D1RenderTarget.SetTransform((0, 1, -1, 0, 260, -60))
+D2D1RenderTarget.SetTransform(D2D1Factory.MakeRotateMatrix(90, (160, 100)))
 print(D2D1RenderTarget.GetTransform()[:])
 #Clearing
 D2D1RenderTarget.Clear((1, 0, 0, 1))

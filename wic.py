@@ -1098,7 +1098,8 @@ D2D1ALPHAMODE = type('D2D1ALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.l
 
 class D2D1PIXELFORMAT(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('format', DXGIFORMAT), ('alphaMode', D2D1ALPHAMODE)]
-D2D1PPIXELFORMAT = ctypes.POINTER(D2D1PIXELFORMAT)
+class D2D1PPIXELFORMAT(_BPStruct, ctypes.POINTER(D2D1PIXELFORMAT)):
+  _type_ = D2D1PIXELFORMAT
 
 class WICIMAGEPARAMETERS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('PixelFormat', D2D1PIXELFORMAT), ('DpiX', wintypes.FLOAT), ('DpiY', wintypes.FLOAT), ('Top', wintypes.FLOAT), ('Left', wintypes.FLOAT), ('PixelWidth', wintypes.UINT), ('PixelHeight', wintypes.UINT)]
@@ -3906,12 +3907,18 @@ class D2D1PSIZEU(_BPStruct, ctypes.POINTER(D2D1SIZEU)):
 
 class D2D1SIZEF(_BTStruct, ctypes.Structure):
   _fields_ = [('width', wintypes.FLOAT), ('height', wintypes.FLOAT)]
-D2D1PSIZEF = ctypes.POINTER(D2D1SIZEF)
+class D2D1PSIZEF(_BPStruct, ctypes.POINTER(D2D1SIZEF)):
+  _type_ = D2D1SIZEF
 
 class D2D1POINT2U(_BTStruct, ctypes.Structure):
   _fields_ = [('x', wintypes.UINT), ('y', wintypes.UINT)]
 class D2D1PPOINT2U(_BPStruct, ctypes.POINTER(D2D1POINT2U)):
   _type_ = D2D1POINT2U
+
+class D2D1POINT2F(_BTStruct, ctypes.Structure):
+  _fields_ = [('x', wintypes.FLOAT), ('y', wintypes.FLOAT)]
+class D2D1PPOINT2F(_BPStruct, ctypes.POINTER(D2D1POINT2F)):
+  _type_ = D2D1POINT2F
 
 class D2D1RECTU(_BTStruct, ctypes.Structure):
   _fields_ = [('left', wintypes.UINT), ('top', wintypes.UINT), ('right', wintypes.UINT), ('bottom', wintypes.UINT)]
@@ -3985,6 +3992,9 @@ class D2D1RENDERTARGETPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta)
 class D2D1PRENDERTARGETPROPERTIES(_BPStruct, ctypes.POINTER(D2D1RENDERTARGETPROPERTIES)):
   _type_ = D2D1RENDERTARGETPROPERTIES
 
+D2D1CompatibleRenderTargetOptions = {'None': 0, 'GDICompatible': 1}
+D2D1COMPATIBLERENDERTARGETOPTIONS = type('D2D1COMPATIBLERENDERTARGETOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1CompatibleRenderTargetOptions.items()}, '_tab_cn': {c: n for n, c in D2D1CompatibleRenderTargetOptions.items()}, '_def': 0})
+
 D2D1PresentOptions = {'None': 0, 'RetainContents': 1, 'Immediately': 2}
 D2D1PRESENTOPTIONS = type('D2D1PRESENTOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1PresentOptions.items()}, '_tab_cn': {c: n for n, c in D2D1PresentOptions.items()}, '_def': 0})
 
@@ -4043,6 +4053,7 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['CreateBitmap'] = 4, (D2D1SIZEU, PBUFFER, wintypes.UINT, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
   _protos['CreateBitmapFromWICBitmap'] = 5, (wintypes.LPVOID, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
   _protos['CreateSharedBitmap'] = 6, (PUUID, wintypes.LPVOID, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
+  _protos['CreateCompatibleRenderTarget'] = 12, (D2D1PSIZEF, D2D1PSIZEU, D2D1PPIXELFORMAT, D2D1COMPATIBLERENDERTARGETOPTIONS), (wintypes.PLPVOID,)
   _protos['DrawBitmap'] = 26, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1BITMAPINTERPOLATIONMODE, D2D1PRECTF), (), None
   _protos['SetTransform'] = 30, (ctypes.POINTER(wintypes.FLOAT * 6),), (), None
   _protos['GetTransform'] = 31, (), (ctypes.POINTER(wintypes.FLOAT * 6),), None
@@ -4106,6 +4117,8 @@ class ID2D1RenderTarget(ID2D1Resource):
     return self._protos['EndDraw'](self.pI)
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb)
+  def CreateCompatibleRenderTarget(self, size=None, pixel_size=None, pixel_format=None, options=0):
+    return ID2D1BitmapRenderTarget(self.__class__._protos['CreateCompatibleRenderTarget'](self.pI, size, pixel_size, pixel_format, options), self.factory)
   def GetDeviceContext(self):
     return self.QueryInterface(ID2D1DeviceContext, self.factory)
 
@@ -4205,6 +4218,12 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None, perspective_transform=None):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, (perspective_transform if (perspective_transform is None or isinstance(perspective_transform, wintypes.FLOAT * 16)) else (wintypes.FLOAT * 16)(*perspective_transform)))
 
+class ID2D1BitmapRenderTarget(ID2D1RenderTarget):
+  IID = GUID(0x2cd90695, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
+  _protos['GetBitmap'] = 57, (), (wintypes.PLPVOID,)
+  def GetBitmap(self):
+    return ID2D1Bitmap(self.__class__._protos['GetBitmap'](self.pI), self.factory)
+
 class ID2D1HwndRenderTarget(ID2D1RenderTarget):
   IID = GUID(0x2cd90698, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
   _protos['CheckWindowState'] = 57, (), (), D2D1WINDOWSTATE
@@ -4282,6 +4301,21 @@ class ID2D1Factory(IUnknown):
     if (render_target := self.CreateDxgiSurfaceRenderTarget(surface, ('Hardware', (format, (alpha_mode or 'Premultiplied')), dpiX, dpiY, usage, 'Default'))) is None:
       return None
     return surface, render_target
+  MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
+  MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
+  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix if isinstance(matrix, wintypes.FLOAT * 6) else (wintypes.FLOAT * 6)(*matrix)).value)
+  InvertMatrix = staticmethod(lambda matrix, _im=(f := ctypes.WINFUNCTYPE(wintypes.BOOLE, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1InvertMatrix', d2d1), ((3,),)), setattr(f, 'errcheck', lambda r, f, a: a if r else None))[0]: _im(matrix if isinstance(matrix, wintypes.FLOAT * 6) else (wintypes.FLOAT * 6)(*matrix)))
+  ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1COLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
+  MakeRotationXMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1))[2])
+  MakeRotationYMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1))[2])
+  MakeRotationZMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)(c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[2])
+  MakeTranslationMatrix4x4 = staticmethod(lambda x, y, z: (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1))
+  MakeScaleMatrix4x4 = staticmethod(lambda x, y, z: (x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1))
+  MakeRotationMatrix4x4 = staticmethod(lambda x, y, z, angle: (l := math.hypot(x, y, z), x := x / l, y := y / l, z := z / l, c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)((1 - c) * x * x + c, (1 - c) * x * y + z * s, (1 - c) * x * z - y * s, 0, (1 - c) * y * x - z * s, (1 - c) * y * y + c, (1 - c) * y * z + x * s, 0, (1 - c) * z * x + y * s, (1 - c) * z * y - x * s, (1 - c) * z * z + c, 0, 0, 0, 0, 1))[6])
+  MakeSkewXMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), (wintypes.FLOAT * 16)(1, 0, 0, 0, t, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
+  MakeSkewYMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), (wintypes.FLOAT * 16)(1, t, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
+  MakePerspectiveMatrix4x4 = staticmethod(lambda depth: (wintypes.FLOAT * 16)(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, - 1 / depth, 0, 0, 0, 1))
+  MultiplyMatrix4x4 = staticmethod(lambda a, b: (wintypes.FLOAT * 16)(*(sum(a[4 * r + i] * b[c + 4 * i] for i in range(4)) for r in range(4) for c in range(4))))
 ID2D1Factory1 = ID2D1Factory
 
 class _WMPMAttribute:
