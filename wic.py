@@ -4155,9 +4155,9 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
       return self.CreateBitmapFromDxgiSurface(target, (((format or source.GetFormat()), (alpha_mode or 'Premultiplied')), dpiX, dpiY, ('Target' if drawable else 'Target | CannotDraw'), color_context))
     else:
       return self.CreateBitmap(width, height, (((format or 'B8G8R8A8_UNORM'), (alpha_mode or 'Premultiplied')), dpiX, dpiY, 'CPURead | CannotDraw', color_context), source, source_pitch)
-  def CreateDefaultBitmap(self, source=None, source_pitch=0, width=0, height=0, format=0, alpha_mode=0, dpiX=0, dpiY=0, color_context=None, drawable=None, share_surface=False):
+  def CreateDefaultBitmap(self, source=None, source_pitch=0, width=0, height=0, format=0, alpha_mode=0, dpiX=0, dpiY=0, color_context=None, drawable=None, share_surface=False, buffer_index=0):
     if isinstance(source, IDXGISwapChain):
-      if (source := source.GetSurface()) is None:
+      if (source := source.GetSurface(buffer_index)) is None:
         return None
     if isinstance(source, IWICBitmapSource):
       return self.CreateBitmapFromWICBitmap(source, ((format, alpha_mode), dpiX, dpiY, 'None', color_context))
@@ -4237,7 +4237,7 @@ class ID2D1Device(ID2D1Resource):
     return dxgi_device
 
 class ID2D1Factory(IUnknown):
-  IID = GUID(0x94f81a73, 0x9212, 0x4376, 0x9c, 0x58, 0xb1, 0x6a, 0x3a, 0x0d, 0x39, 0x92)
+  IID = GUID(0xbb12d362, 0xdaee, 0x4b9a, 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f)
   _protos['CreateWicBitmapRenderTarget'] = 13, (wintypes.LPVOID, D2D1PRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateHwndRenderTarget'] = 14, (D2D1PRENDERTARGETPROPERTIES, D2D1PHWNDRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateDxgiSurfaceRenderTarget'] = 15, (wintypes.LPVOID, D2D1PRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
