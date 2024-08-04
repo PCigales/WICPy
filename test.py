@@ -1040,4 +1040,289 @@ if IPhoto:
 del ILibrary2
 del ILibrary
 
+#Creating a D3D11 device and getting the underlying DXGI device
+D3D11Device = ID3D11Device()
+DXGIDevice = D3D11Device.GetDXGIDevice()
+#Creating a D2D1 factory
+D2D1Factory = ID2D1Factory()
+#Creating a D2D1 device
+D2D1Device = D2D1Factory.CreateDevice(DXGIDevice)
+print(D2D1Device, D2D1Device.GetMaximumTextureMemory())
+#Creating a D2D1 device context from the D2D1 device
+D2D1DeviceContext = D2D1Device.CreateDeviceContext()
+print(D2D1DeviceContext.GetDevice().pI, D2D1Device.pI)
+#Retrieving and changing the rendering controls
+print(rc := D2D1DeviceContext.GetRenderingControls())
+D2D1DeviceContext.SetRenderingControls(('8BPC_UNORM', (2048, 2048)))
+print(D2D1DeviceContext.GetRenderingControls())
+D2D1DeviceContext.SetRenderingControls(rc)
+#Retrieving and changing the primitive blend
+print(D2D1DeviceContext.GetPrimitiveBlend())
+D2D1DeviceContext.SetPrimitiveBlend('Max')
+print(D2D1DeviceContext.GetPrimitiveBlend())
+D2D1DeviceContext.SetPrimitiveBlend()
+#Retrieving all supported and unsupported DXGI formats
+print(sorted(((f, D2D1DeviceContext.IsDxgiFormatSupported(f)) for f in DXGIFormat), key=(lambda t: t[1]), reverse=True))
+#Creating D2D1 color contexts from type, file, WIC color context
+D2D1ColorContext = D2D1DeviceContext.CreateColorContext('sRGB')
+print(D2D1ColorContext.GetColorSpace(), len(D2D1ColorContext.GetProfileBytes()))
+D2D1ColorContext2 = D2D1DeviceContext.CreateColorContext('Custom', D2D1ColorContext.GetProfileBytes())
+print(D2D1ColorContext2.GetColorSpace(), len(D2D1ColorContext2.GetProfileBytes()))
+D2D1ColorContext2 = D2D1DeviceContext.CreateColorContextFromFilename(path + r'\sDCIP3.col')
+print(D2D1ColorContext2.GetColorSpace(), len(D2D1ColorContext2.GetProfileBytes()))
+IImagingFactory = IWICImagingFactory()
+IColorContext = IImagingFactory.CreateColorContext()
+IColorContext.InitializeFromExifColorSpace('AdobeRGB')
+D2D1ColorContext2 = D2D1DeviceContext.CreateColorContextFromWicColorContext(IColorContext)
+IColorContext.Release()
+print(D2D1ColorContext2.GetColorSpace(), len(D2D1ColorContext2.GetProfileBytes()))
+D2D1ColorContext2.Release()
+#Creating a D2D1 bitmap for rendering
+D2D1Bitmap = D2D1DeviceContext.CreateBitmap(320, 200, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied'), 'bitmapOptions':'target | cannotdraw', 'colorContext': D2D1ColorContext})
+#Other way to do the same
+# D2D1Bitmap = D2D1DeviceContext.CreateTargetBitmap(width=320, height=200, format='B8G8R8A8_UNORM', alpha_mode='premultiplied', color_context=D2D1ColorContext)
+print(D2D1Bitmap.GetSize(), D2D1Bitmap.GetPixelSize(), D2D1Bitmap.GetPixelFormat(), D2D1Bitmap.GetDpi(), D2D1Bitmap.GetColorContext(), D2D1Bitmap.GetOptions())
+#Retrieving the underlying DXGI surface of the D2D1 bitmap
+DXGISurface = D2D1Bitmap.GetSurface()
+print(DXGISurface.GetDevice().pI, DXGIDevice.pI)
+print(DXGISurface.GetDesc())
+#Creating a D2D1 bitmap from the DXGI surface
+D2D1Bitmap2 = D2D1DeviceContext.CreateBitmapFromDxgiSurface(DXGISurface)
+#Other way to do the same
+# D2D1Bitmap2 = D2D1DeviceContext.CreateTargetBitmap(DXGISurface)
+print(D2D1Bitmap2.GetSize(), D2D1Bitmap2.GetPixelSize(), D2D1Bitmap2.GetPixelFormat(), D2D1Bitmap2.GetDpi(), D2D1Bitmap2.GetColorContext(), D2D1Bitmap2.GetOptions())
+D2D1Bitmap2.Release()
+#Creating two D2D1 bitmaps from a WIC Bitmap after conversion to the right pixel format for CPU reading and general purpose
+IDecoder = IImagingFactory.CreateDecoderFromFilename(path + r'\test-p3.jpg', metadata_option='onload')
+IBitmapFrame = IDecoder.GetFrame(0)
+IFormatConverter = IImagingFactory.CreateFormatConverter()
+IFormatConverter.Initialize(IBitmapFrame, '32bppPBGRA')
+D2D1Bitmap2 = D2D1DeviceContext.CreateBitmapFromWICBitmap(IFormatConverter, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied'), 'bitmapOptions':'cpuread | cannotdraw', 'colorContext': D2D1ColorContext})
+#Other way to do the same
+# D2D1Bitmap2 = D2D1DeviceContext.CreateCPUReadableBitmap(source=IFormatConverter, format='B8G8R8A8_UNORM', alpha_mode='premultiplied', color_context=D2D1ColorContext)
+D2D1Bitmap3 = D2D1DeviceContext.CreateBitmapFromWICBitmap(IFormatConverter, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied'), 'colorContext': D2D1ColorContext})
+#Other way to do the same
+# D2D1Bitmap3 = D2D1DeviceContext.CreateDefaultBitmap(source=IFormatConverter, color_context= D2D1ColorContext)
+print(D2D1Bitmap2.GetSize(), D2D1Bitmap2.GetPixelSize(), D2D1Bitmap2.GetPixelFormat(), D2D1Bitmap2.GetDpi(), D2D1Bitmap2.GetColorContext(), D2D1Bitmap2.GetOptions())
+#Retrieving the underlying DXGI surface of the first D2D1 bitmap
+DXGISurface2 = D2D1Bitmap2.GetSurface()
+print(DXGISurface2.GetDesc())
+#Mapping the DXGI Surface for reading
+print(DXGISurface2.Map('read'))
+#Unmmapping the DXGI Surface
+DXGISurface2.Unmap()
+#Mapping the D2D1 bitmap for reading
+print(D2D1Bitmap2.Map('read'))
+#Unmapping the D2D1 bitmap
+D2D1Bitmap2.Unmap()
+#Copying a part of the first D2D1 bitmap in the second one
+D2D1Bitmap2.CopyFromBitmap(D2D1Bitmap, (5,5), (0,0,10,10))
+#Mapping the D2D1 bitmap for reading
+print(D2D1Bitmap2.Map('read')[5][19:61])
+#Unmapping the D2D1 bitmap
+D2D1Bitmap2.Unmap()
+D2D1Bitmap2.Release()
+DXGISurface2.Release()
+#Setting the D2D1 bitmap created for rendering as the target of the D2D1 device context
+D2D1DeviceContext.SetTarget(D2D1Bitmap)
+#Starting to draw
+D2D1DeviceContext.BeginDraw()
+#Clearing
+D2D1DeviceContext.Clear((0.5, 0.5, 0.5, 1))
+#Finishing drawing
+D2D1DeviceContext.EndDraw()
+#creating a D2D1 bitmap for CPU reading
+D2D1Bitmap2 = D2D1DeviceContext.CreateBitmap(320, 200, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied'), 'bitmapOptions':'cpuread | cannotdraw', 'colorContext': D2D1ColorContext})
+#Other way to do the same
+# D2D1Bitmap2 = D2D1DeviceContext.CreateCPUReadableBitmap(width=320, height=200, color_context=D2D1ColorContext)
+#Copying the target of the D2D1 device context in this D2D1 bitmap
+D2D1Bitmap2.CopyFromRenderTarget(D2D1DeviceContext)
+#Mapping the D2D1 bitmap for reading then unmapping it
+print(D2D1Bitmap2.Map('read')[0][0:12])
+D2D1Bitmap2.Unmap()
+#Copying data to the D2D1 bitmap created for rendering
+D2D1Bitmap.CopyFromMemory(b'\x01' * 320 * 4 * 2, 320 * 4, (0, 0, 320, 2))
+#Copying the D2D1 bitmap created for rendering to the D2D1 bitmap created for CPU reading
+D2D1Bitmap2.CopyFromBitmap(D2D1Bitmap)
+#Mapping the D2D1 bitmap for reading then unmapping it
+print(D2D1Bitmap2.Map('read')[1][0:320*4:4])
+D2D1Bitmap2.Unmap()
+#Starting to draw again
+D2D1DeviceContext.BeginDraw()
+#Drawing the D2D1 bitmap created from the WIC bitmap
+D2D1DeviceContext.DrawBitmap(D2D1Bitmap3, (0, 0, 320, 200), 1, 'HighQualityCubic', (0, 0, 1920, 1080))
+#Finishing drawing
+D2D1DeviceContext.EndDraw()
+D2D1Bitmap3.Release()
+#Copying the target of the D2D1 device context in this D2D1 bitmap
+D2D1Bitmap2.CopyFromRenderTarget(D2D1DeviceContext)
+#Writing the D2D1 bitmap to a WIC encoder frame and saving the jpg to a file
+IImageEncoder = IImagingFactory.CreateImageEncoder(D2D1Device)
+Stream = IStream.CreateOnFile(path + r'\test_d.jpg', 'write')
+IEncoder = IImagingFactory.CreateEncoder('jpeg')
+IEncoder.Initialize(Stream)
+IBitmapFrameEncode, IEncoderOptions = IEncoder.CreateNewFrame()
+IBitmapFrameEncode.Initialize(IEncoderOptions)
+IColorContext = IImagingFactory.CreateColorContext()
+IColorContext.InitializeFromExifColorSpace('srgb')
+IBitmapFrameEncode.SetColorContexts((IColorContext,))
+IBitmapFrameEncode.SetSize(320,200)
+IBitmapFrameEncode.SetPixelFormat('24bppBGR')
+IImageEncoder.WriteFrame(D2D1Bitmap2, IBitmapFrameEncode)
+IBitmapFrameEncode.Commit()
+IEncoder.Commit()
+tuple(map(IUnknown.Release, (IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext)))
+D2D1Device.ClearResources()
+
+#Creating a software D2D1 device
+D3D11Device2 = ID3D11Device('Software')
+#Creating a D3D11 2D texture for rendering and retrieving the underlying DXGI surface
+D3D11Texture2D = D3D11Device2.CreateTexture2D((320, 200, 1, 1, 'B8G8R8A8_UNORM', (1, 0), 0, 'RenderTarget', 0, 0))
+print(D3D11Texture2D.GetDesc())
+DXGISurface2 = D3D11Texture2D.GetSurface()
+#Shorter way to do the same
+# DXGISurface2 = D3D11Device2.CreateTargetDXGISurface(320, 200, 'B8G8R8A8_UNORM')
+print(DXGISurface2.GetDesc())
+#Creating a D2D1 render target from the DXGI surface
+D2D1RenderTarget = D2D1Factory.CreateDxgiSurfaceRenderTarget(DXGISurface2, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')})
+#Other way to do the same
+#D2D1RenderTarget = D2D1Factory.CreateRenderTarget(DXGISurface2, format='B8G8R8A8_UNORM', alpha_mode='premultiplied')
+#Shorter way to do the same
+# DXGISurface2, D2D1RenderTarget = D2D1Factory.CreateSurfaceAndRenderTarget(320, 200, 'B8G8R8A8_UNORM', 'premultiplied')
+print(D2D1RenderTarget.GetSize(), D2D1RenderTarget.GetPixelSize(), D2D1RenderTarget.GetPixelFormat(), D2D1RenderTarget.GetDpi(), D2D1RenderTarget.GetAntialiasMode(), D2D1RenderTarget.GetMaximumBitmapSize())
+print(D2D1RenderTarget.GetDeviceContext().GetTarget())
+#Starting to draw
+D2D1RenderTarget.BeginDraw()
+#Setting a rotation matrix
+D2D1RenderTarget.SetTransform((0, 1, -1, 0, 260, -60))
+print(D2D1RenderTarget.GetTransform()[:])
+#Clearing
+D2D1RenderTarget.Clear((1, 0, 0, 1))
+#Drawing the WIC bitmap
+D2D1Bitmap3 = D2D1RenderTarget.CreateBitmapFromWICBitmap(IFormatConverter, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')})
+D2D1RenderTarget.DrawBitmap(D2D1Bitmap3, (80, 55, 240, 145), 0.5, 'Linear', (0, 0, 1920, 1080))
+#Creating a WIC bitmap and locking it for reading and writing
+IBitmapCache = IImagingFactory.CreateBitmapFromSource(IFormatConverter, 'onload')
+IBitmapLock = IBitmapCache.Lock((0, 0, 1920, 1080), 'readwrite')
+#Creating a D2D1 shared bitmap from the WIC locked bitmap
+D2D1Bitmap4 = D2D1RenderTarget.CreateSharedBitmap(IBitmapLock, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')})
+#Other way to do the same
+# D2D1Bitmap4 = D2D1RenderTarget.CreateDefaultBitmap(IBitmapLock)
+D2D1RenderTarget.EndDraw()
+#Finishing drawing and copying the target to the D2D1 shared bitmap
+D2D1Bitmap4.CopyFromRenderTarget(D2D1RenderTarget, (115, 20))
+tuple(map(IUnknown.Release, (D2D1Bitmap3, D2D1Bitmap4, IBitmapLock, D2D1RenderTarget, DXGISurface2, IImagingFactory)))
+D2D1RenderTarget.Release()
+#Creating a D2D1 render target from the WIC bitmap
+D2D1RenderTarget = D2D1Factory.CreateWicBitmapRenderTarget(IBitmapCache, {'type': 'software', 'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')})
+#Other way to do the same
+#D2D1RenderTarget = D2D1Factory.CreateRenderTarget(IBitmapCache, format='B8G8R8A8_UNORM', alpha_mode='premultiplied')
+#Starting to draw
+D2D1RenderTarget.BeginDraw()
+#Creating a D2D1 bitmap from the converted WIC bitmap
+D2D1Bitmap3 = D2D1RenderTarget.CreateBitmapFromWICBitmap(IFormatConverter, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')})
+#Drawing this D2D1 bitmap
+D2D1RenderTarget.DrawBitmap(D2D1Bitmap3, (0, 0, 375, 200), 0.2, 'Linear', (210, 140, 1710, 940))
+#Creating a D2D1 bitmap initialized with data
+D2D1Bitmap4 = D2D1RenderTarget.CreateBitmap(10, 10, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')}, b'\xff\x00\xff\xff' * 100, 40)
+#Other way to do the same
+# D2D1Bitmap4 = D2D1RenderTarget.CreateDefaultBitmap(width=10, height=10, source=b'\xff\x00\xff\xff' * 100, source_pitch=40)
+#Drawing this D2D1 bitmap
+D2D1RenderTarget.DrawBitmap(D2D1Bitmap4, (1820, 980, 1920, 1080), 1, 'Linear', (0, 0, 10, 10))
+#Finishing drawing
+D2D1RenderTarget.EndDraw()
+tuple(map(IUnknown.Release, (D2D1Bitmap4, D2D1Bitmap3, IFormatConverter, IBitmapFrame, IDecoder, D2D1RenderTarget)))
+
+#Creating a window
+user32 = ctypes.WinDLL('user32',  use_last_error=True)
+WNDPROC = ctypes.WINFUNCTYPE(wintypes.INT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+class WNDCLASSEXW(ctypes.Structure):
+  _fields_ = [('cbSize', wintypes.UINT), ('style', wintypes.UINT), ('lpfnWndProc', WNDPROC), ('cbClsExtra', wintypes.INT),  ('cbWndExtra', wintypes.INT), ('hInstance', wintypes.HANDLE),  ('hIcon', wintypes.HANDLE), ('hCursor', wintypes.HANDLE), ('hBrush', wintypes.HANDLE), ('lpszMenuName', wintypes.LPCWSTR), ('lpszClassName', wintypes.LPCWSTR), ('hIconSm', wintypes.HANDLE)]
+hInst = kernel32.GetModuleHandleW(wintypes.LPCWSTR(0))
+wclassName = 'WICPytest'
+wname = 'WICPy test'
+wndClass = WNDCLASSEXW(ctypes.sizeof(WNDCLASSEXW), 0, WNDPROC(('DefWindowProcW', user32)), 0,  0, hInst, 0, 0, 0, 0, wintypes.LPCWSTR(wclassName), 0)
+regRes = user32.RegisterClassExW(ctypes.byref(wndClass))
+hwnd = user32.CreateWindowExW(wintypes.DWORD(0), wintypes.LPCWSTR(wclassName), wintypes.LPCWSTR(wname), wintypes.DWORD(0x10C80000), wintypes.INT(100), wintypes.INT(100), wintypes.INT(800), wintypes.INT(450), wintypes.HWND(0), wintypes.HANDLE(0), hInst, wintypes.LPVOID(0))
+#Creating a D2D1 render target to this window
+D2D1RenderTarget = D2D1Factory.CreateHwndRenderTarget({'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')}, (hwnd, (1920, 1080), 'Immediately | RetainContents'))
+#Other way to do the same
+#D2D1RenderTarget = D2D1Factory.CreateRenderTarget(hwnd, format='B8G8R8A8_UNORM', alpha_mode='premultiplied', width=1920, height=1080, present_options='Immediately | RetainContents')
+#Creating a D2D1 bitmap from the WIC bitmap
+D2D1Bitmap4 = D2D1RenderTarget.CreateBitmapFromWICBitmap(IBitmapCache, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')})
+# D2D1Bitmap4 = D2D1RenderTarget.CreateDefaultBitmap(IBitmapCache)
+print(hwnd, D2D1RenderTarget.GetHwnd())
+#Drawing this bitmap in the window
+D2D1RenderTarget.BeginDraw()
+D2D1RenderTarget.Clear((0,0,0.2,1))
+D2D1RenderTarget.DrawBitmap(D2D1Bitmap4)
+D2D1RenderTarget.EndDraw()
+D2D1Bitmap4.Release()
+#Managing the message queue until the window is closed
+print('Waiting for the closure of the pop-up window...')
+msg = wintypes.MSG()
+lpMsg = ctypes.pointer(msg)
+while user32.GetMessageW(lpMsg, hwnd, 0, 0) > 0:
+  user32.TranslateMessage(lpMsg)
+  user32.DispatchMessageW(lpMsg)
+D2D1RenderTarget.Release()
+
+#Creating a window
+def PyWndProcedure(hWnd, Msg, wParam, lParam):
+  if Msg == 5 and 'DXGISwapChain' in globals():
+    h, l = divmod(lParam, 65536)
+    print(l, h, DXGISwapChain.ResizeBuffers(), DXGISwapChain.GetDesc())
+    D2D1Bitmap3 = D2D1DeviceContext.CreateTargetBitmap(DXGISwapChain.GetSurface())
+    D2D1DeviceContext.SetTarget(D2D1Bitmap3)
+    D2D1DeviceContext.BeginDraw()
+    D2D1DeviceContext.Clear((0,0.5,0,1))
+    r = min((l / 1920, h / 1080))
+    D2D1DeviceContext.DrawBitmap(D2D1Bitmap4, (0, 0, 1920 * r, 1080 * r), 1, 'HighQualityCubic', (0, 0, 1920, 1080))
+    D2D1DeviceContext.EndDraw()
+    D2D1DeviceContext.SetTarget()
+    D2D1Bitmap3.Release()
+    DXGISwapChain.Present()
+  return user32.DefWindowProcW(wintypes.HWND(hWnd), wintypes.UINT(Msg), wintypes.WPARAM(wParam), wintypes.LPARAM(lParam))
+wname = 'WICPy test resizable'
+wclassName = 'WICPytest2'
+wndClass2 = WNDCLASSEXW(ctypes.sizeof(WNDCLASSEXW), 0, WNDPROC(PyWndProcedure), 0,  0, hInst, 0, 0, 0, 0, wintypes.LPCWSTR(wclassName), 0)
+regRes = user32.RegisterClassExW(ctypes.byref(wndClass2))
+r = wintypes.RECT(0, 0, 800, 450)
+user32.AdjustWindowRect(ctypes.byref(r), wintypes.DWORD(0x10C80000),wintypes.BOOL(False))
+hwnd = user32.CreateWindowExW(wintypes.DWORD(0), wintypes.LPCWSTR(wclassName), wintypes.LPCWSTR(wname), wintypes.DWORD(0x10CC0000), wintypes.INT(100), wintypes.INT(100), wintypes.INT(r.right - r.left), wintypes.INT(r.bottom - r.top), wintypes.HWND(0), wintypes.HANDLE(0), hInst, wintypes.LPVOID(0))
+user32.GetClientRect(hwnd,ctypes.byref(r))
+print(r.left, r.top, r.right, r.bottom)
+#Creating a DXGI swap chain associated with the window
+DXGIFactory = DXGIDevice.GetFactory()
+DXGISwapChain = DXGIFactory.CreateSwapChainForHwnd(D3D11Device, hwnd, (0, 0, 'B8G8R8A8_UNORM', False, (1, 0), 'BackBuffer | RenderTargetOutput', 1, 'Stretch', 'Discard', 'Unspecified', 0))
+print(DXGISwapChain.GetDesc(), DXGISwapChain.GetFullscreenDesc(), (hwnd, DXGISwapChain.GetHwnd()), )
+#Retrieving the DXGI surface from the DXGI swap chain
+DXGISurface2 = DXGISwapChain.GetSurface()
+#Creating a D2D1 bitmap from the DXGI surface
+D2D1Bitmap3 = D2D1DeviceContext.CreateBitmapFromDxgiSurface(DXGISurface2)
+#Short way to do the same
+# DXGISwapChain, D2D1Bitmap3 = D2D1DeviceContext.CreateSwapChainAndBitmapFromHwnd(hwnd, 'B8G8R8A8_UNORM')
+#Setting the D2D1 bitmap as the target of the D2D1 device context
+D2D1DeviceContext.SetTarget(D2D1Bitmap3)
+#Creating and drawing a D2D1 bitmap from the WIC bitmap
+D2D1Bitmap4 = D2D1DeviceContext.CreateBitmapFromWICBitmap(IBitmapCache, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied'), 'colorContext': D2D1ColorContext})
+D2D1DeviceContext.SetTarget(D2D1Bitmap3)
+D2D1DeviceContext.BeginDraw()
+D2D1DeviceContext.Clear((0,0.5,0,1))
+D2D1DeviceContext.DrawBitmap(D2D1Bitmap4, (0, 0, *D2D1Bitmap3.GetPixelSize()), 1, 'HighQualityCubic', (0, 0, 1920, 1080))
+D2D1DeviceContext.EndDraw()
+D2D1DeviceContext.SetTarget()
+D2D1Bitmap3.Release()
+DXGISurface2.Release()
+#Presenting the rendered image of the DXGI swap chain
+DXGISwapChain.Present()
+#Managing the message queue until the window is closed
+print('Waiting for the closure of the resizable pop-up window...')
+msg = wintypes.MSG()
+lpMsg = ctypes.pointer(msg)
+while user32.GetMessageW(lpMsg, hwnd, 0, 0) > 0:
+  user32.TranslateMessage(lpMsg)
+  user32.DispatchMessageW(lpMsg)
+tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
+
 Uninitialize()
