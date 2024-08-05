@@ -15,6 +15,10 @@ wintypes.GUID = ctypes.c_char * 16
 wintypes.PGUID = ctypes.POINTER(wintypes.GUID)
 wintypes.BYTES16 = wintypes.BYTE * 16
 wintypes.PBYTES16 = ctypes.POINTER(wintypes.BYTES16)
+wintypes.FLOAT6 = wintypes.FLOAT * 6
+wintypes.PFLOAT6 = ctypes.POINTER(wintypes.FLOAT6)
+wintypes.FLOAT16 = wintypes.FLOAT * 16
+wintypes.PFLOAT16 = ctypes.POINTER(wintypes.FLOAT16)
 import struct
 import threading
 import math
@@ -3824,6 +3828,10 @@ class D3D11SUBRESOURCEDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 class D3D11PSUBRESOURCEDATA(_BPStruct, ctypes.POINTER(D3D11SUBRESOURCEDATA)):
   _type_ = D3D11SUBRESOURCEDATA
 
+D3D11FeatureLevel = {'1.0_Generic': 0x100, '1.0_Core': 0x1000, '9.1': 0x9100, '9.2': 0x9200, '9.3': 0x9300, '10.0': 0xa000, '10.1': 0xa100, '11.0': 0xb000, '11.1': 0xb100, '12.0': 0xc000, '12.1': 0xc100, '12.2': 0xc200}
+D3D11FEATURELEVEL = type('D3D11FEATURELEVEL', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11FeatureLevel.items()}, '_tab_cn': {c: n for n, c in D3D11FeatureLevel.items()}, '_def': 0xb100})
+D3D11PFEATURELEVEL = ctypes.POINTER(D3D11FEATURELEVEL)
+
 class ID3D11DeviceChild(IUnknown):
   IID = GUID(0x1841e5c8, 0x16b0, 0x489b, 0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae)
   _protos['GetDevice'] = 3, (), (wintypes.PLPVOID,), None
@@ -3847,6 +3855,7 @@ class ID3D11Texture2D(ID3D11Resource):
 class ID3D11Device(IUnknown):
   IID = GUID(0xdb6f6ddb, 0xac77, 0x4e88, 0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40)
   _protos['CreateTexture2D'] = 5, (D3D11PTEXTURE2DDESC, D3D11PSUBRESOURCEDATA), (wintypes.PLPVOID,)
+  _protos['GetFeatureLevel'] = 37, (), (), D3D11FEATURELEVEL
   def __new__(cls, clsid_component=False, factory=None):
     if isinstance(clsid_component, str):
       if (driver_type := clsid_component.lower()) in ('software', 'hardware'):
@@ -3856,11 +3865,14 @@ class ID3D11Device(IUnknown):
       driver_type = wintypes.DWORD(1)
     if clsid_component is False:
       pI = wintypes.LPVOID()
-      if ISetLastError(d3d11.D3D11CreateDevice(None, driver_type, None, wintypes.DWORD(0x20 if getattr(_IUtil._local, 'multithreaded', False) else 0x21), None, wintypes.UINT(0), wintypes.UINT(7), ctypes.byref(pI), None, None)):
-        return None
+      if ISetLastError(d3d11.D3D11CreateDevice(None, driver_type, None, wintypes.DWORD(0x20 if getattr(_IUtil._local, 'multithreaded', False) else 0x21), ctypes.byref((wintypes.UINT * 7)(*map(D3D11FEATURELEVEL.name_code, ('11.1', '11.0', '10.1', '10.0', '9.3', '9.2', '9.1')))), wintypes.UINT(7), wintypes.UINT(7), ctypes.byref(pI), None, None)):
+        if ISetLastError(d3d11.D3D11CreateDevice(None, driver_type, None, wintypes.DWORD(0x20 if getattr(_IUtil._local, 'multithreaded', False) else 0x21), None, wintypes.UINT(0), wintypes.UINT(7), ctypes.byref(pI), None, None)):
+          return None
     else:
       pI = clsid_component
     return IUnknown.__new__(cls, pI, factory)
+  def GetFeatureLevel(self):
+    return self._protos['GetFeatureLevel'](self.pI)
   def CreateTexture2D(self, texture_desc, initial_data=None):
     return ID3D11Texture2D(self._protos['CreateTexture2D'](self.pI, texture_desc, (initial_data if initial_data is None or isinstance(initial_data, D3D11SUBRESOURCEDATA) else ctypes.cast(ctypes.pointer(initial_data if isinstance(initial_data, ctypes.Array) else (D3D11SUBRESOURCEDATA * len(initial_data))(*initial_data)), D3D11PSUBRESOURCEDATA))), self)
   def CreateDXGISurface(self, width, height, format, sample_count=1, sample_quality=0, usage=0, bind_flags=0, cpu_flags=0, misc_flags=0, source_data=None, source_pitch=0):
@@ -4055,8 +4067,8 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['CreateSharedBitmap'] = 6, (PUUID, wintypes.LPVOID, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
   _protos['CreateCompatibleRenderTarget'] = 12, (D2D1PSIZEF, D2D1PSIZEU, D2D1PPIXELFORMAT, D2D1COMPATIBLERENDERTARGETOPTIONS), (wintypes.PLPVOID,)
   _protos['DrawBitmap'] = 26, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1BITMAPINTERPOLATIONMODE, D2D1PRECTF), (), None
-  _protos['SetTransform'] = 30, (ctypes.POINTER(wintypes.FLOAT * 6),), (), None
-  _protos['GetTransform'] = 31, (), (ctypes.POINTER(wintypes.FLOAT * 6),), None
+  _protos['SetTransform'] = 30, (wintypes.PFLOAT6,), (), None
+  _protos['GetTransform'] = 31, (), (wintypes.PFLOAT6,), None
   _protos['SetAntialiasMode'] = 32, (D2D1ANTIALIASMODE,), (), None
   _protos['GetAntialiasMode'] = 33, (), (), D2D1ANTIALIASMODE
   _protos['Flush'] = 42, (), (wintypes.PULARGE_INTEGER, wintypes.PULARGE_INTEGER)
@@ -4108,7 +4120,7 @@ class ID2D1RenderTarget(ID2D1Resource):
   def GetTransform(self):
     return self._protos['GetTransform'](self.pI)
   def SetTransform(self, transform):
-    self._protos['SetTransform'](self.pI, (transform if (transform is None or isinstance(transform, wintypes.FLOAT * 6)) else (wintypes.FLOAT * 6)(*transform)))
+    self._protos['SetTransform'](self.pI, (transform if (transform is None or isinstance(transform, wintypes.FLOAT6)) else wintypes.FLOAT6(*transform)))
   def BeginDraw(self):
     self._protos['BeginDraw'](self.pI)
   def Flush(self):
@@ -4138,7 +4150,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   _protos['GetRenderingControls'] = 77, (), (D2D1PRENDERINGCONTROLS,), None
   _protos['SetPrimitiveBlend'] = 78, (D2D1PRIMITIVEBLEND,), (), None
   _protos['GetPrimitiveBlend'] = 79, (), (), D2D1PRIMITIVEBLEND
-  _protos['DrawBitmap'] = 85, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1INTERPOLATIONMODE, D2D1PRECTF, ctypes.POINTER(wintypes.FLOAT * 16)), (), None
+  _protos['DrawBitmap'] = 85, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1INTERPOLATIONMODE, D2D1PRECTF, wintypes.PFLOAT16), (), None
   def CreateBitmap(self, width, height, properties, source_data=None, source_pitch=0):
     return ID2D1Bitmap(self.__class__._protos['CreateBitmap'](self.pI, (width, height), source_data, source_pitch, properties), self.factory)
   def CreateBitmapFromWICBitmap(self, source, properties=None):
@@ -4216,7 +4228,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   def SetPrimitiveBlend(self, primitive_blend=0):
     self.__class__._protos['SetPrimitiveBlend'](self.pI, primitive_blend)
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None, perspective_transform=None):
-    self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, (perspective_transform if (perspective_transform is None or isinstance(perspective_transform, wintypes.FLOAT * 16)) else (wintypes.FLOAT * 16)(*perspective_transform)))
+    self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, (perspective_transform if (perspective_transform is None or isinstance(perspective_transform, wintypes.FLOAT16)) else wintypes.FLOAT16(*perspective_transform)))
 
 class ID2D1BitmapRenderTarget(ID2D1RenderTarget):
   IID = GUID(0x2cd90695, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
@@ -4301,21 +4313,26 @@ class ID2D1Factory(IUnknown):
     if (render_target := self.CreateDxgiSurfaceRenderTarget(surface, ('Hardware', (format, (alpha_mode or 'Premultiplied')), dpiX, dpiY, usage, 'Default'))) is None:
       return None
     return surface, render_target
-  MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
-  MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
-  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix if isinstance(matrix, wintypes.FLOAT * 6) else (wintypes.FLOAT * 6)(*matrix)).value)
-  InvertMatrix = staticmethod(lambda matrix, _im=(f := ctypes.WINFUNCTYPE(wintypes.BOOLE, ctypes.POINTER(wintypes.FLOAT * 6))(('D2D1InvertMatrix', d2d1), ((3,),)), setattr(f, 'errcheck', lambda r, f, a: a if r else None))[0]: _im(matrix if isinstance(matrix, wintypes.FLOAT * 6) else (wintypes.FLOAT * 6)(*matrix)))
+  MakeIdentityMatrix = staticmethod(lambda : wintypes.FLOAT6(1, 0, 0, 1, 0, 0))
+  MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, wintypes.PFLOAT6)(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
+  MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, wintypes.PFLOAT6)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
+  MakeTranslationMatrix = staticmethod(lambda x, y: wintypes.FLOAT6(1, 0, 0, 1, x, y))
+  MakeScaleMatrix = staticmethod(lambda x, y, center: wintypes.FLOAT6(x, 0, 0, y, (1 - x) * getattr(center, 'value', center)[0], (1 - y) * getattr(center, 'value', center)[1]))
+  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix if isinstance(matrix, wintypes.FLOAT6) else wintypes.FLOAT6(*matrix)).value)
+  InvertMatrix = staticmethod(lambda matrix, _im=(f := ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1InvertMatrix', d2d1), ((3,),)), setattr(f, 'errcheck', lambda r, f, a: a if r else None))[0]: _im(matrix if isinstance(matrix, wintypes.FLOAT6) else wintypes.FLOAT6(*matrix)))
+  MultiplyMatrix = staticmethod(lambda a, b: wintypes.FLOAT6(a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3], a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5]))
   ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1COLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
-  MakeRotationXMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1))[2])
-  MakeRotationYMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1))[2])
-  MakeRotationZMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)(c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[2])
-  MakeTranslationMatrix4x4 = staticmethod(lambda x, y, z: (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1))
-  MakeScaleMatrix4x4 = staticmethod(lambda x, y, z: (x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1))
-  MakeRotationMatrix4x4 = staticmethod(lambda x, y, z, angle: (l := math.hypot(x, y, z), x := x / l, y := y / l, z := z / l, c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), (wintypes.FLOAT * 16)((1 - c) * x * x + c, (1 - c) * x * y + z * s, (1 - c) * x * z - y * s, 0, (1 - c) * y * x - z * s, (1 - c) * y * y + c, (1 - c) * y * z + x * s, 0, (1 - c) * z * x + y * s, (1 - c) * z * y - x * s, (1 - c) * z * z + c, 0, 0, 0, 0, 1))[6])
-  MakeSkewXMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), (wintypes.FLOAT * 16)(1, 0, 0, 0, t, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
-  MakeSkewYMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), (wintypes.FLOAT * 16)(1, t, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
-  MakePerspectiveMatrix4x4 = staticmethod(lambda depth: (wintypes.FLOAT * 16)(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, - 1 / depth, 0, 0, 0, 1))
-  MultiplyMatrix4x4 = staticmethod(lambda a, b: (wintypes.FLOAT * 16)(*(sum(a[4 * r + i] * b[c + 4 * i] for i in range(4)) for r in range(4) for c in range(4))))
+  MakeIdentityMatrix4x4 = staticmethod(lambda : wintypes.FLOAT16(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))
+  MakeRotationXMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1))[2])
+  MakeRotationYMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1))[2])
+  MakeRotationZMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16(c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[2])
+  MakeRotationMatrix4x4 = staticmethod(lambda x, y, z, angle: (l := math.hypot(x, y, z), x := x / l, y := y / l, z := z / l, c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16((1 - c) * x * x + c, (1 - c) * x * y + z * s, (1 - c) * x * z - y * s, 0, (1 - c) * y * x - z * s, (1 - c) * y * y + c, (1 - c) * y * z + x * s, 0, (1 - c) * z * x + y * s, (1 - c) * z * y - x * s, (1 - c) * z * z + c, 0, 0, 0, 0, 1))[6])
+  MakeSkewXMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), wintypes.FLOAT16(1, 0, 0, 0, t, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
+  MakeSkewYMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), wintypes.FLOAT16(1, t, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
+  MakeTranslationMatrix4x4 = staticmethod(lambda x, y, z: wintypes.FLOAT16(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1))
+  MakeScaleMatrix4x4 = staticmethod(lambda x, y, z: wintypes.FLOAT16(x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1))
+  MakePerspectiveMatrix4x4 = staticmethod(lambda depth: wintypes.FLOAT16(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, - 1 / depth, 0, 0, 0, 1))
+  MultiplyMatrix4x4 = staticmethod(lambda a, b: wintypes.FLOAT16(*(sum(a[4 * r + i] * b[c + 4 * i] for i in range(4)) for r in range(4) for c in range(4))))
 ID2D1Factory1 = ID2D1Factory
 
 class _WMPMAttribute:

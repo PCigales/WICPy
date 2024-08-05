@@ -1282,6 +1282,9 @@ def PyWndProcedure(hWnd, Msg, wParam, lParam):
     D2D1DeviceContext.SetTarget()
     D2D1Bitmap3.Release()
     DXGISwapChain.Present()
+  elif Msg == 16:
+    user32.PostMessageW(hWnd, Msg, wParam, lParam) 
+    return 0
   return user32.DefWindowProcW(wintypes.HWND(hWnd), wintypes.UINT(Msg), wintypes.WPARAM(wParam), wintypes.LPARAM(lParam))
 wname = 'WICPy test resizable'
 wclassName = 'WICPytest2'
@@ -1321,8 +1324,11 @@ print('Waiting for the closure of the resizable pop-up window...')
 msg = wintypes.MSG()
 lpMsg = ctypes.pointer(msg)
 while user32.GetMessageW(lpMsg, hwnd, 0, 0) > 0:
+  if lpMsg and lpMsg.contents.message == 16:
+    break
   user32.TranslateMessage(lpMsg)
   user32.DispatchMessageW(lpMsg)
+user32.DestroyWindow(hwnd)
 tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
 
 Uninitialize()
