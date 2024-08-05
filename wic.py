@@ -3,6 +3,7 @@
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
 import ctypes, ctypes.wintypes as wintypes
+ctypes.CArg = ctypes.byref(ctypes.c_void_p()).__class__
 wintypes.PLPVOID = ctypes.POINTER(wintypes.LPVOID)
 wintypes.PFLOAT = ctypes.POINTER(wintypes.FLOAT)
 wintypes.PDOUBLE = ctypes.POINTER(wintypes.DOUBLE)
@@ -320,6 +321,8 @@ class PBUFFER(wintypes.LPVOID):
   def length(obj):
     if obj is None:
       return 0
+    elif isinstance(obj, ctypes.c_char):
+      return 1
     elif isinstance(obj, memoryview):
       return obj.nbytes
     elif isinstance(obj, ctypes.Array):
@@ -328,7 +331,7 @@ class PBUFFER(wintypes.LPVOID):
       return len(obj) * getattr(obj, 'itemsize', 1)
   @classmethod
   def from_param(cls, obj):
-    if obj is None or isinstance(obj, (ctypes.c_void_p, ctypes.c_char_p)):
+    if obj is None or isinstance(obj, (ctypes.c_void_p, ctypes.c_char_p, ctypes.CArg)):
       return obj
     elif isinstance(obj, bytes):
       return ctypes.c_char_p(obj)
@@ -478,7 +481,7 @@ class _BGUID:
 class _BPGUID:
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, (cls, cls.__bases__[1])) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+    return obj if isinstance(obj, (cls, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg))) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
@@ -945,7 +948,7 @@ class _BTStruct:
 class _BPStruct:
   @classmethod
   def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, (cls, cls.__bases__[1])) else ctypes.byref(cls._type_.from_param(obj))
+    return obj if obj is None or isinstance(obj, (cls, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg))) else ctypes.byref(cls._type_.from_param(obj))
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
 WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
