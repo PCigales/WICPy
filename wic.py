@@ -15,10 +15,10 @@ wintypes.GUID = ctypes.c_char * 16
 wintypes.PGUID = ctypes.POINTER(wintypes.GUID)
 wintypes.BYTES16 = wintypes.BYTE * 16
 wintypes.PBYTES16 = ctypes.POINTER(wintypes.BYTES16)
-wintypes.FLOAT6 = wintypes.FLOAT * 6
-wintypes.PFLOAT6 = ctypes.POINTER(wintypes.FLOAT6)
-wintypes.FLOAT16 = wintypes.FLOAT * 16
-wintypes.PFLOAT16 = ctypes.POINTER(wintypes.FLOAT16)
+wintypes.FLOAT6 = type('FLOAT6', (wintypes.FLOAT * 6,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, cls) else cls(*obj))})
+wintypes.PFLOAT6 = type('PFLOAT6', (ctypes.POINTER(wintypes.FLOAT6),), {'_type_': wintypes.FLOAT6, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (cls, cls.__bases__[0])) else ctypes.byref(cls._type_.from_param(obj)))})
+wintypes.FLOAT16 = type('FLOAT16', (wintypes.FLOAT * 16,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, cls) else cls(*obj))})
+wintypes.PFLOAT16 = type('PFLOAT16', (ctypes.POINTER(wintypes.FLOAT16),), {'_type_': wintypes.FLOAT16, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (cls, cls.__bases__[0])) else ctypes.byref(cls._type_.from_param(obj)))})
 import struct
 import threading
 import math
@@ -478,7 +478,7 @@ class _BGUID:
 class _BPGUID:
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, cls) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+    return obj if isinstance(obj, (cls, cls.__bases__[1])) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
@@ -945,7 +945,7 @@ class _BTStruct:
 class _BPStruct:
   @classmethod
   def from_param(cls, obj):
-    return None if obj is None else ctypes.byref(cls._type_.from_param(obj))
+    return obj if obj is None or isinstance(obj, (cls, cls.__bases__[1])) else ctypes.byref(cls._type_.from_param(obj))
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
 WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
@@ -4120,7 +4120,7 @@ class ID2D1RenderTarget(ID2D1Resource):
   def GetTransform(self):
     return self._protos['GetTransform'](self.pI)
   def SetTransform(self, transform):
-    self._protos['SetTransform'](self.pI, (transform if (transform is None or isinstance(transform, wintypes.FLOAT6)) else wintypes.FLOAT6(*transform)))
+    self._protos['SetTransform'](self.pI, transform)
   def BeginDraw(self):
     self._protos['BeginDraw'](self.pI)
   def Flush(self):
@@ -4228,7 +4228,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   def SetPrimitiveBlend(self, primitive_blend=0):
     self.__class__._protos['SetPrimitiveBlend'](self.pI, primitive_blend)
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None, perspective_transform=None):
-    self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, (perspective_transform if (perspective_transform is None or isinstance(perspective_transform, wintypes.FLOAT16)) else wintypes.FLOAT16(*perspective_transform)))
+    self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, perspective_transform)
 
 class ID2D1BitmapRenderTarget(ID2D1RenderTarget):
   IID = GUID(0x2cd90695, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
@@ -4318,8 +4318,8 @@ class ID2D1Factory(IUnknown):
   MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, wintypes.PFLOAT6)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
   MakeTranslationMatrix = staticmethod(lambda x, y: wintypes.FLOAT6(1, 0, 0, 1, x, y))
   MakeScaleMatrix = staticmethod(lambda x, y, center: wintypes.FLOAT6(x, 0, 0, y, (1 - x) * getattr(center, 'value', center)[0], (1 - y) * getattr(center, 'value', center)[1]))
-  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix if isinstance(matrix, wintypes.FLOAT6) else wintypes.FLOAT6(*matrix)).value)
-  InvertMatrix = staticmethod(lambda matrix, _im=(f := ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1InvertMatrix', d2d1), ((3,),)), setattr(f, 'errcheck', lambda r, f, a: a if r else None))[0]: _im(matrix if isinstance(matrix, wintypes.FLOAT6) else wintypes.FLOAT6(*matrix)))
+  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix).value)
+  InvertMatrix = staticmethod(lambda matrix, _im=(f := ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1InvertMatrix', d2d1), ((3,),)), setattr(f, 'errcheck', lambda r, f, a: a if r else None))[0]: _im(matrix))
   MultiplyMatrix = staticmethod(lambda a, b: wintypes.FLOAT6(a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3], a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5]))
   ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1COLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
   MakeIdentityMatrix4x4 = staticmethod(lambda : wintypes.FLOAT16(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))
