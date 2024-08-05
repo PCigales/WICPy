@@ -481,7 +481,7 @@ class _BGUID:
 class _BPGUID:
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, (cls, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg))) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+    return obj if isinstance(obj, (cls, cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
