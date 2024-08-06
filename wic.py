@@ -480,7 +480,7 @@ class _BGUID:
 class _BPGUID:
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, (cls.__bases__[1], wintypes.PGUID, wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, wintypes.GUID) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, wintypes.GUID)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+    return obj if isinstance(obj, (cls.__bases__[1], wintypes.PGUID, wintypes.LPVOID, ctypes.c_char_p, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, wintypes.GUID) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, wintypes.GUID)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
@@ -1832,7 +1832,7 @@ class _BVARIANT(metaclass=_BVMeta):
 class _BPBVARIANT:
   @classmethod
   def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, cls._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_)) else ctypes.byref(cls._type_(13, obj) if isinstance(obj, (IUnknown, PCOM)) else (cls._type_(*obj) or cls._type_())))
+    return ctypes.byref(cls._type_(13, obj)) if isinstance(obj, (IUnknown, PCOM)) else (obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, cls._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_)) else ctypes.byref(cls._type_(*obj) or cls._type_())))
 
 class VARIANT(_BVARIANT, ctypes.Structure):
   code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
@@ -3239,7 +3239,7 @@ class IWICBitmapCodecInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICPIXELFORMAT * ac)()
-    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p] for p in range(ac))
+    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, f) is None else tuple(f[p] for p in range(ac))
   def GetDeviceManufacturer(self):
     if (al := self.__class__._protos['GetDeviceManufacturer'](self.pI, 0, None)) is None:
       return None
@@ -3298,7 +3298,7 @@ class IWICBitmapDecoderInfo(IWICBitmapCodecInfo):
       return ()
     p = ctypes.create_string_buffer(acs[1])
     f = (WICBITMAPPATTERN * acs[0]).from_buffer(p)
-    return None if self.__class__._protos['GetPatterns'](self.pI, acs[1], ctypes.byref(p)) is None else tuple(f[p].value for p in range(acs[0]))
+    return None if self.__class__._protos['GetPatterns'](self.pI, acs[1], p) is None else tuple(f[p].value for p in range(acs[0]))
   def MatchesPattern(self, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, istream)
   def CreateInstance(self):
@@ -3320,7 +3320,7 @@ class IWICFormatConverterInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICPIXELFORMAT * ac)()
-    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p] for p in range(ac))
+    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, f) is None else tuple(f[p] for p in range(ac))
   def CreateInstance(self):
     return IWICFormatConverter(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
@@ -3405,7 +3405,7 @@ class IWICMetadataReaderInfo(IWICMetadataHandlerInfo):
       return ()
     p = ctypes.create_string_buffer(acs[1])
     f = (WICMETADATAPATTERN * acs[0]).from_buffer(p)
-    return None if self.__class__._protos['GetPatterns'](self.pI, container_format, acs[1], ctypes.byref(p)) is None else tuple(f[p].value for p in range(acs[0]))
+    return None if self.__class__._protos['GetPatterns'](self.pI, container_format, acs[1], p) is None else tuple(f[p].value for p in range(acs[0]))
   def MatchesPattern(self, container_format, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, container_format, istream)
   def CreateInstance(self):
@@ -3422,7 +3422,7 @@ class IWICMetadataWriterInfo(IWICMetadataHandlerInfo):
       return {}
     h = ctypes.create_string_buffer(al)
     f = WICMETADATAHEADER.from_buffer(h)
-    return None if self.__class__._protos['GetHeader'](self.pI, container_format, al, ctypes.byref(h)) is None else f.value
+    return None if self.__class__._protos['GetHeader'](self.pI, container_format, al, h) is None else f.value
   def CreateInstance(self):
     return IWICMetadataWriter(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
