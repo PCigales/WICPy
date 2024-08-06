@@ -1,4 +1,4 @@
-try:
+﻿try:
   from WICPy import *
 except:
   from wic import *
@@ -1324,7 +1324,7 @@ print('Waiting for the closure of the resizable pop-up window...')
 msg = wintypes.MSG()
 lpMsg = ctypes.pointer(msg)
 while user32.GetMessageW(lpMsg, hwnd, 0, 0) > 0:
-  if lpMsg and lpMsg.contents.message == 16:
+  if msg.message == 16:
     break
   user32.TranslateMessage(lpMsg)
   user32.DispatchMessageW(lpMsg)

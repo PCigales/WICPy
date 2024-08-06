@@ -3,9 +3,8 @@
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
 import ctypes, ctypes.wintypes as wintypes
-ctypes.CArg = ctypes.byref(ctypes.c_void_p()).__class__
+ctypes.CArg = ctypes.byref(ctypes.c_byte()).__class__
 wintypes.PLPVOID = ctypes.POINTER(wintypes.LPVOID)
-wintypes.PFLOAT = ctypes.POINTER(wintypes.FLOAT)
 wintypes.PDOUBLE = ctypes.POINTER(wintypes.DOUBLE)
 wintypes.BOOLE = type('BOOLE', (wintypes.BOOL,), {'value': property(lambda s: bool(wintypes.BOOL.value.__get__(s)), wintypes.BOOL.value.__set__), '__ctypes_from_outparam__': lambda s: s.value})
 wintypes.PBOOLE = ctypes.POINTER(wintypes.BOOLE)
@@ -16,10 +15,10 @@ wintypes.GUID = ctypes.c_char * 16
 wintypes.PGUID = ctypes.POINTER(wintypes.GUID)
 wintypes.BYTES16 = wintypes.BYTE * 16
 wintypes.PBYTES16 = ctypes.POINTER(wintypes.BYTES16)
-wintypes.FLOAT6 = type('FLOAT6', (wintypes.FLOAT * 6,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, cls) else cls(*obj))})
-wintypes.PFLOAT6 = type('PFLOAT6', (ctypes.POINTER(wintypes.FLOAT6),), {'_type_': wintypes.FLOAT6, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (cls, cls.__bases__[0])) else ctypes.byref(cls._type_.from_param(obj)))})
-wintypes.FLOAT16 = type('FLOAT16', (wintypes.FLOAT * 16,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, cls) else cls(*obj))})
-wintypes.PFLOAT16 = type('PFLOAT16', (ctypes.POINTER(wintypes.FLOAT16),), {'_type_': wintypes.FLOAT16, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (cls, cls.__bases__[0])) else ctypes.byref(cls._type_.from_param(obj)))})
+wintypes.FLOAT6 = type('FLOAT6', (wintypes.FLOAT * 6,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, wintypes.FLOAT6.__bases__[0]) else cls(*obj))})
+wintypes.PFLOAT6 = type('PFLOAT6', (ctypes.POINTER(wintypes.FLOAT6),), {'_type_': wintypes.FLOAT6, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (wintypes.PFLOAT6.__bases__[0], wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(cls._type_.from_param(obj)))})
+wintypes.FLOAT16 = type('FLOAT16', (wintypes.FLOAT * 16,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, wintypes.FLOAT16.__bases__[0]) else cls(*obj))})
+wintypes.PFLOAT16 = type('PFLOAT16', (ctypes.POINTER(wintypes.FLOAT16),), {'_type_': wintypes.FLOAT16, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (wintypes.PFLOAT16.__bases__[0], wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(cls._type_.from_param(obj)))})
 import struct
 import threading
 import math
@@ -481,7 +480,7 @@ class _BGUID:
 class _BPGUID:
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, (cls, cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, cls.__bases__[1]._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls.__bases__[1]._type_)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+    return obj if isinstance(obj, (cls.__bases__[1], wintypes.PGUID, wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, wintypes.GUID) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, wintypes.GUID)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
@@ -924,7 +923,7 @@ class _BDStruct:
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, dict):
-      return cls(*(((k[1].from_param(obj.get(k[0])) if k[0] in obj else k[1]()) if issubclass(k[1], ctypes.Structure) else obj.get(k[0], 0)) for k in cls._fields_))
+      return cls(*(((k[1].from_param(obj[k[0]]) if k[0] in obj else k[1]()) if issubclass(k[1], ctypes.Structure) else obj.get(k[0], 0)) for k in cls._fields_))
     else:
       return cls(*((k[1].from_param(o) if issubclass(k[1], ctypes.Structure) else o) for k, o in zip(cls._fields_, obj)))
   def to_dict(self):
@@ -934,6 +933,7 @@ class _BDStruct:
     return self.to_dict()
   def __ctypes_from_outparam__(self):
     return self.to_dict()
+
 class _BTStruct:
   @classmethod
   def from_param(cls, obj):
@@ -945,10 +945,11 @@ class _BTStruct:
     return self.to_tuple()
   def __ctypes_from_outparam__(self):
     return self.to_tuple()
+
 class _BPStruct:
   @classmethod
   def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, (cls, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg))) else ctypes.byref(cls._type_.from_param(obj))
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else cls._type_.from_param(obj))
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
 WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
@@ -1105,13 +1106,11 @@ D2D1ALPHAMODE = type('D2D1ALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.l
 
 class D2D1PIXELFORMAT(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('format', DXGIFORMAT), ('alphaMode', D2D1ALPHAMODE)]
-class D2D1PPIXELFORMAT(_BPStruct, ctypes.POINTER(D2D1PIXELFORMAT)):
-  _type_ = D2D1PIXELFORMAT
+D2D1PPIXELFORMAT = type('D2D1PPIXELFORMAT', (_BPStruct, ctypes.POINTER(D2D1PIXELFORMAT)), {'_type_': D2D1PIXELFORMAT})
 
 class WICIMAGEPARAMETERS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('PixelFormat', D2D1PIXELFORMAT), ('DpiX', wintypes.FLOAT), ('DpiY', wintypes.FLOAT), ('Top', wintypes.FLOAT), ('Left', wintypes.FLOAT), ('PixelWidth', wintypes.UINT), ('PixelHeight', wintypes.UINT)]
-class WICPIMAGEPARAMETERS(_BPStruct, ctypes.POINTER(WICIMAGEPARAMETERS)):
-  _type_ = WICIMAGEPARAMETERS
+WICPIMAGEPARAMETERS = type('WICPIMAGEPARAMETERS', (_BPStruct, ctypes.POINTER(WICIMAGEPARAMETERS)), {'_type_': WICIMAGEPARAMETERS})
 
 WICBitmapAlphaChannelOption = {'Use': 0, 'UseAlpha': 0, 'UsePremultiplied': 1, 'UsePremultipliedAlpha': 1, 'Ignore': 2, 'IgnoreAlpha': 2}
 WICBITMAPALPHACHANNELOPTION = type('WICBITMAPALPHACHANNELOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICBitmapAlphaChannelOption.items()}, '_tab_cn': {c: n for n, c in WICBitmapAlphaChannelOption.items()}, '_def': 0})
@@ -1703,7 +1702,7 @@ class _BVMeta(ctypes.Structure.__class__):
     for n in ('punkVal', 'pdispVal', 'pStorage', 'pStream'):
       if hasattr(cls, n):
         setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property(lambda s, _n='_'+n: getattr(s, _n).content, lambda s, v, _n='_'+n: setattr(s, _n, PCOM(v)), getattr(cls, '_' + n, '__delete__')))
+        setattr(cls, n, property(lambda s, _n='_'+n: getattr(s, _n).content, lambda s, v, _n='_'+n: setattr(s, _n, (v if isinstance(v, PCOM) else PCOM(v))), getattr(cls, '_' + n, '__delete__')))
     if hasattr(cls, 'pclipdata'):
       cls._pclipdata = cls.pclipdata
       cls.pclipdata = property(lambda s: _BVUtil._padup(s._pclipdata), lambda s, v: setattr(s, '_pclipdata', v if isinstance(v, wintypes.PBYTES16) else ((ctypes.pointer(v) if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16)))), cls._pclipdata.__delete__)
@@ -1830,17 +1829,24 @@ class _BVARIANT(metaclass=_BVMeta):
     self._needsclear = True
     return self
 
+class _BPBVARIANT:
+  @classmethod
+  def from_param(cls, obj):
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, cls._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_)) else ctypes.byref(cls._type_(13, obj) if isinstance(obj, (IUnknown, PCOM)) else (cls._type_(*obj) or cls._type_())))
+
 class VARIANT(_BVARIANT, ctypes.Structure):
   code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
   _vtype = VariantType
   _clear = oleauto32.VariantClear
-PVARIANT = ctypes.POINTER(VARIANT)
+class PVARIANT(_BPBVARIANT, ctypes.POINTER(VARIANT)):
+  _type_ = VARIANT
 
 class PROPVARIANT(_BVARIANT, ctypes.Structure):
   code_name = {16: 'cVal', 17: 'bVal', 2: 'iVal',  18: 'uiVal', 3: 'lVal', 19: 'ulVal', 22: 'intVal', 23: 'uintVal', 20: 'hVal', 21: 'uhVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 64: 'filetime', 72: 'puuid', 71: 'pclipdata', 8: 'bstrVal', 65: 'blob', 70: 'blob', 30: 'pszVal', 31: 'pwszVal', 13: 'punkVal', 9: 'pdispVal', 66: 'pStream', 68: 'pStream', 67: 'pStorage', 69: 'pStorage', 73: 'pVersionedStream', 14: 'decVal', 4096: 'ca', 8192: 'parray', 16384: 'byref'}
   _vtype = PropVariantType
   _clear = ole32.PropVariantClear
-PPROPVARIANT = ctypes.POINTER(PROPVARIANT)
+class PPROPVARIANT(_BPBVARIANT, ctypes.POINTER(PROPVARIANT)):
+  _type_ = PROPVARIANT
 
 class _PBUtil:
   @staticmethod
@@ -1972,8 +1978,8 @@ class _WICEncoderOption:
 class _IWICEPBMeta(_IMeta):
   _options = {
     'ImageQuality': ('VT_R4', None, None),
-    'JpegYCrCbSubsampling': ('VT_UI1', WICJPEGYCRCBSUBSAMPLINGOPTION, (lambda s: s.code if isinstance(s, WICJPEGYCRCBSUBSAMPLINGOPTION) else WICJPEGYCRCBSUBSAMPLINGOPTION.name_code(s))),
-    'BitmapTransform': ('VT_UI1', WICTRANSFORMOPTIONS, (lambda s: s.code if isinstance(s, WICTRANSFORMOPTIONS) else WICTRANSFORMOPTIONS.name_code(s))),
+    'JpegYCrCbSubsampling': ('VT_UI1', WICJPEGYCRCBSUBSAMPLINGOPTION, WICJPEGYCRCBSUBSAMPLINGOPTION.to_int),
+    'BitmapTransform': ('VT_UI1', WICTRANSFORMOPTIONS, WICTRANSFORMOPTIONS.to_int),
     'SuppressApp0': ('VT_BOOL', None, None),
     'Luminance': ('VT_ARRAY | VT_I4', None, (lambda s: (wintypes.LONG * 64)(*s) if isinstance(s, wintypes.BYTE * 64) else s)),
     'Chrominance': ('VT_ARRAY | VT_I4', None, (lambda s: (wintypes.LONG * 64)(*s) if isinstance(s, wintypes.BYTE * 64) else s)),
@@ -1982,11 +1988,11 @@ class _IWICEPBMeta(_IMeta):
     'JpegChromaDcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 12).from_buffer(s), 'CodeValues': (wintypes.BYTE * 12).from_buffer(s, 12)}, (lambda s: (wintypes.BYTE * 24)(*s['CodeCounts'], *s['CodeValues']) if isinstance(s, dict) else s)),
     'JpegChromaAcHuffmanTable': ('VT_ARRAY | VT_UI1', lambda s: {'CodeCounts': (wintypes.BYTE * 16).from_buffer(s), 'CodeValues': (wintypes.BYTE * 162).from_buffer(s, 16)}, (lambda s: (wintypes.BYTE * 178)(*s['CodeCounts'], *s['CodeValues']) if isinstance(s, dict) else s)),
     'InterlaceOption': ('VT_BOOL', None, None),
-    'FilterOption': ('VT_UI1', WICPNGFILTEROPTION, (lambda s: s.code if isinstance(s, WICPNGFILTEROPTION) else WICPNGFILTEROPTION.name_code(s))),
+    'FilterOption': ('VT_UI1', WICPNGFILTEROPTION, WICPNGFILTEROPTION.to_int),
     'CompressionQuality': ('VT_R4', None, None),
-    'TiffCompressionMethod': ('VT_UI1', WICTIFFCOMPRESSIONOPTION, (lambda s: s.code if isinstance(s, WICTIFFCOMPRESSIONOPTION) else WICTIFFCOMPRESSIONOPTION.name_code(s))),
+    'TiffCompressionMethod': ('VT_UI1', WICTIFFCOMPRESSIONOPTION, WICTIFFCOMPRESSIONOPTION.to_int),
     'EnableV5Header32bppBGRA': ('VT_BOOL', None, None),
-    'HeifCompressionMethod': ('VT_UI1', WICHEIFCOMPRESSIONOPTION, (lambda s: s.code if isinstance(s, WICHEIFCOMPRESSIONOPTION) else WICHEIFCOMPRESSIONOPTION.name_code(s))),
+    'HeifCompressionMethod': ('VT_UI1', WICHEIFCOMPRESSIONOPTION, WICHEIFCOMPRESSIONOPTION.to_int),
     'Lossless': ('VT_BOOL', None, None)
   }
   @classmethod
@@ -2322,7 +2328,7 @@ class _IWICMQRUtil:
   @staticmethod
   def _tuple(cls=None):
     if cls is None:
-      return (lambda s: tuple(s) if hasattr(s, '__len__') else (s,),) * 2
+      return (lambda s: tuple(s) if hasattr(s, '__len__') and not isinstance(s, str) else (s,),) * 2
     else:
       return lambda s: tuple(map(cls, (s if hasattr(s, '__len__') else (s,)))), lambda s: tuple(map(cls.to_int, (s if hasattr(s, '__len__') and not isinstance(s, str) else (s,))))
   @staticmethod
@@ -2453,7 +2459,7 @@ class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
     if al == 0:
       return ''
     l = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetLocation'](self.pI, al, l) is None else (ctypes.c_wchar * al).from_buffer(l).value
+    return None if self.__class__._protos['GetLocation'](self.pI, al, l) is None else l.value
   def GetEnumerator(self):
     return IEnumString(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def GetMetadataNames(self):
@@ -2494,10 +2500,6 @@ class IWICMetadataReader(IUnknown):
   def GetEnumeratorWithType(self):
     return IWICEnumMetadataWithTypeItemReader(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def GetValue(self, schema, ident):
-    if isinstance(schema, (tuple, list)):
-      schema = PROPVARIANT(*schema)
-    if isinstance(ident, (tuple, list)):
-      ident = PROPVARIANT(*ident)
     if (v := self.__class__._protos['GetValue'](self.pI, schema, ident)) is None:
       return None
     return v.value.QueryInterface(self.__class__, self.factory) if v.vt == 13 else v.value
@@ -2620,7 +2622,7 @@ class IWICPlanarBitmapSourceTransform(IUnknown):
   def CopyPixels(self, xywh, width, height, transform_options, planar_option, planes_buffers):
     planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.from_param(pb) for pb in planes_buffers))
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*map(WICBITMAPPLANE.from_param, planes_buffers))
     return self.__class__._protos['CopyPixels'](self.pI, xywh, width, height, transform_options, planar_option, planes_buffers, planes_number)
 
 class IWICBitmapDecoder(IUnknown):
@@ -2851,7 +2853,7 @@ class IWICDevelopRaw(IWICBitmapFrameDecode):
     c = ctypes.create_string_buffer(al)
     tc = WICRAWTONECURVE.from_buffer(c)
     tc.cPoints = l
-    cps.from_address(ctypes.addressof(tc.aPoints)).__init__(*(p if isinstance(p, WICRAWTONECURVEPOINT) else (WICRAWTONECURVEPOINT(p['Input'], p['Output']) if isinstance(p, dict) else WICRAWTONECURVEPOINT(*p)) for p in tone_curve))
+    cps.from_address(ctypes.addressof(tc.aPoints)).__init__(*map(WICRAWTONECURVEPOINT.from_param, tone_curve))
     return self.__class__._protos['SetToneCurve'](self.pI, al, c)
   def GetRotation(self):
     return self.__class__._protos['GetRotation'](self.pI)
@@ -2867,17 +2869,7 @@ class IWICMetadataQueryWriter(IWICMetadataQueryReader):
   _protos['SetMetadataByName'] = 7, (wintypes.LPCWSTR, PPROPVARIANT), ()
   _protos['RemoveMetadataByName'] = 8, (wintypes.LPCWSTR,), ()
   def SetMetadataByName(self, name, data):
-    v = None
-    if isinstance(data, PROPVARIANT):
-      v = data
-    elif isinstance(data, (list, tuple)) and len(data) == 2:
-      v = PROPVARIANT(*data)
-    elif isinstance(data, IWICMetadataQueryWriter):
-      v = PROPVARIANT(13, data)
-    if v is None:
-      ISetLastError(0x80070057)
-      return None
-    return self.__class__._protos['SetMetadataByName'](self.pI, name, v)
+    return self.__class__._protos['SetMetadataByName'](self.pI, name, data)
   def RemoveMetadataByName(self, name):
     return self.__class__._protos['RemoveMetadataByName'](self.pI, name)
 
@@ -2892,26 +2884,10 @@ class IWICMetadataWriter(IWICMetadataReader):
   def GetEnumeratorWithType(self, code=False):
     return IWICEnumMetadataWithTypeItemWriter(self.__class__._protos['GetEnumerator'](self.pI), self.factory)
   def SetValue(self, schema, ident, value):
-    if isinstance(schema, (tuple, list)):
-      schema = PROPVARIANT(*schema)
-    if isinstance(ident, (tuple, list)):
-      ident = PROPVARIANT(*ident)
-    if isinstance(value, (tuple, list)):
-      value = PROPVARIANT(*value)
     return self.__class__._protos['SetValue'](self.pI, schema, ident, value)
   def SetValueByIndex(self, index, schema, ident, value):
-    if isinstance(schema, (tuple, list)):
-      schema = PROPVARIANT(*schema)
-    if isinstance(ident, (tuple, list)):
-      ident = PROPVARIANT(*ident)
-    if isinstance(value, (tuple, list)):
-      value = PROPVARIANT(*value)
     return self.__class__._protos['SetValueByIndex'](self.pI, index, schema, ident, value)
   def RemoveValue(self, schema, ident):
-    if isinstance(schema, (tuple, list)):
-      schema = PROPVARIANT(*schema)
-    if isinstance(ident, (tuple, list)):
-      ident = PROPVARIANT(*ident)
     return self.__class__._protos['RemoveValue'](self.pI, schema, ident)
   def RemoveValueByIndex(self, index):
     return self.__class__._protos['RemoveValueByIndex'](self.pI, index)
@@ -3076,7 +3052,7 @@ class IWICPlanarBitmapFrameEncode(IUnknown):
   def WritePixels(self, lines_number, planes_buffers):
     planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*(WICBITMAPPLANE.from_param(pb) for pb in planes_buffers))
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*map(WICBITMAPPLANE.from_param, planes_buffers))
     return self.__class__._protos['WritePixels'](self.pI, lines_number, planes_buffers, planes_number)
 
 class IWICDdsEncoder(IUnknown):
@@ -3216,7 +3192,7 @@ class IWICComponentInfo(IUnknown):
     if al == 0:
       return ''
     a = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetAuthor'](self.pI, al, a) is None else (ctypes.c_wchar * al).from_buffer(a).value
+    return None if self.__class__._protos['GetAuthor'](self.pI, al, a) is None else a.value
   def GetVendorGUID(self):
     return self.__class__._protos['GetVendorGUID'](self.pI)
   def GetVersion(self):
@@ -3225,21 +3201,21 @@ class IWICComponentInfo(IUnknown):
     if al == 0:
       return ''
     v = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetVersion'](self.pI, al, v) is None else (ctypes.c_wchar * al).from_buffer(v).value
+    return None if self.__class__._protos['GetVersion'](self.pI, al, v) is None else v.value
   def GetSpecVersion(self):
     if (al := self.__class__._protos['GetSpecVersion'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ''
     v = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetSpecVersion'](self.pI, al, v) is None else (ctypes.c_wchar * al).from_buffer(v).value
+    return None if self.__class__._protos['GetSpecVersion'](self.pI, al, v) is None else v.value
   def GetFriendlyName(self):
     if (al := self.__class__._protos['GetFriendlyName'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ''
     n = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetFriendlyName'](self.pI, al, n) is None else (ctypes.c_wchar * al).from_buffer(n).value
+    return None if self.__class__._protos['GetFriendlyName'](self.pI, al, n) is None else n.value
 
 class IWICBitmapCodecInfo(IWICComponentInfo):
   IID = GUID(0xe87a44c4, 0xb76e, 0x4c47, 0x8b, 0x09, 0x29, 0x8e, 0xb1, 0x2a, 0x27, 0x14)
@@ -3270,35 +3246,35 @@ class IWICBitmapCodecInfo(IWICComponentInfo):
     if al == 0:
       return ''
     m = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetDeviceManufacturer'](self.pI, al, m) is None else (ctypes.c_wchar * al).from_buffer(m).value
+    return None if self.__class__._protos['GetDeviceManufacturer'](self.pI, al, m) is None else m.value
   def GetDeviceModels(self):
     if (al := self.__class__._protos['GetDeviceModels'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ()
     m = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetDeviceModels'](self.pI, al, m) is None else tuple((ctypes.c_wchar * al).from_buffer(m).value.split(','))
+    return None if self.__class__._protos['GetDeviceModels'](self.pI, al, m) is None else tuple(m.value.split(','))
   def GetMimeTypes(self):
     if (al := self.__class__._protos['GetMimeTypes'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ''
     t = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetMimeTypes'](self.pI, al, t) is None else tuple((ctypes.c_wchar * al).from_buffer(t).value.split(','))
+    return None if self.__class__._protos['GetMimeTypes'](self.pI, al, t) is None else tuple(t.value.split(','))
   def GetFileExtensions(self):
     if (al := self.__class__._protos['GetFileExtensions'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ''
     e = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetFileExtensions'](self.pI, al, e) is None else tuple((ctypes.c_wchar * al).from_buffer(e).value.split(','))
+    return None if self.__class__._protos['GetFileExtensions'](self.pI, al, e) is None else tuple(e.value.split(','))
   def GetColorManagementVersion(self):
     if (al := self.__class__._protos['GetColorManagementVersion'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ''
     v = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetColorManagementVersion'](self.pI, al, v) is None else (ctypes.c_wchar * al).from_buffer(v).value
+    return None if self.__class__._protos['GetColorManagementVersion'](self.pI, al, v) is None else v.value
   def DoesSupportAnimation(self):
     return self.__class__._protos['DoesSupportAnimation'](self.pI)
   def DoesSupportChromaKey(self):
@@ -3381,7 +3357,7 @@ IWICPixelFormatInfo2 = IWICPixelFormatInfo
 class IWICMetadataHandlerInfo(IWICComponentInfo):
   IID = GUID(0xaba958bf, 0xc672, 0x44d1, 0x8d, 0x61, 0xce, 0x6d, 0xf2, 0xe6, 0x82, 0xc2)
   _protos['GetMetadataFormat'] = 11, (), (WICPMETADATAHANDLER,)
-  _protos['GetContainerFormats'] = 12, (wintypes.UINT, wintypes.LPVOID), (wintypes.PUINT,)
+  _protos['GetContainerFormats'] = 12, (wintypes.UINT, WICPMETADATAHANDLER), (wintypes.PUINT,)
   _protos['GetDeviceManufacturer'] = 13, (wintypes.UINT, wintypes.LPWSTR), (wintypes.PUINT,)
   _protos['GetDeviceModels'] = 14, (wintypes.UINT, wintypes.LPWSTR), (wintypes.PUINT,)
   _protos['DoesRequireFullStream'] = 15, (), (wintypes.PBOOLE,)
@@ -3395,21 +3371,21 @@ class IWICMetadataHandlerInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICMETADATAHANDLER * ac)()
-    return None if self.__class__._protos['GetContainerFormats'](self.pI, ac, ctypes.byref(f)) is None else tuple(f[p] for p in range(ac))
+    return None if self.__class__._protos['GetContainerFormats'](self.pI, ac, f) is None else tuple(f[p] for p in range(ac))
   def GetDeviceManufacturer(self):
     if (al := self.__class__._protos['GetDeviceManufacturer'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ''
     m = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetDeviceManufacturer'](self.pI, al, m) is None else (ctypes.c_wchar * al).from_buffer(m).value
+    return None if self.__class__._protos['GetDeviceManufacturer'](self.pI, al, m) is None else m.value
   def GetDeviceModels(self):
     if (al := self.__class__._protos['GetDeviceModels'](self.pI, 0, None)) is None:
       return None
     if al == 0:
       return ()
     m = ctypes.create_unicode_buffer(al)
-    return None if self.__class__._protos['GetDeviceModels'](self.pI, al, m) is None else tuple((ctypes.c_wchar * al).from_buffer(m).value.split(','))
+    return None if self.__class__._protos['GetDeviceModels'](self.pI, al, m) is None else tuple(m.value.split(','))
   def DoesRequireFullStream(self):
     return self.__class__._protos['DoesRequireFullStream'](self.pI)
   def DoesSupportPadding(self):
@@ -3607,8 +3583,7 @@ DXGIALPHAMODE = type('DXGIALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.l
 
 class DXGISWAPCHAINDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('Format', DXGIFORMAT), ('Stereo', wintypes.BOOLE), ('SampleDesc', DXGISAMPLEDESC), ('BufferUsage', DXGIUSAGE), ('BufferCount', wintypes.UINT), ('Scaling', DXGISCALING), ('SwapEffect', DXGISWAPEFFECT), ('AlphaMode', DXGIALPHAMODE), ('Flags', wintypes.UINT)]
-class DXGIPSWAPCHAINDESC(_BPStruct, ctypes.POINTER(DXGISWAPCHAINDESC)):
-  _type_ = DXGISWAPCHAINDESC
+DXGIPSWAPCHAINDESC = type('DXGIPSWAPCHAINDESC', (_BPStruct, ctypes.POINTER(DXGISWAPCHAINDESC)), {'_type_': DXGISWAPCHAINDESC})
 
 class DXGIRATIONAL(_BTStruct, ctypes.Structure):
   _fields_ = [('Numerator', wintypes.UINT), ('Denominator', wintypes.UINT)]
@@ -3624,8 +3599,7 @@ DXGIMODESCALING = type('DXGIMODESCALING', (_BCode, wintypes.UINT), {'_tab_nc': {
 
 class DXGISWAPCHAINDESCFULLSCREEN(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('RefreshRate', DXGIRATIONAL), ('ScanlineOrdering', DXGIMODESCANLINEORDER), ('Scaling', DXGIMODESCALING), ('Windowed', wintypes.BOOLE)]
-class DXGIPSWAPCHAINDESCFULLSCREEN(_BPStruct, ctypes.POINTER(DXGISWAPCHAINDESCFULLSCREEN)):
-  _type_ = DXGISWAPCHAINDESCFULLSCREEN
+DXGIPSWAPCHAINDESCFULLSCREEN = type('DXGIPSWAPCHAINDESCFULLSCREEN', (_BPStruct, ctypes.POINTER(DXGISWAPCHAINDESCFULLSCREEN)), {'_type_': DXGISWAPCHAINDESCFULLSCREEN})
 
 DXGIPresent = {'Present': 0, 'PresentTest': 0x1, 'DoNotSequence': 0x2, 'PresentRestart': 0x4, 'DoNotWait': 0x8, 'RestrictToOutput': 0x10, 'StereoPreferRight': 0x20, 'StereoTemporaryMono': 0x40, 'UseDuration': 0x100, 'AllowTearing': 2}
 DXGIPRESENT = type('DXGIPRESENT', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIPresent.items()}, '_tab_cn': {c: n for n, c in DXGIPresent.items()}, '_def': 0})
@@ -3645,18 +3619,15 @@ class DXGIPRESENTPARAMETERS(ctypes.Structure):
   @property
   def value(self):
     return self.to_dict()
-class DXGIPPRESENTPARAMETERS(_BPStruct, ctypes.POINTER(DXGIPRESENTPARAMETERS)):
-  _type_ = DXGIPRESENTPARAMETERS
+DXGIPPRESENTPARAMETERS = type('DXGIPPRESENTPARAMETERS', (_BPStruct, ctypes.POINTER(DXGIPRESENTPARAMETERS)), {'_type_': DXGIPRESENTPARAMETERS})
 
 class DXGIRGBA(_BTStruct, ctypes.Structure):
   _fields_ = [('r', wintypes.FLOAT), ('g', wintypes.FLOAT), ('b', wintypes.FLOAT), ('a', wintypes.FLOAT)]
-class DXGIPRGBA(_BPStruct, ctypes.POINTER(DXGIRGBA)):
-  _type_ = DXGIRGBA
+DXGIPRGBA = type('DXGIPRGBA', (_BPStruct, ctypes.POINTER(DXGIRGBA)), {'_type_': DXGIRGBA})
 
 class DXGIMODEDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('RefreshRate', DXGIRATIONAL), ('Format', DXGIFORMAT), ('ScanlineOrdering', DXGIMODESCANLINEORDER), ('Scaling', DXGIMODESCALING)]
-class DXGIPMODEDESC(_BPStruct, ctypes.POINTER(DXGIMODEDESC)):
-  _type_ = DXGIMODEDESC
+DXGIPMODEDESC = type('DXGIPMODEDESC', (_BPStruct, ctypes.POINTER(DXGIMODEDESC)), {'_type_': DXGIMODEDESC})
 
 class IDXGIObject(IUnknown):
   IID = GUID(0xaec22fb8, 0x76f3, 0x4639, 0x9b, 0xe0, 0x28, 0xeb, 0x43, 0xa6, 0x7a, 0x2e)
@@ -3734,7 +3705,7 @@ class IDXGISurface(IDXGIDeviceSubObject):
     if (d := self.GetDesc()) is None:
       return None
     mr = DXGIMAPPEDRECT()
-    return None if self._protos['Map'](self.pI, ctypes.byref(mr), map_flags) is None else ((wintypes.BYTE * mr.Pitch) * d['Height']).from_address(mr.pBits)
+    return None if self._protos['Map'](self.pI, mr, map_flags) is None else ((wintypes.BYTE * mr.Pitch) * d['Height']).from_address(mr.pBits)
   def Unmap(self):
     return self._protos['Unmap'](self.pI)
 IDXGISurface2 = IDXGISurface
@@ -3823,13 +3794,11 @@ D3D11RESOURCEMISCFLAG = type('D3D11RESOURCEMISCFLAG', (_BCodeOr, wintypes.UINT),
 
 class D3D11TEXTURE2DDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('MipLevels', wintypes.UINT), ('ArraySize', wintypes.UINT), ('Format', DXGIFORMAT), ('SampleDesc', DXGISAMPLEDESC), ('Usage', D3D11USAGE), ('BindFlags', D3D11BINDFLAG), ('CPUAccessFlags', D3D11CPUACCESSFLAG), ('MiscFlags', D3D11RESOURCEMISCFLAG)]
-class D3D11PTEXTURE2DDESC(_BPStruct, ctypes.POINTER(D3D11TEXTURE2DDESC)):
-  _type_ = D3D11TEXTURE2DDESC
+D3D11PTEXTURE2DDESC = type('D3D11PTEXTURE2DDESC', (_BPStruct, ctypes.POINTER(D3D11TEXTURE2DDESC)), {'_type_': D3D11TEXTURE2DDESC})
 
 class D3D11SUBRESOURCEDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('pSysMem', wintypes.LPVOID), ('SysMemPitch', wintypes.UINT), ('SysMemSlicePitch', wintypes.UINT)]
-class D3D11PSUBRESOURCEDATA(_BPStruct, ctypes.POINTER(D3D11SUBRESOURCEDATA)):
-  _type_ = D3D11SUBRESOURCEDATA
+D3D11PSUBRESOURCEDATA = type('D3D11PSUBRESOURCEDATA', (_BPStruct, ctypes.POINTER(D3D11SUBRESOURCEDATA)), {'_type_': D3D11SUBRESOURCEDATA})
 
 D3D11FeatureLevel = {'1.0_Generic': 0x100, '1.0_Core': 0x1000, '9.1': 0x9100, '9.2': 0x9200, '9.3': 0x9300, '10.0': 0xa000, '10.1': 0xa100, '11.0': 0xb000, '11.1': 0xb100, '12.0': 0xc000, '12.1': 0xc100, '12.2': 0xc200}
 D3D11FEATURELEVEL = type('D3D11FEATURELEVEL', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11FeatureLevel.items()}, '_tab_cn': {c: n for n, c in D3D11FeatureLevel.items()}, '_def': 0xb100})
@@ -3877,7 +3846,7 @@ class ID3D11Device(IUnknown):
   def GetFeatureLevel(self):
     return self._protos['GetFeatureLevel'](self.pI)
   def CreateTexture2D(self, texture_desc, initial_data=None):
-    return ID3D11Texture2D(self._protos['CreateTexture2D'](self.pI, texture_desc, (initial_data if initial_data is None or isinstance(initial_data, D3D11SUBRESOURCEDATA) else ctypes.cast(ctypes.pointer(initial_data if isinstance(initial_data, ctypes.Array) else (D3D11SUBRESOURCEDATA * len(initial_data))(*initial_data)), D3D11PSUBRESOURCEDATA))), self)
+    return ID3D11Texture2D(self._protos['CreateTexture2D'](self.pI, texture_desc, (initial_data if initial_data is None or isinstance(initial_data, D3D11SUBRESOURCEDATA) or (isinstance(initial_data, ctypes.Array) and issubclass(initial_data._type_, D3D11SUBRESOURCEDATA)) else (D3D11SUBRESOURCEDATA * len(initial_data))(*initial_data))), self)
   def CreateDXGISurface(self, width, height, format, sample_count=1, sample_quality=0, usage=0, bind_flags=0, cpu_flags=0, misc_flags=0, source_data=None, source_pitch=0):
     if (t2d := self.CreateTexture2D((width, height, 1, 1, format, (sample_count, sample_quality), usage, bind_flags, cpu_flags, misc_flags), (None if source_data is None else (PBUFFER(source_data), source_pitch, 0)))) is None:
       return None
@@ -3917,38 +3886,31 @@ class PCOMD2D1COLORCONTEXT(PCOM):
 
 class D2D1SIZEU(_BTStruct, ctypes.Structure):
   _fields_ = [('width', wintypes.UINT), ('height', wintypes.UINT)]
-class D2D1PSIZEU(_BPStruct, ctypes.POINTER(D2D1SIZEU)):
-  _type_ = D2D1SIZEU
+D2D1PSIZEU = type('D2D1PSIZEU', (_BPStruct, ctypes.POINTER(D2D1SIZEU)), {'_type_': D2D1SIZEU})
 
 class D2D1SIZEF(_BTStruct, ctypes.Structure):
   _fields_ = [('width', wintypes.FLOAT), ('height', wintypes.FLOAT)]
-class D2D1PSIZEF(_BPStruct, ctypes.POINTER(D2D1SIZEF)):
-  _type_ = D2D1SIZEF
+D2D1PSIZEF = type('D2D1PSIZEF', (_BPStruct, ctypes.POINTER(D2D1SIZEF)), {'_type_': D2D1SIZEF})
 
 class D2D1POINT2U(_BTStruct, ctypes.Structure):
   _fields_ = [('x', wintypes.UINT), ('y', wintypes.UINT)]
-class D2D1PPOINT2U(_BPStruct, ctypes.POINTER(D2D1POINT2U)):
-  _type_ = D2D1POINT2U
+D2D1PPOINT2U = type('D2D1PPOINT2U', (_BPStruct, ctypes.POINTER(D2D1POINT2U)), {'_type_': D2D1POINT2U})
 
 class D2D1POINT2F(_BTStruct, ctypes.Structure):
   _fields_ = [('x', wintypes.FLOAT), ('y', wintypes.FLOAT)]
-class D2D1PPOINT2F(_BPStruct, ctypes.POINTER(D2D1POINT2F)):
-  _type_ = D2D1POINT2F
+D2D1PPOINT2F = type('D2D1PPOINT2F', (_BPStruct, ctypes.POINTER(D2D1POINT2F)), {'_type_': D2D1POINT2F})
 
 class D2D1RECTU(_BTStruct, ctypes.Structure):
   _fields_ = [('left', wintypes.UINT), ('top', wintypes.UINT), ('right', wintypes.UINT), ('bottom', wintypes.UINT)]
-class D2D1PRECTU(_BPStruct, ctypes.POINTER(D2D1RECTU)):
-  _type_ = D2D1RECTU
+D2D1PRECTU = type('D2D1PRECTU', (_BPStruct, ctypes.POINTER(D2D1RECTU)), {'_type_': D2D1RECTU})
 
 class D2D1RECTF(_BTStruct, ctypes.Structure):
   _fields_ = [('left', wintypes.FLOAT), ('top', wintypes.FLOAT), ('right', wintypes.FLOAT), ('bottom', wintypes.FLOAT)]
-class D2D1PRECTF(_BPStruct, ctypes.POINTER(D2D1RECTF)):
-  _type_ = D2D1RECTF
+D2D1PRECTF = type('D2D1PRECTF', (_BPStruct, ctypes.POINTER(D2D1RECTF)), {'_type_': D2D1RECTF})
 
 class D2D1COLORF(_BTStruct, ctypes.Structure):
   _fields_ = [('r', wintypes.FLOAT), ('g', wintypes.FLOAT), ('b', wintypes.FLOAT), ('a', wintypes.FLOAT)]
-class D2D1PCOLORF(_BPStruct, ctypes.POINTER(D2D1COLORF)):
-  _type_ = D2D1COLORF
+D2D1PCOLORF = type('D2D1PCOLORF', (_BPStruct, ctypes.POINTER(D2D1COLORF)), {'_type_': D2D1COLORF})
 
 D2D1InterpolationMode = {'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'MultiSampleLinear': 3, 'Anisotropic': 4, 'HighQualityCubic': 5}
 D2D1INTERPOLATIONMODE = type('D2D1INTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1InterpolationMode.items()}, '_tab_cn': {c: n for n, c in D2D1InterpolationMode.items()}, '_def': 0})
@@ -3964,21 +3926,18 @@ D2D1BUFFERPRECISION = type('D2D1BUFFERPRECISION', (_BCode, wintypes.DWORD), {'_t
 
 class D2D1RENDERINGCONTROLS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('bufferPrecision', D2D1BUFFERPRECISION), ('tileSize', D2D1SIZEU)]
-class D2D1PRENDERINGCONTROLS(_BPStruct, ctypes.POINTER(D2D1RENDERINGCONTROLS)):
-  _type_ = D2D1RENDERINGCONTROLS
+D2D1PRENDERINGCONTROLS = type('D2D1PRENDERINGCONTROLS', (_BPStruct, ctypes.POINTER(D2D1RENDERINGCONTROLS)), {'_type_': D2D1RENDERINGCONTROLS})
 
 class D2D1BITMAPPROPERTIESRT(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('pixelFormat', D2D1PIXELFORMAT), ('dpiX', wintypes.FLOAT), ('dpiY', wintypes.FLOAT)]
-class D2D1PBITMAPPROPERTIESRT(_BPStruct, ctypes.POINTER(D2D1BITMAPPROPERTIESRT)):
-  _type_ = D2D1BITMAPPROPERTIESRT
+D2D1PBITMAPPROPERTIESRT = type('D2D1PBITMAPPROPERTIESRT', (_BPStruct, ctypes.POINTER(D2D1BITMAPPROPERTIESRT)), {'_type_': D2D1BITMAPPROPERTIESRT})
 
 D2D1BitmapOptions = {'None': 0, 'Target': 1, 'CannotDraw': 2, 'CPURead': 4, 'GDICompatible': 8}
 D2D1BITMAPOPTIONS = type('D2D1BITMAPOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1BitmapOptions.items()}, '_tab_cn': {c: n for n, c in D2D1BitmapOptions.items()}, '_def': 0})
 
 class D2D1BITMAPPROPERTIESDC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('pixelFormat', D2D1PIXELFORMAT), ('dpiX', wintypes.FLOAT), ('dpiY', wintypes.FLOAT), ('bitmapOptions', D2D1BITMAPOPTIONS), ('colorContext', PCOMD2D1COLORCONTEXT)]
-class D2D1PBITMAPPROPERTIESDC(_BPStruct, ctypes.POINTER(D2D1BITMAPPROPERTIESDC)):
-  _type_ = D2D1BITMAPPROPERTIESDC
+D2D1PBITMAPPROPERTIESDC = type('D2D1PBITMAPPROPERTIESDC', (_BPStruct, ctypes.POINTER(D2D1BITMAPPROPERTIESDC)), {'_type_': D2D1BITMAPPROPERTIESDC})
 
 D2D1MappedOptions = {'None': 0, 'Read': 1, 'Write': 2, 'Discard': 4}
 D2D1MAPPEDOPTIONS = type('D2D1MAPPEDOPTIONS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D2D1MappedOptions.items()}, '_tab_cn': {c: n for n, c in D2D1MappedOptions.items()}, '_def': 1})
@@ -4004,8 +3963,7 @@ D2D1FEATURELEVEL = type('D2D1FEATURELEVEL', (_BCode, wintypes.DWORD), {'_tab_nc'
 
 class D2D1RENDERTARGETPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('type', D2D1RENDERTARGETTYPE), ('pixelFormat', D2D1PIXELFORMAT), ('dpiX', wintypes.FLOAT), ('dpiY', wintypes.FLOAT), ('usage', D2D1RENDERTARGETUSAGE), ('minLevel', D2D1FEATURELEVEL)]
-class D2D1PRENDERTARGETPROPERTIES(_BPStruct, ctypes.POINTER(D2D1RENDERTARGETPROPERTIES)):
-  _type_ = D2D1RENDERTARGETPROPERTIES
+D2D1PRENDERTARGETPROPERTIES = type('D2D1PRENDERTARGETPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1RENDERTARGETPROPERTIES)), {'_type_': D2D1RENDERTARGETPROPERTIES})
 
 D2D1CompatibleRenderTargetOptions = {'None': 0, 'GDICompatible': 1}
 D2D1COMPATIBLERENDERTARGETOPTIONS = type('D2D1COMPATIBLERENDERTARGETOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1CompatibleRenderTargetOptions.items()}, '_tab_cn': {c: n for n, c in D2D1CompatibleRenderTargetOptions.items()}, '_def': 0})
@@ -4015,8 +3973,7 @@ D2D1PRESENTOPTIONS = type('D2D1PRESENTOPTIONS', (_BCodeOr, wintypes.DWORD), {'_t
 
 class D2D1HWNDRENDERTARGETPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('hwnd', wintypes.HWND), ('pixelSize', D2D1SIZEU), ('presentOptions', D2D1PRESENTOPTIONS)]
-class D2D1PHWNDRENDERTARGETPROPERTIES(_BPStruct, ctypes.POINTER(D2D1HWNDRENDERTARGETPROPERTIES)):
-  _type_ = D2D1HWNDRENDERTARGETPROPERTIES
+D2D1PHWNDRENDERTARGETPROPERTIES = type('D2D1PHWNDRENDERTARGETPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1HWNDRENDERTARGETPROPERTIES)), {'_type_': D2D1HWNDRENDERTARGETPROPERTIES})
 
 D2D1WindowState = {'None': 0, 'Occluded': 1}
 D2D1WINDOWSTATE = type('D2D1WINDOWSTATE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1WindowState.items()}, '_tab_cn': {c: n for n, c in D2D1WindowState.items()}, '_def': 0})
