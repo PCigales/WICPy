@@ -15,10 +15,6 @@ wintypes.GUID = ctypes.c_char * 16
 wintypes.PGUID = ctypes.POINTER(wintypes.GUID)
 wintypes.BYTES16 = wintypes.BYTE * 16
 wintypes.PBYTES16 = ctypes.POINTER(wintypes.BYTES16)
-wintypes.FLOAT6 = type('FLOAT6', (wintypes.FLOAT * 6,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, wintypes.FLOAT6.__bases__[0]) else cls(*obj))})
-wintypes.PFLOAT6 = type('PFLOAT6', (ctypes.POINTER(wintypes.FLOAT6),), {'_type_': wintypes.FLOAT6, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (wintypes.PFLOAT6.__bases__[0], wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(cls._type_.from_param(obj)))})
-wintypes.FLOAT16 = type('FLOAT16', (wintypes.FLOAT * 16,), {'from_param': classmethod(lambda cls, obj: obj if isinstance(obj, wintypes.FLOAT16.__bases__[0]) else cls(*obj))})
-wintypes.PFLOAT16 = type('PFLOAT16', (ctypes.POINTER(wintypes.FLOAT16),), {'_type_': wintypes.FLOAT16, 'from_param': classmethod(lambda cls, obj: obj if obj is None or isinstance(obj, (wintypes.PFLOAT16.__bases__[0], wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(cls._type_.from_param(obj)))})
 import struct
 import threading
 import math
@@ -170,6 +166,10 @@ class IUnknown(metaclass=_IMeta):
     if __IUtil and hasattr(__IUtil._local, 'initialized'):
       while self.pI and self.refs > 0:
         self.Release()
+  def __enter__(self):
+    return self
+  def __exit__(self, et, ev, tb):
+    self.__del__()
 
 class _PCOMUtil:
   _mul_cache = {}
@@ -199,14 +199,17 @@ class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
   icls = IUnknown
   def __init__(self, interface=None):
     if isinstance(interface, IUnknown):
-      self.interface = interface
+      self._interface = interface
       self.value = getattr(interface.pI, 'value', interface.pI)
-      self.icls = interface.__class__
+      self.icls = interface.__class__ if self.__class__.icls is IUnknown else self.__class__.icls
+    elif isinstance(interface, PCOM):
+      self._interface = interface._interface
+      self.value = interface.value
+      self.icls = interface.icls if self.__class__.icls is IUnknown else self.__class__.icls
     else:
-      self.interface = self.__class__.icls(None)
+      self._interface = None
       self.value = getattr(interface, 'value', interface)
       self.icls = self.__class__.icls
-    self.pcom = ctypes.cast(self, wintypes.LPVOID)
   @property
   def value(self):
     return getattr(getattr(self, 'pcom', ctypes.cast(self, wintypes.LPVOID)), 'value', None)
@@ -923,11 +926,11 @@ class _BDStruct:
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, dict):
-      return cls(*(((k[1].from_param(obj[k[0]]) if k[0] in obj else k[1]()) if issubclass(k[1], ctypes.Structure) else obj.get(k[0], 0)) for k in cls._fields_))
+      return cls(*(((f[1].from_param(obj[f[0]]) if f[0] in obj else f[1]()) if issubclass(f[1], (ctypes.Structure, BSTRING)) else obj.get(f[0], 0)) for f in cls._fields_))
     else:
-      return cls(*((k[1].from_param(o) if issubclass(k[1], ctypes.Structure) else o) for k, o in zip(cls._fields_, obj)))
+      return cls(*((f[1].from_param(o) if issubclass(f[1], (ctypes.Structure, BSTRING)) else o) for f, o in zip(cls._fields_, obj)))
   def to_dict(self):
-    return {k[0]: (getattr(getattr(self, k[0]), 'value') if issubclass(k[1], ctypes.Structure) else getattr(self, k[0])) for k in self.__class__._fields_}
+    return {f[0]: (getattr((v := getattr(self, f[0])), 'value', v) if issubclass(f[1], ctypes.Structure) else getattr((v := getattr(self, f[0])), 'content', v)) for f in self.__class__._fields_}
   @property
   def value(self):
     return self.to_dict()
@@ -939,7 +942,7 @@ class _BTStruct:
   def from_param(cls, obj):
     return obj if obj is None or isinstance(obj, cls) else cls(*obj)
   def to_tuple(self):
-    return tuple(getattr(self, k[0]) for k in self.__class__._fields_)
+    return tuple(getattr(self, f[0]) for f in self.__class__._fields_)
   @property
   def value(self):
     return self.to_tuple()
@@ -1291,10 +1294,14 @@ class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   def content(self, data):
     self.cbSize = len(data)
     self.pBlobdata = ctypes.cast(ctypes.pointer(ctypes.create_string_buffer(data if isinstance(data, bytes) else bytes(data), self.cbSize)), wintypes.LPVOID)
+  value = content
   def __init__(self, data=None):
     super().__init__()
     if data is not None:
       self.content = data.content if isinstance(data, BLOB) else data
+  @classmethod
+  def from_param(cls, obj):
+    return obj if isinstance(obj, BLOB) else cls(obj)
 
 class _BSTRUtil:
   _mul_cache = {}
@@ -1368,6 +1375,9 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
 PBSTR = ctypes.POINTER(BSTR)
 class BSTRING(BSTR):
   _type_ = wintypes.WCHAR
+  @classmethod
+  def from_param(cls, obj):
+    return obj if isinstance(obj, BSTR) else cls(obj)
   def __ctypes_from_outparam__(self):
     return super().__ctypes_from_outparam__().content
 PBSTRING = ctypes.POINTER(BSTRING)
@@ -1449,10 +1459,15 @@ class VERSIONEDSTREAM(ctypes.Structure):
   def content(self, vs):
     self.guidVersion = GUID(vs[0])
     self.pStream = vs[1] if isinstance(vs[1], PCOMSTREAM) else PCOMSTREAM(vs[1])
+  value = content
   def __init__(self, *args):
     super().__init__()
     if args:
       self.content = args[0] if len(args) == 1 else args[:2]
+  @classmethod
+  def from_param(cls, obj):
+    return obj if isinstance(obj, VERSIONEDSTREAM) else cls(obj)
+  
 PVERSIONEDSTREAM = ctypes.POINTER(VERSIONEDSTREAM)
 
 class CA(ctypes.Structure):
@@ -3898,6 +3913,22 @@ D2D1PPOINT2U = type('D2D1PPOINT2U', (_BPStruct, ctypes.POINTER(D2D1POINT2U)), {'
 
 class D2D1POINT2F(_BTStruct, ctypes.Structure):
   _fields_ = [('x', wintypes.FLOAT), ('y', wintypes.FLOAT)]
+  def __getitem__(self, key):
+    if key == 1:
+      return self.x
+    elif key == 2:
+      return self.y
+    elif key == 3:
+      return 1
+    else:
+      raise IndexError('index out of range')
+  def __setitem__(arr, key, value):
+    if key == 1:
+      self.x = value
+    elif key == 2:
+      self.y = value
+    else:
+      raise IndexError('index out of range')
 D2D1PPOINT2F = type('D2D1PPOINT2F', (_BPStruct, ctypes.POINTER(D2D1POINT2F)), {'_type_': D2D1POINT2F})
 
 class D2D1RECTU(_BTStruct, ctypes.Structure):
@@ -3937,6 +3968,13 @@ D2D1BITMAPOPTIONS = type('D2D1BITMAPOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab
 
 class D2D1BITMAPPROPERTIESDC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('pixelFormat', D2D1PIXELFORMAT), ('dpiX', wintypes.FLOAT), ('dpiY', wintypes.FLOAT), ('bitmapOptions', D2D1BITMAPOPTIONS), ('colorContext', PCOMD2D1COLORCONTEXT)]
+  def __del__(self):
+    if getattr(self, '_needsclear', False):
+      if (i := self.colorContext.content) is not None:
+        i.Release()
+  def __ctypes_from_outparam__(self):
+    self._needsclear = True
+    return super.__ctypes_from_outparam__()
 D2D1PBITMAPPROPERTIESDC = type('D2D1PBITMAPPROPERTIESDC', (_BPStruct, ctypes.POINTER(D2D1BITMAPPROPERTIESDC)), {'_type_': D2D1BITMAPPROPERTIESDC})
 
 D2D1MappedOptions = {'None': 0, 'Read': 1, 'Write': 2, 'Discard': 4}
@@ -3977,6 +4015,85 @@ D2D1PHWNDRENDERTARGETPROPERTIES = type('D2D1PHWNDRENDERTARGETPROPERTIES', (_BPSt
 
 D2D1WindowState = {'None': 0, 'Occluded': 1}
 D2D1WINDOWSTATE = type('D2D1WINDOWSTATE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1WindowState.items()}, '_tab_cn': {c: n for n, c in D2D1WindowState.items()}, '_def': 0})
+
+class ID2D1Matrix3x2F(wintypes.FLOAT * 6):
+  @classmethod
+  def from_param(cls, obj):
+    return obj if isinstance(obj, ID2D1Matrix3x2F.__bases__[0]) else ID2D1Matrix3x2F.__bases__[0](*obj)
+  def __init__(self, *args):
+    super().__init__(*((1, 0, 0, 1, 0, 0) if not args else (args[0] if len(args) == 1 else args)))
+  def __getitem__(self, key):
+    if isinstance(key, tuple):
+      r, c = key
+      if r < 0 or r > 3 or c < 0 or c > 3:
+        raise IndexError('invalid index')
+      return (1 if r == 3 else 0) if c == 3 else super().__getitem__(2 * r + c - 3)
+    else:
+      return super().__getitem__(key)
+  def __setitem__(self, key, value):
+    if isinstance(key, tuple):
+      r, c = key
+      if r < 0 or r > 3 or c < 0 or c > 2:
+        raise IndexError('invalid index')
+      super().__setitem__(2 * r + c - 3, value)
+    else:
+      super().__setitem__(key, value)
+  def __matmul__(self, other):
+    return ID2D1Matrix3x2F(sum(self[r, i] * other[i, c] for i in range(1, 4)) for r in range(1, 4) for c in range(1, 3))
+  def __rmatmul__(self, other):
+    return D2D1POINT2F(*(sum(other[r] * self[r, c] for r in range(1, 4)) for c in range(1, 3))) if isinstance(other, D2D1POINT2F) else other.__matmul__(self)
+  def __imatmul__(self, other):
+    self.__init__(*(self @ other))
+    return self
+  def __invert__(self):
+    m = ID2D1Matrix3x2F(self)
+    if not ID2D1Factory.InvertMatrix(m):
+      raise ZeroDivisionError('matrix not invertible')
+    return m
+  def __eq__(self, other):
+    return all(self[i] == other[i] for i in range(6))
+class ID2D1PMatrix3x2F(ctypes.POINTER(ID2D1Matrix3x2F)):
+  _type_ = ID2D1Matrix3x2F
+  @classmethod
+  def from_param(cls, obj):
+    return obj if obj is None or isinstance(obj, (ctypes._Pointer, wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(ID2D1Matrix3x2F.from_param(obj))
+
+class ID2D1Matrix4x4F(wintypes.FLOAT * 16):
+  @classmethod
+  def from_param(cls, obj):
+    return obj if isinstance(obj, ID2D1Matrix4x4F.__bases__[0]) else ID2D1Matrix4x4F.__bases__[0](*obj)
+  def __init__(self, *args):
+    super().__init__(*((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) if not args else (args[0] if len(args) == 1 else args)))
+  def __getitem__(self, key):
+    if isinstance(key, tuple):
+      r, c = key
+      if r < 0 or r > 4 or c < 0 or c > 4:
+        raise IndexError('invalid index')
+      return super().__getitem__(4 * r + c - 5)
+    else:
+      return super().__getitem__(key)
+  def __setitem__(self, key, value):
+    if isinstance(key, tuple):
+      r, c = key
+      if r < 0 or r > 4 or c < 0 or c > 4:
+        raise IndexError('invalid index')
+      super().__setitem__(4 * r + c - 5, value)
+    else:
+      super().__setitem__(key, value)
+  def __matmul__(self, other):
+    return ID2D1Matrix4x4F(sum(self[r, i] * other[i, c] for i in range(1, 5)) for r in range(1, 5) for c in range(1, 5))
+  def __rmatmul__(self, other):
+    return other.__matmul__(self)
+  def __imatmul__(self, other):
+    self.__init__(*(self @ other))
+    return self
+  def __eq__(self, other):
+    return all(self[i] == other[i] for i in range(16))
+class ID2D1PMatrix4x4F(ctypes.POINTER(ID2D1Matrix4x4F)):
+  _type_ = ID2D1Matrix4x4F
+  @classmethod
+  def from_param(cls, obj):
+    return obj if obj is None or isinstance(obj, (ctypes._Pointer, wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(ID2D1Matrix4x4F.from_param(obj))
 
 class ID2D1Bitmap(ID2D1Image):
   IID = GUID(0xa898a84c, 0x3873, 0x4588, 0xb0, 0x8b, 0xeb, 0xbf, 0x97, 0x8d, 0xf0, 0x41)
@@ -4027,8 +4144,8 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['CreateSharedBitmap'] = 6, (PUUID, wintypes.LPVOID, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
   _protos['CreateCompatibleRenderTarget'] = 12, (D2D1PSIZEF, D2D1PSIZEU, D2D1PPIXELFORMAT, D2D1COMPATIBLERENDERTARGETOPTIONS), (wintypes.PLPVOID,)
   _protos['DrawBitmap'] = 26, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1BITMAPINTERPOLATIONMODE, D2D1PRECTF), (), None
-  _protos['SetTransform'] = 30, (wintypes.PFLOAT6,), (), None
-  _protos['GetTransform'] = 31, (), (wintypes.PFLOAT6,), None
+  _protos['SetTransform'] = 30, (ID2D1PMatrix3x2F,), (), None
+  _protos['GetTransform'] = 31, (), (ID2D1PMatrix3x2F,), None
   _protos['SetAntialiasMode'] = 32, (D2D1ANTIALIASMODE,), (), None
   _protos['GetAntialiasMode'] = 33, (), (), D2D1ANTIALIASMODE
   _protos['Flush'] = 42, (), (wintypes.PULARGE_INTEGER, wintypes.PULARGE_INTEGER)
@@ -4110,7 +4227,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   _protos['GetRenderingControls'] = 77, (), (D2D1PRENDERINGCONTROLS,), None
   _protos['SetPrimitiveBlend'] = 78, (D2D1PRIMITIVEBLEND,), (), None
   _protos['GetPrimitiveBlend'] = 79, (), (), D2D1PRIMITIVEBLEND
-  _protos['DrawBitmap'] = 85, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1INTERPOLATIONMODE, D2D1PRECTF, wintypes.PFLOAT16), (), None
+  _protos['DrawBitmap'] = 85, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1INTERPOLATIONMODE, D2D1PRECTF, ID2D1PMatrix4x4F), (), None
   def CreateBitmap(self, width, height, properties, source_data=None, source_pitch=0):
     return ID2D1Bitmap(self.__class__._protos['CreateBitmap'](self.pI, (width, height), source_data, source_pitch, properties), self.factory)
   def CreateBitmapFromWICBitmap(self, source, properties=None):
@@ -4273,26 +4390,26 @@ class ID2D1Factory(IUnknown):
     if (render_target := self.CreateDxgiSurfaceRenderTarget(surface, ('Hardware', (format, (alpha_mode or 'Premultiplied')), dpiX, dpiY, usage, 'Default'))) is None:
       return None
     return surface, render_target
-  MakeIdentityMatrix = staticmethod(lambda : wintypes.FLOAT6(1, 0, 0, 1, 0, 0))
-  MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, wintypes.PFLOAT6)(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
-  MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, wintypes.PFLOAT6)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
-  MakeTranslationMatrix = staticmethod(lambda x, y: wintypes.FLOAT6(1, 0, 0, 1, x, y))
-  MakeScaleMatrix = staticmethod(lambda x, y, center: wintypes.FLOAT6(x, 0, 0, y, (1 - x) * getattr(center, 'value', center)[0], (1 - y) * getattr(center, 'value', center)[1]))
-  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix).value)
-  InvertMatrix = staticmethod(lambda matrix, _im=(f := ctypes.WINFUNCTYPE(wintypes.BOOLE, wintypes.PFLOAT6)(('D2D1InvertMatrix', d2d1), ((3,),)), setattr(f, 'errcheck', lambda r, f, a: a if r else None))[0]: _im(matrix))
-  MultiplyMatrix = staticmethod(lambda a, b: wintypes.FLOAT6(a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3], a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5]))
+  MakeIdentityMatrix = staticmethod(ID2D1Matrix3x2F)
+  MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, ID2D1PMatrix3x2F)(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
+  MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, ID2D1PMatrix3x2F)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
+  MakeTranslationMatrix = staticmethod(lambda x, y: ID2D1Matrix3x2F(1, 0, 0, 1, x, y))
+  MakeScaleMatrix = staticmethod(lambda x, y, center: ID2D1Matrix3x2F(x, 0, 0, y, (1 - x) * getattr(center, 'value', center)[0], (1 - y) * getattr(center, 'value', center)[1]))
+  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, ID2D1PMatrix3x2F)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix).value)
+  InvertMatrix = staticmethod(lambda matrix, _im=ctypes.WINFUNCTYPE(wintypes.BOOLE, ID2D1PMatrix3x2F)(('D2D1InvertMatrix', d2d1), ((1,),)): _im(matrix).value)
+  MultiplyMatrix = staticmethod(lambda a, b: a @ b)
   ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1COLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
-  MakeIdentityMatrix4x4 = staticmethod(lambda : wintypes.FLOAT16(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))
-  MakeRotationXMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1))[2])
-  MakeRotationYMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1))[2])
-  MakeRotationZMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16(c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[2])
-  MakeRotationMatrix4x4 = staticmethod(lambda x, y, z, angle: (l := math.hypot(x, y, z), x := x / l, y := y / l, z := z / l, c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), wintypes.FLOAT16((1 - c) * x * x + c, (1 - c) * x * y + z * s, (1 - c) * x * z - y * s, 0, (1 - c) * y * x - z * s, (1 - c) * y * y + c, (1 - c) * y * z + x * s, 0, (1 - c) * z * x + y * s, (1 - c) * z * y - x * s, (1 - c) * z * z + c, 0, 0, 0, 0, 1))[6])
-  MakeSkewXMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), wintypes.FLOAT16(1, 0, 0, 0, t, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
-  MakeSkewYMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), wintypes.FLOAT16(1, t, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
-  MakeTranslationMatrix4x4 = staticmethod(lambda x, y, z: wintypes.FLOAT16(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1))
-  MakeScaleMatrix4x4 = staticmethod(lambda x, y, z: wintypes.FLOAT16(x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1))
-  MakePerspectiveMatrix4x4 = staticmethod(lambda depth: wintypes.FLOAT16(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, - 1 / depth, 0, 0, 0, 1))
-  MultiplyMatrix4x4 = staticmethod(lambda a, b: wintypes.FLOAT16(*(sum(a[4 * r + i] * b[c + 4 * i] for i in range(4)) for r in range(4) for c in range(4))))
+  MakeIdentityMatrix4x4 = staticmethod(ID2D1Matrix4x4F)
+  MakeRotationXMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), ID2D1Matrix4x4F(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1))[2])
+  MakeRotationYMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), ID2D1Matrix4x4F(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1))[2])
+  MakeRotationZMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), ID2D1Matrix4x4F(c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[2])
+  MakeRotationMatrix4x4 = staticmethod(lambda x, y, z, angle: (l := math.hypot(x, y, z), x := x / l, y := y / l, z := z / l, c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), ID2D1Matrix4x4F((1 - c) * x * x + c, (1 - c) * x * y + z * s, (1 - c) * x * z - y * s, 0, (1 - c) * y * x - z * s, (1 - c) * y * y + c, (1 - c) * y * z + x * s, 0, (1 - c) * z * x + y * s, (1 - c) * z * y - x * s, (1 - c) * z * z + c, 0, 0, 0, 0, 1))[6])
+  MakeSkewXMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), ID2D1Matrix4x4F(1, 0, 0, 0, t, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
+  MakeSkewYMatrix4x4 = staticmethod(lambda angle: (t := math.tan(math.radians(angle)), ID2D1Matrix4x4F(1, t, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))[1])
+  MakeTranslationMatrix4x4 = staticmethod(lambda x, y, z: ID2D1Matrix4x4F(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1))
+  MakeScaleMatrix4x4 = staticmethod(lambda x, y, z: ID2D1Matrix4x4F(x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1))
+  MakePerspectiveMatrix4x4 = staticmethod(lambda depth: ID2D1Matrix4x4F(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, - 1 / depth, 0, 0, 0, 1))
+  MultiplyMatrix4x4 = staticmethod(lambda a, b: a @ b)
 ID2D1Factory1 = ID2D1Factory
 
 class _WMPMAttribute:

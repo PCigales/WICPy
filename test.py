@@ -1194,8 +1194,11 @@ print(D2D1RenderTarget.GetDeviceContext().GetTarget())
 #Starting to draw
 D2D1RenderTarget.BeginDraw()
 #Setting a rotation matrix
-D2D1RenderTarget.SetTransform(D2D1Factory.MakeRotateMatrix(90, (160, 100)))
+D2D1RenderTarget.SetTransform(ID2D1Factory.MakeRotateMatrix(90, (160, 100)))
 print(D2D1RenderTarget.GetTransform()[:])
+#Matrix operations
+print(ID2D1Factory.MakeTranslationMatrix(-160, -100) @ ID2D1Factory.MakeRotateMatrix(90, (0, 0)) @ ID2D1Factory.MakeTranslationMatrix(160, 100) == ID2D1Factory.MakeRotateMatrix(90, (160, 100)))
+print(ID2D1Factory.MakeRotateMatrix(90, (160, 100)) @ ~ID2D1Factory.MakeRotateMatrix(90, (160, 100)) == ID2D1Factory.MakeIdentityMatrix())
 #Clearing
 D2D1RenderTarget.Clear((1, 0, 0, 1))
 #Drawing the WIC bitmap
