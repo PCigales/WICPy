@@ -1467,7 +1467,6 @@ class VERSIONEDSTREAM(ctypes.Structure):
   @classmethod
   def from_param(cls, obj):
     return obj if isinstance(obj, VERSIONEDSTREAM) else cls(obj)
-  
 PVERSIONEDSTREAM = ctypes.POINTER(VERSIONEDSTREAM)
 
 class CA(ctypes.Structure):
@@ -3970,11 +3969,11 @@ class D2D1BITMAPPROPERTIESDC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('pixelFormat', D2D1PIXELFORMAT), ('dpiX', wintypes.FLOAT), ('dpiY', wintypes.FLOAT), ('bitmapOptions', D2D1BITMAPOPTIONS), ('colorContext', PCOMD2D1COLORCONTEXT)]
   def __del__(self):
     if getattr(self, '_needsclear', False):
-      if (i := self.colorContext.content) is not None:
+      if (i := self.colorContext) is not None:
         i.Release()
   def __ctypes_from_outparam__(self):
     self._needsclear = True
-    return super.__ctypes_from_outparam__()
+    return super().__ctypes_from_outparam__()
 D2D1PBITMAPPROPERTIESDC = type('D2D1PBITMAPPROPERTIESDC', (_BPStruct, ctypes.POINTER(D2D1BITMAPPROPERTIESDC)), {'_type_': D2D1BITMAPPROPERTIESDC})
 
 D2D1MappedOptions = {'None': 0, 'Read': 1, 'Write': 2, 'Discard': 4}
