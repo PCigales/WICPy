@@ -162,8 +162,7 @@ class IUnknown(metaclass=_IMeta):
   def _as_parameter_(self):
     return self.pI
   def __del__(self):
-    __IUtil = globals().get('_IUtil')
-    if __IUtil and hasattr(__IUtil._local, 'initialized'):
+    if getattr(self.__class__, '_lightweight', False) or ((__IUtil := globals().get('_IUtil')) and hasattr(__IUtil._local, 'initialized')):
       while self.pI and self.refs > 0:
         self.Release()
   def __enter__(self):
@@ -495,7 +494,7 @@ class _GMeta(wintypes.GUID.__class__):
     if hasattr(cls, 'value'):
       del cls.value
 
-UUID = _GMeta('UUID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {}, '_tab_gn': {}, '_def': None})
+UUID = _GMeta('UUID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {}, '_tab_gn': {}, '_def': None, '__str__': lambda s: str(self.guid)})
 PUUID = type('PUUID', (_BPGUID, ctypes.POINTER(UUID)), {'_type_': UUID})
 
 WICContainerFormat = {
@@ -906,19 +905,160 @@ class Components(wintypes.DWORD):
   def __repr__(self):
     return str(self)
 
+class _BSTRUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _agitem(arr, key):
+    e = arr.__class__.__bases__[0].__getitem__(arr, key)
+    return e.content if isinstance(key, int) else [b.content for b in e]
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, BSTR) else BSTR(value)) if isinstance(key, int) else [v if isinstance(v, BSTR) else BSTR(v) for v in value])
+
+class _BSTRMeta(ctypes._Pointer.__class__):
+  def __mul__(bcls, size):
+    return _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
+
+class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
+  _type_ = wintypes.WCHAR
+  oleauto32.SysAllocString.restype = wintypes.LPVOID
+  oleauto32.SysAllocStringByteLen.restype = wintypes.LPVOID
+  def __new__(cls, data=None):
+    self = ctypes.POINTER(wintypes.WCHAR).__new__(cls)
+    if isinstance(data, BSTR):
+      self._needsfree = False
+      bstr = getattr(data, 'bstr', ctypes.cast(data, ctypes.c_void_p))
+    elif isinstance(data, wintypes.LPVOID):
+      self._needsfree = False
+      bstr = data
+    elif data is None or isinstance(data, int):
+      self._needsfree = False
+      bstr = wintypes.LPVOID(data)
+    elif isinstance(data, wintypes.LPCWSTR):
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocString(data))
+    elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocString(ctypes.byref(data)))
+    elif isinstance(data, str):
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocString(wintypes.LPCWSTR(data)))
+    else:
+      self._needsfree = True
+      bstr = wintypes.LPVOID(oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data)))
+    self.value = bstr.value
+    return self
+  @property
+  def value(self):
+    return getattr(getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p)), 'value', None)
+  @value.setter
+  def value(self, val):
+    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
+    self.bstr = ctypes.cast(self, ctypes.c_void_p)
+  @property
+  def content(self):
+    if not hasattr(self, 'bstr'):
+      self.bstr = ctypes.cast(self, ctypes.c_void_p)
+    if not self.bstr:
+      return None
+    l = wintypes.UINT(oleauto32.SysStringLen(self.bstr))
+    return ctypes.wstring_at(self.bstr, l.value)
+  def __init__(self, data=None):
+    super().__init__()
+  def __del__(self):
+    if (bstr := getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p))) and getattr(self, '_needsfree', False):
+      oleauto32.SysFreeString(bstr)
+      self._needsfree = False
+      self.value = None
+  def __ctypes_from_outparam__(self):
+    self._needsfree = True
+    self.bstr = ctypes.cast(self, ctypes.c_void_p)
+    return self
+PBSTR = ctypes.POINTER(BSTR)
+class BSTRING(BSTR):
+  _type_ = wintypes.WCHAR
+  @classmethod
+  def from_param(cls, obj):
+    return obj if isinstance(obj, BSTR) else cls(obj)
+  def __ctypes_from_outparam__(self):
+    return super().__ctypes_from_outparam__().content
+PBSTRING = ctypes.POINTER(BSTRING)
+
+class FDate(float):
+  def __new__(cls, dt=0):
+    if isinstance(dt, str):
+      try:
+        dt = datetime.datetime.strptime(dt, '%x %X %z')
+      except:
+        try:
+          dt = datetime.datetime.strptime(dt, '%x %X')
+          dt = dt.replace(tzinfo=dt.astimezone().tzinfo)
+        except:
+          try:
+            dt = datetime.datetime.fromisoformat(dt)
+          except:
+            return None
+    if isinstance(dt, datetime.datetime):
+      dt = (dt - datetime.datetime(1899, 12, 30, 0, 0, 0, 0, (None if dt.tzinfo is None else datetime.timezone.utc))) / datetime.timedelta(1)
+    elif isinstance(dt, (int, float)):
+      pass
+    elif isinstance(dt, wintypes.DOUBLE):
+      dt = dt.value
+    else:
+      return None
+    self = float.__new__(cls, dt)
+    return self
+  def to_utc(self):
+    return (datetime.datetime(1899, 12, 30, 0, 0, 0, 0, datetime.timezone.utc) + datetime.timedelta(self))
+  def to_locale(self):
+    return self.to_utc().astimezone()
+  def to_string(self):
+    l = self.to_locale()
+    if round(l.second + l.microsecond / 1000000) > l.second:
+      l = l + datetime.timedelta(seconds=1)
+    return l.replace(microsecond=0).strftime('%x %X %z')
+  def __str__(self):
+    try:
+      return '<%f: %s>' % (self, self.to_string())
+    except:
+      return '<%f: >' % self
+  def __repr__(self):
+    return str(self)
+
+class _DATEUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _agitem(arr, key):
+    e = arr.__class__.__bases__[0].__getitem__(arr, key)
+    return e.content if isinstance(key, int) else [d.content for d in e]
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, DATE) else DATE(value)) if isinstance(key, int) else [v if isinstance(v, DATE) else DATE(v) for v in value])
+
+class _DATEMeta(wintypes.DOUBLE.__class__):
+  def __mul__(bcls, size):
+    return _DATEUtil._mul_cache.setdefault((bcls, size), type('DATE_Array_%d' % size, (wintypes.DOUBLE.__class__.__mul__(bcls, size),), {'__getitem__': _DATEUtil._agitem, '__setitem__': _DATEUtil._asitem}))
+
+class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
+  def __init__(self, dt=0):
+    wintypes.DOUBLE.__init__(self, FDate(dt))
+  @property
+  def content(self):
+    return FDate(self)
+  @content.setter
+  def content(self, data):
+    self.value = FDate(data)
+
 class _WSMeta(ctypes.Structure.__class__):
   def __init__(cls, *args, **kwargs):
     super(_WSMeta, _WSMeta).__init__(cls, *args, **kwargs)
-    for f in cls._fields_:
-      if issubclass(f[1], (_BGUID, _BCode, Components)):
-        setattr(cls, '_' + f[0], getattr(cls, f[0]))
-        setattr(cls, f[0], property(lambda s, _n='_'+f[0], _t=f[1]: _t(getattr(s, _n)), lambda s, v, _n='_'+f[0], _t=f[1]: setattr(s, _n, (_t.to_bytes if issubclass(_t, _BGUID) else _t.to_int)(v))))
-      if issubclass(f[1], PCOM):
-        setattr(cls, '_' + f[0], getattr(cls, f[0]))
-        setattr(cls, f[0], property(lambda s, _n='_'+f[0], _t=f[1]: getattr(s, _n).content, lambda s, v, _n='_'+f[0], _t=f[1]: setattr(s, _n, (v if isinstance(v, _t) else _t(v)))))
-      if issubclass(f[1], wintypes.BOOLE):
-        setattr(cls, '_' + f[0], getattr(cls, f[0]))
-        setattr(cls, f[0], property(lambda s, _n='_'+f[0], _t=f[1]: getattr(s, _n).value, lambda s, v, _n='_'+f[0], _t=f[1]: setattr(s, _n, (v if isinstance(v, _t) else _t(v)))))
+    for n, t in cls._fields_:
+      if (b := issubclass(t, _BGUID)) or (issubclass(t, (_BCode, Components))):
+        setattr(cls, '_' + n, getattr(cls, n))
+        setattr(cls, n, property(lambda s, _n='_'+n, _t=t: _t(getattr(s, _n)), (lambda s, v, _n='_'+n, _t=t: setattr(s, _n, _t.to_bytes(v))) if b else (lambda s, v, _n='_'+n, _t=t: setattr(s, _n, _t.to_int(v))), getattr(cls, n).__delete__))
+      elif (b := issubclass(t, wintypes.BOOLE)) or (issubclass(t, (PCOM, BSTRING, DATE))):
+        setattr(cls, '_' + n, getattr(cls, n))
+        setattr(cls, n, property((lambda s, _n='_'+n, _t=t: getattr(s, _n).value) if b else (lambda s, _n='_'+n, _t=t: getattr(s, _n).content), lambda s, v, _n='_'+n, _t=t: setattr(s, _n, (v if isinstance(v, _t) else _t(v))), getattr(cls, n).__delete__))
 
 class _BDStruct:
   @classmethod
@@ -926,11 +1066,11 @@ class _BDStruct:
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, dict):
-      return cls(*(((f[1].from_param(obj[f[0]]) if f[0] in obj else f[1]()) if issubclass(f[1], (ctypes.Structure, BSTRING)) else obj.get(f[0], 0)) for f in cls._fields_))
+      return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, ctypes.Structure) else obj.get(n, 0)) for n, t in cls._fields_))
     else:
-      return cls(*((f[1].from_param(o) if issubclass(f[1], (ctypes.Structure, BSTRING)) else o) for f, o in zip(cls._fields_, obj)))
+      return cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
   def to_dict(self):
-    return {f[0]: (getattr((v := getattr(self, f[0])), 'value', v) if issubclass(f[1], ctypes.Structure) else getattr((v := getattr(self, f[0])), 'content', v)) for f in self.__class__._fields_}
+    return {n: (getattr((v := getattr(self, n)), 'value', v) if issubclass(t, ctypes.Structure) else getattr(self, n)) for n, t in self.__class__._fields_}
   @property
   def value(self):
     return self.to_dict()
@@ -1303,170 +1443,18 @@ class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   def from_param(cls, obj):
     return obj if isinstance(obj, BLOB) else cls(obj)
 
-class _BSTRUtil:
-  _mul_cache = {}
-  @staticmethod
-  def _agitem(arr, key):
-    e = arr.__class__.__bases__[0].__getitem__(arr, key)
-    return e.content if isinstance(key, int) else [b.content for b in e]
-  @staticmethod
-  def _asitem(arr, key, value):
-    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, BSTR) else BSTR(value)) if isinstance(key, int) else [v if isinstance(v, BSTR) else BSTR(v) for v in value])
-
-class _BSTRMeta(ctypes._Pointer.__class__):
-  def __mul__(bcls, size):
-    return _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
-
-class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
-  _type_ = wintypes.WCHAR
-  oleauto32.SysAllocString.restype = wintypes.LPVOID
-  oleauto32.SysAllocStringByteLen.restype = wintypes.LPVOID
-  def __new__(cls, data=None):
-    self = ctypes.POINTER(wintypes.WCHAR).__new__(cls)
-    if isinstance(data, BSTR):
-      self._needsfree = False
-      bstr = getattr(data, 'bstr', ctypes.cast(data, ctypes.c_void_p))
-    elif isinstance(data, wintypes.LPVOID):
-      self._needsfree = False
-      bstr = data
-    elif data is None or isinstance(data, int):
-      self._needsfree = False
-      bstr = wintypes.LPVOID(data)
-    elif isinstance(data, wintypes.LPCWSTR):
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(data))
-    elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(ctypes.byref(data)))
-    elif isinstance(data, str):
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(wintypes.LPCWSTR(data)))
-    else:
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data)))
-    self.value = bstr.value
-    return self
-  @property
-  def value(self):
-    return getattr(getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p)), 'value', None)
-  @value.setter
-  def value(self, val):
-    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
-    self.bstr = ctypes.cast(self, ctypes.c_void_p)
-  @property
-  def content(self):
-    if not hasattr(self, 'bstr'):
-      self.bstr = ctypes.cast(self, ctypes.c_void_p)
-    if not self.bstr:
-      return None
-    l = wintypes.UINT(oleauto32.SysStringLen(self.bstr))
-    return ctypes.wstring_at(self.bstr, l.value)
-  def __init__(self, data=None):
-    super().__init__()
-  def __del__(self):
-    if (bstr := getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p))) and getattr(self, '_needsfree', False):
-      oleauto32.SysFreeString(bstr)
-      self._needsfree = False
-      self.value = None
-  def __ctypes_from_outparam__(self):
-    self._needsfree = True
-    self.bstr = ctypes.cast(self, ctypes.c_void_p)
-    return self
-PBSTR = ctypes.POINTER(BSTR)
-class BSTRING(BSTR):
-  _type_ = wintypes.WCHAR
-  @classmethod
-  def from_param(cls, obj):
-    return obj if isinstance(obj, BSTR) else cls(obj)
-  def __ctypes_from_outparam__(self):
-    return super().__ctypes_from_outparam__().content
-PBSTRING = ctypes.POINTER(BSTRING)
-
-class FDate(float):
-  def __new__(cls, dt=0):
-    if isinstance(dt, str):
-      try:
-        dt = datetime.datetime.strptime(dt, '%x %X %z')
-      except:
-        try:
-          dt = datetime.datetime.strptime(dt, '%x %X')
-          dt = dt.replace(tzinfo=dt.astimezone().tzinfo)
-        except:
-          try:
-            dt = datetime.datetime.fromisoformat(dt)
-          except:
-            return None
-    if isinstance(dt, datetime.datetime):
-      dt = (dt - datetime.datetime(1899, 12, 30, 0, 0, 0, 0, (None if dt.tzinfo is None else datetime.timezone.utc))) / datetime.timedelta(1)
-    elif isinstance(dt, (int, float)):
-      pass
-    elif isinstance(dt, wintypes.DOUBLE):
-      dt = dt.value
-    else:
-      return None
-    self = float.__new__(cls, dt)
-    return self
-  def to_utc(self):
-    return (datetime.datetime(1899, 12, 30, 0, 0, 0, 0, datetime.timezone.utc) + datetime.timedelta(self))
-  def to_locale(self):
-    return self.to_utc().astimezone()
-  def to_string(self):
-    l = self.to_locale()
-    if round(l.second + l.microsecond / 1000000) > l.second:
-      l = l + datetime.timedelta(seconds=1)
-    return l.replace(microsecond=0).strftime('%x %X %z')
-  def __str__(self):
-    try:
-      return '<%f: %s>' % (self, self.to_string())
-    except:
-      return '<%f: >' % self
-  def __repr__(self):
-    return str(self)
-
-class _DATEUtil:
-  _mul_cache = {}
-  @staticmethod
-  def _agitem(arr, key):
-    e = arr.__class__.__bases__[0].__getitem__(arr, key)
-    return e.content if isinstance(key, int) else [d.content for d in e]
-  @staticmethod
-  def _asitem(arr, key, value):
-    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, DATE) else DATE(value)) if isinstance(key, int) else [v if isinstance(v, DATE) else DATE(v) for v in value])
-
-class _DATEMeta(wintypes.DOUBLE.__class__):
-  def __mul__(bcls, size):
-    return _DATEUtil._mul_cache.setdefault((bcls, size), type('DATE_Array_%d' % size, (wintypes.DOUBLE.__class__.__mul__(bcls, size),), {'__getitem__': _DATEUtil._agitem, '__setitem__': _DATEUtil._asitem}))
-
-class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
-  def __init__(self, dt=0):
-    wintypes.DOUBLE.__init__(self, FDate(dt))
-  @property
-  def content(self):
-    return FDate(self)
-  @content.setter
-  def content(self, data):
-    self.value = FDate(data)
-
 class PCOMSTREAM(PCOM):
   icls = IStream
 
-class VERSIONEDSTREAM(ctypes.Structure):
-  _fields_ = [('guidVersion', wintypes.GUID), ('pStream', PCOMSTREAM)]
-  @property
-  def content(self):
-    return (GUID(self.guidVersion.ljust(16, b'\x00')), self.pStream.content)
-  @content.setter
-  def content(self, vs):
-    self.guidVersion = GUID(vs[0])
-    self.pStream = vs[1] if isinstance(vs[1], PCOMSTREAM) else PCOMSTREAM(vs[1])
-  value = content
-  def __init__(self, *args):
-    super().__init__()
-    if args:
-      self.content = args[0] if len(args) == 1 else args[:2]
-  @classmethod
-  def from_param(cls, obj):
-    return obj if isinstance(obj, VERSIONEDSTREAM) else cls(obj)
+class VERSIONEDSTREAM(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('guidVersion', UUID), ('pStream', PCOMSTREAM)]
+  def __del__(self):
+    if getattr(self, '_needsclear', False):
+      if (i := self.pStream) is not None:
+        i.Release()
+  def __ctypes_from_outparam__(self):
+    self._needsclear = True
+    return self.content
 PVERSIONEDSTREAM = ctypes.POINTER(VERSIONEDSTREAM)
 
 class CA(ctypes.Structure):
@@ -1731,7 +1719,7 @@ class _BVMeta(ctypes.Structure.__class__):
       cls.decVal = property(lambda s: _BVUtil._adup(s._decVal), lambda s, v: setattr(s, '_decVal', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._decVal.__delete__)
     if hasattr(cls, 'pVersionedStream'):
       cls._pVersionedStream = cls.pVersionedStream
-      cls.pVersionedStream = property(lambda s: s._pVersionedStream.contents.content if s._pVersionedStream else None, lambda s, v: setattr(s, '_pVersionedStream', v if isinstance(v, PVERSIONEDSTREAM) else (PVERSIONEDSTREAM(v) if isinstance(v, VERSIONEDSTREAM) else PVERSIONEDSTREAM(VERSIONEDSTREAM(v)))), cls._pVersionedStream.__delete__)
+      cls.pVersionedStream = property(lambda s: s._pVersionedStream.contents.value if s._pVersionedStream else None, lambda s, v: setattr(s, '_pVersionedStream', v if isinstance(v, (PVERSIONEDSTREAM, wintypes.LPVOID)) else PVERSIONEDSTREAM(VERSIONEDSTREAM.from_param(v)), cls._pVersionedStream.__delete__))
 
 class _BVARIANT(metaclass=_BVMeta):
   vtype_code = {'VT_EMPTY': 0, 'VT_NULL': 1, 'VT_I1': 16, 'VT_UI1': 17, 'VT_I2': 2, 'VT_UI2': 18, 'VT_I4': 3, 'VT_UI4': 19, 'VT_INT': 22, 'VT_UINT': 23, 'VT_I8': 20, 'VT_UI8': 21, 'VT_R4': 4, 'VT_R8': 5, 'VT_BOOL': 11, 'VT_ERROR': 10, 'VT_CY': 6, 'VT_DATE': 7, 'VT_FILETIME': 64, 'VT_CLSID': 72, 'VT_CF': 71, 'VT_BSTR': 8, 'VT_BLOB': 65, 'VT_BLOBOBJECT': 70, 'VT_LPSTR': 30, 'VT_LPWSTR': 31, 'VT_UNKNOWN': 13, 'VT_DISPATCH': 9, 'VT_STREAM': 66, 'VT_STREAMED_OBJECT': 68, 'VT_STORAGE': 67, 'VT_STORED_OBJECT': 69, 'VT_VERSIONED_STREAM': 73, 'VT_DECIMAL': 14, 'VT_VECTOR': 4096, 'VT_ARRAY': 8192, 'VT_BYREF': 16384, 'VT_VARIANT': 12}
@@ -3644,6 +3632,7 @@ class DXGIMODEDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 DXGIPMODEDESC = type('DXGIPMODEDESC', (_BPStruct, ctypes.POINTER(DXGIMODEDESC)), {'_type_': DXGIMODEDESC})
 
 class IDXGIObject(IUnknown):
+  _lightweight = True
   IID = GUID(0xaec22fb8, 0x76f3, 0x4639, 0x9b, 0xe0, 0x28, 0xeb, 0x43, 0xa6, 0x7a, 0x2e)
   _protos['GetParent'] = 6, (PUUID,), (wintypes.PLPVOID,)
   def __new__(cls, clsid_component=False, factory=None):
@@ -3819,6 +3808,7 @@ D3D11FEATURELEVEL = type('D3D11FEATURELEVEL', (_BCode, wintypes.UINT), {'_tab_nc
 D3D11PFEATURELEVEL = ctypes.POINTER(D3D11FEATURELEVEL)
 
 class ID3D11DeviceChild(IUnknown):
+  _lightweight = True
   IID = GUID(0x1841e5c8, 0x16b0, 0x489b, 0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae)
   _protos['GetDevice'] = 3, (), (wintypes.PLPVOID,), None
   def GetDevice(self):
@@ -3839,6 +3829,7 @@ class ID3D11Texture2D(ID3D11Resource):
     return self.QueryInterface(IDXGISurface, False)
 
 class ID3D11Device(IUnknown):
+  _lightweight = True
   IID = GUID(0xdb6f6ddb, 0xac77, 0x4e88, 0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40)
   _protos['CreateTexture2D'] = 5, (D3D11PTEXTURE2DDESC, D3D11PSUBRESOURCEDATA), (wintypes.PLPVOID,)
   _protos['GetFeatureLevel'] = 37, (), (), D3D11FEATURELEVEL
@@ -3874,6 +3865,7 @@ D2D1ColorSpace = {'Custom': 0, 'sRGB': 1, 'scRGB': 2}
 D2D1COLORSPACE = type('D2D1COLORSPACE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1ColorSpace.items()}, '_tab_cn': {c: n for n, c in D2D1ColorSpace.items()}, '_def': 1})
 
 class ID2D1Resource(IUnknown):
+  _lightweight = True
   IID = GUID(0x2cd90691, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
   _protos['GetFactory'] = 3, (), (wintypes.PLPVOID,), None
   def GetFactory(self):
@@ -4344,6 +4336,7 @@ class ID2D1Device(ID2D1Resource):
     return dxgi_device
 
 class ID2D1Factory(IUnknown):
+  _lightweight = True
   IID = GUID(0xbb12d362, 0xdaee, 0x4b9a, 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f)
   _protos['CreateWicBitmapRenderTarget'] = 13, (wintypes.LPVOID, D2D1PRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateHwndRenderTarget'] = 14, (D2D1PRENDERTARGETPROPERTIES, D2D1PHWNDRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
