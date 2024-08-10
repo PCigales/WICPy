@@ -4514,7 +4514,8 @@ class ID2D1RenderTarget(ID2D1Resource):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb)
   def CreateStrokeStyle(self, start_cap=0, end_cap=0, dash_cap=0, line_join=0, miter_limit=1, dash_style=0, dash_offset=0, transform_type=0, dashes=None):
     if (factory := self.factory) is None:
-      return None
+      if (factory := self.GetFactory()) is None:
+        return None
     return factory.CreateStrokeStyle((start_cap, end_cap, dash_cap, line_join, miter_limit, dash_style, dash_offset, transform_type), dashes)
   def DrawLine(self, point0, point1, brush, stroke_width, stroke_style=None):
     self.__class__._protos['DrawLine'](self.pI, point0, point1, brush, stroke_width, stroke_style)
