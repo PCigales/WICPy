@@ -1217,7 +1217,7 @@ class WICBITMAPPLANE(ctypes.Structure, metaclass=_WSMeta):
     else:
       return cls(obj[0], obj[1], obj[2], PBUFFER.length(obj[1]))
   def to_dict(self):
-    return {'Format': self.Format, 'pbBuffer': ctypes.cast(self.pbBuffer, ctypes.POINTER(wintypes.BYTE * self.cbBufferSize)).contents, 'cbStride': self.cbStride}
+    return {'Format': self.Format, 'pbBuffer': (ctypes.cast(self.pbBuffer, ctypes.POINTER(wintypes.BYTE * self.cbBufferSize)).contents if self.pbBuffer else None), 'cbStride': self.cbStride}
   @property
   def value(self):
     return self.to_dict()
@@ -4235,9 +4235,8 @@ class ID2D1GradientStopCollection(ID2D1Resource):
     return self.__class__._protos['GetGradientStopCount'](self.pI)
   def GetGradientStops(self, count=None):
     if count is None:
-      count = self.GetGradientStopCount()
-    if count is None:
-      return None
+      if (count := self.GetGradientStopCount()) is None:
+        return None
     gss = (D2D1GRADIENTSTOP * count)()
     self.__class__._protos['GetGradientStops1'](self.pI, gss, count)
     return gss.value
@@ -4352,8 +4351,14 @@ class ID2D1RadialGradientBrush(ID2D1Brush):
     return self.__class__._protos['GetRadiusY'](self.pI)
   def SetRadiusY(self, radius_y):
     self.__class__._protos['SetRadiusY'](self.pI, radius_y)
+  def GetRadius(self):
+    return None if (rx := self.GetRadiusX()) is None or (ry := self.GetRadiusY()) is None else (rx, ry)
+  def SetRadius(self, *radius):
+    rx, ry = (r if isinstance((r := radius[0]), (tuple, list)) else (r, r)) if len(radius) == 1 else radius
+    self.SetRadiusX(rx)
+    self.SetRadiusY(ry)
   def GetGradientStopCollection(self):
-    return ID2D1GradientStopCollection(self.__class__._protos['GetGradientStopCollection'](self.pI, ), self.factory)
+    return ID2D1GradientStopCollection(self.__class__._protos['GetGradientStopCollection'](self.pI), self.factory)
 
 class ID2D1StrokeStyle(ID2D1Resource):
   IID = GUID(0x10a72a66, 0xe91c, 0x43f4, 0x99, 0x3f, 0xdd, 0xf4, 0xb8, 0x2b, 0x0b, 0x4a)
@@ -4385,9 +4390,8 @@ class ID2D1StrokeStyle(ID2D1Resource):
     return self.__class__._protos['GetDashesCount'](self.pI)
   def GetDashes(self, count=None):
     if count is None:
-      count = self.GetDashesCount()
-    if count is None:
-      return None
+      if (count := self.GetDashesCount()) is None:
+        return None
     d = (wintypes.FLOAT * count)()
     self.__class__._protos['GetDashes'](self.pI, d, count)
     return tuple(d)
@@ -4508,6 +4512,10 @@ class ID2D1RenderTarget(ID2D1Resource):
     return self._protos['EndDraw'](self.pI)
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb)
+  def CreateStrokeStyle(self, start_cap=0, end_cap=0, dash_cap=0, line_join=0, miter_limit=1, dash_style=0, dash_offset=0, transform_type=0, dashes=None):
+    if (factory := self.factory) is None:
+      return None
+    return factory.CreateStrokeStyle((start_cap, end_cap, dash_cap, line_join, miter_limit, dash_style, dash_offset, transform_type), dashes)
   def DrawLine(self, point0, point1, brush, stroke_width, stroke_style=None):
     self.__class__._protos['DrawLine'](self.pI, point0, point1, brush, stroke_width, stroke_style)
   def DrawRectangle(self, rect, brush, stroke_width, stroke_style=None):
@@ -4608,7 +4616,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   def CreateBitmapBrush(self, bitmap, bitmap_brush_properties=None, brush_properties=None):
     return ID2D1BitmapBrush(self.__class__._protos['CreateBitmapBrush'](self.pI, bitmap,  bitmap_brush_properties, brush_properties), self.factory)
   def CreateGradientStopCollection(self, gradient_stops, pre_interpolation_space=1, post_interpolation_space=1, buffer_precision=1, extend_mode=0, color_interpolation_mode=1):
-    return ID2D1GradientStopCollection(self.__class__._protos['CreateGradientStopCollection'](self.pI, (gradient_stops if (isinstance(gradient_stops, ctypes.Array) and issubclass(gradient_stops._type_, D2D1GRADIENTSTOP)) else (D2D1GRADIENTSTOP *  len(gradient_stops))(*gradient_stops)), len(gradient_stops), pre_interpolation_space, post_interpolation_space, buffer_precision, extend_mode, color_interpolation_mode), self.factory)
+    return ID2D1GradientStopCollection(self.__class__._protos['CreateGradientStopCollection'](self.pI, (gradient_stops if gradient_stops is None or (isinstance(gradient_stops, ctypes.Array) and issubclass(gradient_stops._type_, D2D1GRADIENTSTOP)) else (D2D1GRADIENTSTOP *  len(gradient_stops))(*gradient_stops)), (0 if gradient_stops is None else len(gradient_stops)), pre_interpolation_space, post_interpolation_space, buffer_precision, extend_mode, color_interpolation_mode), self.factory)
   def CreateBrush(self, content, bitmap_interpolation_mode=None, gradient_start_point=None, gradient_end_point=None, gradient_center=None, gradient_origin_offset=None, gradient_radius=None, gradient_pre_interpolation_space=None, gradient_post_interpolation_space=None, gradient_buffer_precision=None, gradient_color_interpolation_mode=None, extend_mode=None, opacity=None, transform=None):
     if gradient_radius is not None and not isinstance(gradient_radius, (list, tuple)):
       gradient_radius = (gradient_radius, gradient_radius)

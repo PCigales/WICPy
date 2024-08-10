@@ -948,7 +948,7 @@ r, w, h, pds = IPlanarBitmapSourceTransform.DoesSupportTransform(100, 100, 'rota
 print(r, w, h, pds)
 #Retrieving the 3 planes
 bs = tuple(bytearray(pd['Width'] * pd['Height']) for pd in pds)
-IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', ({'Format': '8bppY', 'pbBuffer': bs[0], 'cbStride': pds[0]['Width']}, WICBITMAPPLANE('8bppCb', ctypes.cast(ctypes.pointer((ctypes.c_char * len(bs[1])).from_buffer(bs[1])), ctypes.c_void_p), pds[1]['Width']), ('8bppCr', bs[2], pds[2]['Width'])))
+IPlanarBitmapSourceTransform.CopyPixels(None, w, h, 'rotate0', 'preservesubsampling', ({'Format': '8bppY', 'pbBuffer': bs[0], 'cbStride': pds[0]['Width']}, WICBITMAPPLANE('8bppCb', ctypes.cast(ctypes.pointer((ctypes.c_char * len(bs[1])).from_buffer(bs[1])), ctypes.c_void_p), pds[1]['Width'], len(bs[1])), ('8bppCr', bs[2], pds[2]['Width'])))
 print(*(len(b) for b in bs))
 #Checking if 2 planes mode is supported
 r, w, h, pds = IPlanarBitmapSourceTransform.DoesSupportTransform(100, 100, 'rotate0', 'preservesubsampling', ('8bppY', '16bppCbCr'))
@@ -1151,6 +1151,51 @@ D2D1Bitmap2.Unmap()
 D2D1DeviceContext.BeginDraw()
 #Drawing the D2D1 bitmap created from the WIC bitmap
 D2D1DeviceContext.DrawBitmap(D2D1Bitmap3, (0, 0, 320, 200), 1, 'HighQualityCubic', (0, 0, 1920, 1080))
+#Creating a solid color red D2D1 brush
+D2D1ColorBrush = D2D1DeviceContext.CreateBrush((1.0, 0.0, 0.0, 0.8), opacity=0.5,transform=ID2D1Factory.MakeTranslationMatrix(5,9))
+print(D2D1ColorBrush.GetColor(), D2D1ColorBrush.GetOpacity(), D2D1ColorBrush.GetTransform()[:])
+#Creating a D2D1 collection of three gradient stops (R->G->B)
+D2D1GradientStopCollection = D2D1DeviceContext.CreateGradientStopCollection(((0,(1,0,0,1)),(0.5,(0,1,0,1)),(1,(0,0,1,1))), buffer_precision='8bpc_unorm_srgb')
+print(D2D1GradientStopCollection.GetExtendMode(), D2D1GradientStopCollection.GetColorInterpolationGamma(), D2D1GradientStopCollection.GetPreInterpolationSpace(), D2D1GradientStopCollection.GetPostInterpolationSpace(),D2D1GradientStopCollection.GetBufferPrecision(),D2D1GradientStopCollection.GetGradientStopCount(), D2D1GradientStopCollection.GetGradientStops())
+#Creating a linear gradient D2D1 brush upon these gradient stops
+D2D1LinearGradientBrush = D2D1DeviceContext.CreateBrush(D2D1GradientStopCollection, gradient_start_point=(0,0), gradient_end_point=(120,60), opacity=1,transform=ID2D1Factory.MakeTranslationMatrix(200,20), gradient_color_interpolation_mode=0)
+print(D2D1LinearGradientBrush.GetStartPoint(), D2D1LinearGradientBrush.GetEndPoint())
+#Creating a radial gradient D2D1 brush (W->B) and retrieving its gradient stops
+D2D1RadialGradientBrush = D2D1DeviceContext.CreateBrush(((1.0, (0.0, 0.0, 0.0, 1.0)), (0.0, (1.0, 1.0, 1.0, 1.0))), gradient_center=(60,60), gradient_origin_offset=(-30,-30), gradient_radius=(80,80), opacity=1,transform=ID2D1Factory.MakeTranslationMatrix(190,100))
+print(D2D1RadialGradientBrush.GetCenter(), D2D1RadialGradientBrush.GetGradientOriginOffset(), D2D1RadialGradientBrush.GetRadius())
+D2D1GradientStopCollection = D2D1RadialGradientBrush.GetGradientStopCollection()
+print(D2D1GradientStopCollection.GetExtendMode(), D2D1GradientStopCollection.GetColorInterpolationGamma(), D2D1GradientStopCollection.GetPreInterpolationSpace(), D2D1GradientStopCollection.GetPostInterpolationSpace(),D2D1GradientStopCollection.GetBufferPrecision(),D2D1GradientStopCollection.GetGradientStopCount(), D2D1GradientStopCollection.GetGradientStops(), D2D1GradientStopCollection.GetColorInterpolationMode())
+#Creating a rescaled D2D1 bitmap from the WIC bitmap
+IScaler = IImagingFactory.CreateBitmapScaler()
+IScaler.Initialize(IFormatConverter, 80, 45, 'HighQualityCubic')
+D2D1BitmapB = D2D1DeviceContext.CreateBitmapFromWICBitmap(IScaler, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied'), 'colorContext': D2D1ColorContext})
+#Creating a bitmap D2D1 brush from the rescaled D2D1 bitmap
+D2D1BitmapBrush = D2D1DeviceContext.CreateBrush(D2D1BitmapB, extend_mode=('wrap', 'wrap'), bitmap_interpolation_mode='HighQualityCubic', opacity=1, transform=ID2D1Factory.MakeRotateMatrix(90, (0, 0)))
+print(D2D1BitmapBrush.GetBitmap(), D2D1BitmapBrush.GetExtendModeX(), D2D1BitmapBrush.GetExtendModeY())
+#Creating a custom D2D1 stroke style
+D2D1StrokeStyle = D2D1DeviceContext.CreateStrokeStyle('square', 'triangle', 'round', 'MiterOrBevel', 1, 'custom', 0, 'fixed', (2.0, 2.0, 0.5, 2.0))
+print(D2D1StrokeStyle.GetStartCap(), D2D1StrokeStyle.GetEndCap(), D2D1StrokeStyle.GetDashCap(), D2D1StrokeStyle.GetMiterLimit(), D2D1StrokeStyle.GetLineJoin(), D2D1StrokeStyle.GetDashOffset(), D2D1StrokeStyle.GetDashStyle(), D2D1StrokeStyle.GetStrokeTransformType())
+print(D2D1StrokeStyle.GetDashesCount(), D2D1StrokeStyle.GetDashes())
+#Drawing a line with the bitmap brush and this stroke style
+D2D1DeviceContext.DrawLine((20, 20), (300, 20), D2D1BitmapBrush, 40, D2D1StrokeStyle)
+#Creating a solid D2D1 stroke style
+D2D1StrokeStyle = D2D1DeviceContext.CreateStrokeStyle('square', 'triangle', 'round', 'MiterOrBevel', 1, 'solid', 0, 'fixed')
+#Drawing a rectangle with the color brush and the stroke style, then filling it with the bitmap brush
+D2D1DeviceContext.DrawRectangle((40, 10, 155, 150), D2D1ColorBrush, 20, D2D1StrokeStyle)
+D2D1BitmapBrush.SetOpacity(0.5)
+D2D1DeviceContext.FillRectangle((40, 10, 155, 150), D2D1BitmapBrush)
+#Drawing an ellipse with the linear gradient brush, then filling it with the bitmap brush
+D2D1BitmapBrush.SetOpacity(1)
+D2D1DeviceContext.DrawEllipse(((260, 50), 50, 20), D2D1LinearGradientBrush, 20)
+D2D1BitmapBrush.SetOpacity(0.5)
+D2D1DeviceContext.FillEllipse(((260, 50), 50, 20), D2D1BitmapBrush)
+#Creating a bitmap D2D1 brush from the rescaled D2D1 bitmap vertically mirrored (as rotated)
+D2D1BitmapBrush = D2D1DeviceContext.CreateBrush(D2D1BitmapB, extend_mode=('mirror', 'wrap'), bitmap_interpolation_mode='HighQualityCubic', opacity=1, transform=ID2D1Factory.MakeRotateMatrix(90, (0, 0)))
+#Drawing a rounded rectangle with the radial gradient brush after having filled it with the bitmap brush
+D2D1BitmapBrush.SetOpacity(0.5)
+D2D1DeviceContext.FillRoundedRectangle(((200, 110, 300, 200), 50, 20), D2D1BitmapBrush)
+D2D1BitmapBrush.SetOpacity(1)
+D2D1DeviceContext.DrawRoundedRectangle(((200, 110, 300, 200), 50, 20), D2D1RadialGradientBrush, 20)
 #Finishing drawing
 D2D1DeviceContext.EndDraw()
 D2D1Bitmap3.Release()
@@ -1171,7 +1216,7 @@ IBitmapFrameEncode.SetPixelFormat('24bppBGR')
 IImageEncoder.WriteFrame(D2D1Bitmap2, IBitmapFrameEncode)
 IBitmapFrameEncode.Commit()
 IEncoder.Commit()
-tuple(map(IUnknown.Release, (IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext)))
+tuple(map(IUnknown.Release, (IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext, D2D1StrokeStyle, D2D1ColorBrush, D2D1LinearGradientBrush, D2D1GradientStopCollection, D2D1RadialGradientBrush, D2D1BitmapBrush, D2D1BitmapB, IScaler)))
 D2D1Device.ClearResources()
 
 #Creating a software D2D1 device
