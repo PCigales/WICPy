@@ -491,11 +491,22 @@ class _BPGUID:
     obj = cls._type_.name_guid(obj)
     return ctypes.cast(ctypes.c_void_p(None), cls) if obj is None else cls(cls._type_(obj))
 
+class _GUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, arr.__class__.__bases__[0]._type_(value) if isinstance(key, int) else [arr.__class__.__bases__[0]._type_(v) for v in value])
+  @staticmethod
+  def _avalue(arr):
+    return tuple(arr)
+
 class _GMeta(wintypes.GUID.__class__):
   def __init__(cls, *args, **kwargs):
     super().__init__(*args, **kwargs)
     if hasattr(cls, 'value'):
       del cls.value
+  def __mul__(bcls, size):
+    return _GUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.wintypes.GUID.__class__.__mul__(bcls, size),), {'__setitem__': _GUtil._asitem, 'value': property(_GUtil._avalue)}))
 
 UUID = _GMeta('UUID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {}, '_tab_gn': {}, '_def': None, '__str__': lambda s: str(s.guid)})
 PUUID = type('PUUID', (_BPGUID, ctypes.POINTER(UUID)), {'_type_': UUID})
@@ -1052,6 +1063,15 @@ class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
   def content(self, data):
     self.value = FDate(data)
 
+class _WSUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, arr.__class__.__bases__[0]._type_.from_param(value) if isinstance(key, int) else [arr.__class__.__bases__[0]._type_.from_param(v) for v in value])
+  @staticmethod
+  def _avalue(arr):
+    return tuple(s.value for s in arr)
+
 class _WSMeta(ctypes.Structure.__class__):
   def __init__(cls, *args, **kwargs):
     super(_WSMeta, _WSMeta).__init__(cls, *args, **kwargs)
@@ -1062,6 +1082,11 @@ class _WSMeta(ctypes.Structure.__class__):
       elif (b := issubclass(t, wintypes.BOOLE)) or (issubclass(t, (PCOM, BSTRING, DATE))):
         setattr(cls, '_' + n, getattr(cls, n))
         setattr(cls, n, property((lambda s, _n='_'+n, _t=t: getattr(s, _n).value) if b else (lambda s, _n='_'+n, _t=t: getattr(s, _n).content), lambda s, v, _n='_'+n, _t=t: setattr(s, _n, (v if isinstance(v, _t) else _t(v))), getattr(cls, n).__delete__))
+      elif issubclass(t, PBUFFER):
+        setattr(cls, '_' + n, getattr(cls, n))
+        setattr(cls, n, property(getattr(cls, n).__get__, lambda s, v, _n='_'+n: setattr(s, _n, ctypes.cast(PBUFFER.from_param(v), PBUFFER)), getattr(cls, n).__delete__))
+  def __mul__(bcls, size):
+    return _WSUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _WSUtil._asitem, 'value': property(_WSUtil._avalue)}))
 
 class _BDStruct:
   @classmethod
@@ -1083,9 +1108,9 @@ class _BDStruct:
 class _BTStruct:
   @classmethod
   def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, cls) else cls(*obj)
+    return obj if obj is None or isinstance(obj, cls) else cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
   def to_tuple(self):
-    return tuple(getattr(self, f[0]) for f in self.__class__._fields_)
+    return tuple(getattr((v := getattr(self, n)), 'value', v) if issubclass(t, ctypes.Structure) else getattr(self, n) for n, t in self.__class__._fields_)
   @property
   def value(self):
     return self.to_tuple()
@@ -1180,17 +1205,22 @@ class WICDDSPARAMETERS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 WICPDDSPARAMETERS = ctypes.POINTER(WICDDSPARAMETERS)
 
 class WICBITMAPPLANE(ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('Format', WICPIXELFORMAT), ('pbBuffer', wintypes.LPVOID), ('cbStride', wintypes.UINT), ('cbBufferSize', wintypes.UINT)]
+  _fields_ = [('Format', WICPIXELFORMAT), ('pbBuffer', PBUFFER), ('cbStride', wintypes.UINT), ('cbBufferSize', wintypes.UINT)]
   @classmethod
   def from_param(cls, obj):
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, IWICBitmapLock):
-      return cls(obj.GetPixelFormat(), ctypes.cast((dp := obj.GetDataPointer()), wintypes.LPVOID), obj.GetStride(), len(dp))
+      return cls(obj.GetPixelFormat(), (dp := obj.GetDataPointer()), obj.GetStride(), len(dp))
     elif isinstance(obj, dict):
-      return cls(obj.get('Format', 'DontCare'), ctypes.cast(PBUFFER.from_param(obj.get('pbBuffer', None)), wintypes.LPVOID), obj.get('cbStride', 0), PBUFFER.length(obj.get('pbBuffer', None)))
+      return cls(obj.get('Format', 'DontCare'), obj.get('pbBuffer', None), obj.get('cbStride', 0), PBUFFER.length(obj.get('pbBuffer', None)))
     else:
-      return cls(obj[0], ctypes.cast(PBUFFER.from_param(obj[1]), wintypes.LPVOID), obj[2], PBUFFER.length(obj[1]))
+      return cls(obj[0], obj[1], obj[2], PBUFFER.length(obj[1]))
+  def to_dict(self):
+    return {'Format': self.Format, 'pbBuffer': ctypes.cast(self.pbBuffer, ctypes.POINTER(wintypes.BYTE * self.cbBufferSize)).contents, 'cbStride': self.cbStride}
+  @property
+  def value(self):
+    return self.to_dict()
 WICPBITMAPPLANE = ctypes.POINTER(WICBITMAPPLANE)
 
 WICRawCapabilities = {'NotSupported': 0, 'GetSupported': 1, 'FullySupported': 2}
@@ -1220,13 +1250,13 @@ WICPRAWCAPABILITIESINFO = ctypes.POINTER(WICRAWCAPABILITIESINFO)
 WICRawParameterSet = {'AsShot': 1, 'UserAdjusted': 2, 'AutoAdjusted': 3}
 WICRAWPARAMETERSET = type('WICRAWPARAMETERSET', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawParameterSet.items()}, '_tab_cn': {c: n for n, c in WICRawParameterSet.items()}, '_def': 1})
 
-class WICRAWTONECURVEPOINT(_BDStruct, ctypes.Structure):
+class WICRAWTONECURVEPOINT(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Input', wintypes.DOUBLE), ('Output', wintypes.DOUBLE)]
 
 class WICRAWTONECURVE(ctypes.Structure):
   _fields_ = [('cPoints', wintypes.UINT), ('aPoints', WICRAWTONECURVEPOINT * 0)]
   def to_tuple(self):
-    return tuple(p.value for p in (WICRAWTONECURVEPOINT * self.cPoints).from_address(ctypes.addressof(self.aPoints)))
+    return (WICRAWTONECURVEPOINT * self.cPoints).from_address(ctypes.addressof(self.aPoints)).value
   @property
   def value(self):
     return self.to_tuple()
@@ -1295,10 +1325,10 @@ WICPCOMPONENTSIGNING = ctypes.POINTER(WICCOMPONENTSIGNING)
 WICComponentEnumerateOptions = {'Default': 0x0, 'Refresh': 0x1, 'Disabled': 0x80000000, 'Unsigned': 0x40000000, 'BuiltInOnly': 0x20000000}
 WICCOMPONENTENUMERATEOPTIONS = type('WICCOMPONENTENUMERATEOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentEnumerateOptions.items()}, '_tab_cn': {c: n for n, c in WICComponentEnumerateOptions.items()}, '_def': 0x0})
 
-class WICBITMAPPATTERN(ctypes.Structure):
+class WICBITMAPPATTERN(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Pattern', wintypes.LPVOID), ('Mask', wintypes.LPVOID), ('EndOfStream', wintypes.BOOLE)]
   def to_dict(self):
-    return {'Position': self.Position, 'Pattern': ctypes.string_at(self.Pattern, self.Length), 'Mask': ctypes.string_at(self.Mask, self.Length), 'EndofStream': self.EndOfStream.value}
+    return {'Position': self.Position, 'Pattern': ctypes.string_at(self.Pattern, self.Length), 'Mask': ctypes.string_at(self.Mask, self.Length), 'EndofStream': self.EndOfStream}
   @property
   def value(self):
     return self.to_dict()
@@ -1307,7 +1337,7 @@ WICPixelFormatNumericRepresentation = {'Unspecified': 0, 'Indexed': 1, 'Unsigned
 WICPIXELFORMATNUMERICREPRESENTATION = type('WICPIXELFORMATNUMERICREPRESENTATION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPixelFormatNumericRepresentation.items()}, '_tab_cn': {c: n for n, c in WICPixelFormatNumericRepresentation.items()}, '_def': 0})
 WICPPIXELFORMATNUMERICREPRESENTATION = ctypes.POINTER(WICPIXELFORMATNUMERICREPRESENTATION)
 
-class WICMETADATAPATTERN(ctypes.Structure):
+class WICMETADATAPATTERN(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Pattern', wintypes.LPVOID), ('Mask', wintypes.LPVOID), ('DataOffset', wintypes.ULARGE_INTEGER)]
   def to_dict(self):
     return {'Position': self.Position, 'Pattern': ctypes.string_at(self.Pattern, self.Length), 'Mask': ctypes.string_at(self.Mask, self.Length), 'DataOffset': self.DataOffset}
@@ -1315,7 +1345,7 @@ class WICMETADATAPATTERN(ctypes.Structure):
   def value(self):
     return self.to_dict()
 
-class WICMETADATAHEADER(ctypes.Structure):
+class WICMETADATAHEADER(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Header', wintypes.LPVOID), ('DataOffset', wintypes.ULARGE_INTEGER)]
   def to_dict(self):
     return {'Position': self.Position, 'Header': ctypes.string_at(self.Header, self.Length), 'DataOffset': self.DataOffset}
@@ -2620,14 +2650,14 @@ class IWICPlanarBitmapSourceTransform(IUnknown):
     w = wintypes.UINT(width)
     h = wintypes.UINT(height)
     if pixel_formats is not None and not isinstance(pixel_formats, ctypes.Array):
-      pixel_formats = (WICPIXELFORMAT * planes_number)(*(WICPIXELFORMAT(pf) for pf in pixel_formats))
+      pixel_formats = (WICPIXELFORMAT * planes_number)(*pixel_formats)
     planes_descriptions = (WICBITMAPPLANEDESCRIPTION * planes_number)()
     r = self.__class__._protos['DoesSupportTransform'](self.pI, w, h, transform_options, planar_option, pixel_formats, planes_descriptions, planes_number)
-    return None if r is None else r, w.value, h.value, tuple(pd.value for pd in planes_descriptions)
+    return None if r is None else r, w.value, h.value, planes_descriptions.value
   def CopyPixels(self, xywh, width, height, transform_options, planar_option, planes_buffers):
     planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*map(WICBITMAPPLANE.from_param, planes_buffers))
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*planes_buffers)
     return self.__class__._protos['CopyPixels'](self.pI, xywh, width, height, transform_options, planar_option, planes_buffers, planes_number)
 
 class IWICBitmapDecoder(IUnknown):
@@ -2858,7 +2888,7 @@ class IWICDevelopRaw(IWICBitmapFrameDecode):
     c = ctypes.create_string_buffer(al)
     tc = WICRAWTONECURVE.from_buffer(c)
     tc.cPoints = l
-    cps.from_address(ctypes.addressof(tc.aPoints)).__init__(*map(WICRAWTONECURVEPOINT.from_param, tone_curve))
+    cps.from_address(ctypes.addressof(tc.aPoints)).__init__(*tone_curve)
     return self.__class__._protos['SetToneCurve'](self.pI, al, c)
   def GetRotation(self):
     return self.__class__._protos['GetRotation'](self.pI)
@@ -3057,7 +3087,7 @@ class IWICPlanarBitmapFrameEncode(IUnknown):
   def WritePixels(self, lines_number, planes_buffers):
     planes_number = len(planes_buffers) if planes_buffers is not None else 0
     if planes_buffers is not None and not isinstance(planes_buffers, ctypes.Array):
-      planes_buffers = (WICBITMAPPLANE * planes_number)(*map(WICBITMAPPLANE.from_param, planes_buffers))
+      planes_buffers = (WICBITMAPPLANE * planes_number)(*planes_buffers)
     return self.__class__._protos['WritePixels'](self.pI, lines_number, planes_buffers, planes_number)
 
 class IWICDdsEncoder(IUnknown):
@@ -3103,7 +3133,7 @@ class IWICPlanarFormatConverter(IWICBitmapSource):
   def CanConvert(self, source_pixel_formats, destination_pixel_format):
     planes_number = len(source_pixel_formats) if source_pixel_formats is not None else 0
     if source_pixel_formats is not None and not isinstance(source_pixel_formats, ctypes.Array):
-      source_pixel_formats = (WICPIXELFORMAT * planes_number)(*(WICPIXELFORMAT(pf) for pf in source_pixel_formats))
+      source_pixel_formats = (WICPIXELFORMAT * planes_number)(*source_pixel_formats)
     return self.__class__._protos['CanConvert'](self.pI, source_pixel_formats, planes_number, destination_pixel_format)
   def Initialize(self, planes_sources, destination_pixel_format, dither_type=0, palette=None, alpha_threshold=0, palette_type=0):
     planes_number = len(planes_sources) if planes_sources is not None else 0
@@ -3303,7 +3333,7 @@ class IWICBitmapDecoderInfo(IWICBitmapCodecInfo):
       return ()
     p = ctypes.create_string_buffer(acs[1])
     f = (WICBITMAPPATTERN * acs[0]).from_buffer(p)
-    return None if self.__class__._protos['GetPatterns'](self.pI, acs[1], p) is None else tuple(f[p].value for p in range(acs[0]))
+    return None if self.__class__._protos['GetPatterns'](self.pI, acs[1], p) is None else f.value
   def MatchesPattern(self, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, istream)
   def CreateInstance(self):
@@ -3325,7 +3355,7 @@ class IWICFormatConverterInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICPIXELFORMAT * ac)()
-    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, f) is None else tuple(f[p] for p in range(ac))
+    return None if self.__class__._protos['GetPixelFormats'](self.pI, ac, f) is None else f.value
   def CreateInstance(self):
     return IWICFormatConverter(self.__class__._protos['CreateInstance'](self.pI), self.factory)
 
@@ -3376,7 +3406,7 @@ class IWICMetadataHandlerInfo(IWICComponentInfo):
     if ac == 0:
       return ()
     f = (WICMETADATAHANDLER * ac)()
-    return None if self.__class__._protos['GetContainerFormats'](self.pI, ac, f) is None else tuple(f[p] for p in range(ac))
+    return None if self.__class__._protos['GetContainerFormats'](self.pI, ac, f) is None else f.value
   def GetDeviceManufacturer(self):
     if (al := self.__class__._protos['GetDeviceManufacturer'](self.pI, 0, None)) is None:
       return None
@@ -3410,7 +3440,7 @@ class IWICMetadataReaderInfo(IWICMetadataHandlerInfo):
       return ()
     p = ctypes.create_string_buffer(acs[1])
     f = (WICMETADATAPATTERN * acs[0]).from_buffer(p)
-    return None if self.__class__._protos['GetPatterns'](self.pI, container_format, acs[1], p) is None else tuple(f[p].value for p in range(acs[0]))
+    return None if self.__class__._protos['GetPatterns'](self.pI, container_format, acs[1], p) is None else f.value
   def MatchesPattern(self, container_format, istream):
     return self.__class__._protos['MatchesPattern'](self.pI, container_format, istream)
   def CreateInstance(self):
@@ -3517,7 +3547,7 @@ class IWICImagingFactory(IUnknown):
       return None
     c = ci.GetComponentType().code
     icls = globals().get('IWIC%sInfo' % next((n_ for n_, c_ in WICComponentType.items() if c_ == c), 'Component'), 'IWICComponentInfo')
-    return _IUtil.QueryInterface(ci, icls)
+    return ci.QueryInterface(icls)
   def CreateComponentEnumerator(self, types=0x3f, options=0):
     c = WICCOMPONENTTYPE.name_code(types)
     icls = globals().get('IWIC%sInfo' % next((n_ for n_, c_ in WICComponentType.items() if c_ == c), 'Component'), 'IWICComponentInfo')
@@ -3803,7 +3833,7 @@ class D3D11TEXTURE2DDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 D3D11PTEXTURE2DDESC = type('D3D11PTEXTURE2DDESC', (_BPStruct, ctypes.POINTER(D3D11TEXTURE2DDESC)), {'_type_': D3D11TEXTURE2DDESC})
 
 class D3D11SUBRESOURCEDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('pSysMem', wintypes.LPVOID), ('SysMemPitch', wintypes.UINT), ('SysMemSlicePitch', wintypes.UINT)]
+  _fields_ = [('pSysMem', PBUFFER), ('SysMemPitch', wintypes.UINT), ('SysMemSlicePitch', wintypes.UINT)]
 D3D11PSUBRESOURCEDATA = type('D3D11PSUBRESOURCEDATA', (_BPStruct, ctypes.POINTER(D3D11SUBRESOURCEDATA)), {'_type_': D3D11SUBRESOURCEDATA})
 
 D3D11FeatureLevel = {'1.0_Generic': 0x100, '1.0_Core': 0x1000, '9.1': 0x9100, '9.2': 0x9200, '9.3': 0x9300, '10.0': 0xa000, '10.1': 0xa100, '11.0': 0xb000, '11.1': 0xb100, '12.0': 0xc000, '12.1': 0xc100, '12.2': 0xc200}
@@ -3854,9 +3884,9 @@ class ID3D11Device(IUnknown):
   def GetFeatureLevel(self):
     return self._protos['GetFeatureLevel'](self.pI)
   def CreateTexture2D(self, texture_desc, initial_data=None):
-    return ID3D11Texture2D(self._protos['CreateTexture2D'](self.pI, texture_desc, (initial_data if initial_data is None or isinstance(initial_data, D3D11SUBRESOURCEDATA) or (isinstance(initial_data, ctypes.Array) and issubclass(initial_data._type_, D3D11SUBRESOURCEDATA)) else (D3D11SUBRESOURCEDATA * len(initial_data))(*initial_data))), self)
+    return ID3D11Texture2D(self._protos['CreateTexture2D'](self.pI, texture_desc, (initial_data if initial_data is None or isinstance(initial_data, (D3D11PSUBRESOURCEDATA, wintypes.LPVOID, ctypes.CArg, D3D11SUBRESOURCEDATA)) or (isinstance(initial_data, ctypes.Array) and issubclass(initial_data._type_, D3D11SUBRESOURCEDATA)) else (D3D11SUBRESOURCEDATA * len(initial_data))(*initial_data))), self)
   def CreateDXGISurface(self, width, height, format, sample_count=1, sample_quality=0, usage=0, bind_flags=0, cpu_flags=0, misc_flags=0, source_data=None, source_pitch=0):
-    if (t2d := self.CreateTexture2D((width, height, 1, 1, format, (sample_count, sample_quality), usage, bind_flags, cpu_flags, misc_flags), (None if source_data is None else (PBUFFER(source_data), source_pitch, 0)))) is None:
+    if (t2d := self.CreateTexture2D((width, height, 1, 1, format, (sample_count, sample_quality), usage, bind_flags, cpu_flags, misc_flags), ((source_data, source_pitch, 0),))) is None:
       return None
     return t2d.GetSurface()
   def CreateTargetDXGISurface(self, width, height, format, sample_count=1, sample_quality=0, drawable=False):
@@ -4024,7 +4054,7 @@ class D2D1COLORF(_BTStruct, ctypes.Structure):
   _fields_ = [('r', wintypes.FLOAT), ('g', wintypes.FLOAT), ('b', wintypes.FLOAT), ('a', wintypes.FLOAT)]
 D2D1PCOLORF = type('D2D1PCOLORF', (_BPStruct, ctypes.POINTER(D2D1COLORF)), {'_type_': D2D1COLORF})
 
-D2D1BitmapInterpolationMode = {'NearestNeighbor': 0, 'Linear': 1}
+D2D1BitmapInterpolationMode = {'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'MultiSampleLinear': 3, 'Anisotropic': 4, 'HighQualityCubic': 5}
 D2D1BITMAPINTERPOLATIONMODE = type('D2D1BITMAPINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1BitmapInterpolationMode.items()}, '_tab_cn': {c: n for n, c in D2D1BitmapInterpolationMode.items()}, '_def': 0})
 
 D2D1InterpolationMode = {'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'MultiSampleLinear': 3, 'Anisotropic': 4, 'HighQualityCubic': 5}
@@ -4078,6 +4108,40 @@ D2D1PBITMAPBRUSHPROPERTIESDC = type('D2D1PBITMAPBRUSHPROPERTIESDC', (_BPStruct, 
 class D2D1BRUSHPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('opacity', wintypes.FLOAT), ('transform', D2D1MATRIX3X2F)]
 D2D1PBRUSHPROPERTIES = type('D2D1PBRUSHPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1BRUSHPROPERTIES)), {'_type_': D2D1BRUSHPROPERTIES})
+
+class D2D1GRADIENTSTOP(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('position', wintypes.FLOAT), ('color', D2D1COLORF)]
+D2D1PGRADIENTSTOP = ctypes.POINTER(D2D1GRADIENTSTOP)
+
+D2D1Gamma = {'sRGB': 0, '2.2': 0, 'Linear': 1, '1.0': 1}
+D2D1GAMMA = type('D2D1GAMMA', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1Gamma.items()}, '_tab_cn': {c: n for n, c in D2D1Gamma.items()}, '_def': 0})
+
+D2D1ColorInterpolationMode = {'Straight': 0, 'Premultiplied': 1}
+D2D1COLORINTERPOLATIONMODE = type('D2D1COLORINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1ColorInterpolationMode.items()}, '_tab_cn': {c: n for n, c in D2D1ColorInterpolationMode.items()}, '_def': 0})
+
+class D2D1LINEARGRADIENTBRUSHPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('startPoint', D2D1POINT2F), ('endPoint', D2D1POINT2F)]
+D2D1PLINEARGRADIENTBRUSHPROPERTIES = type('D2D1PLINEARGRADIENTBRUSHPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1LINEARGRADIENTBRUSHPROPERTIES)), {'_type_': D2D1LINEARGRADIENTBRUSHPROPERTIES})
+
+class D2D1RADIALGRADIENTBRUSHPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('center', D2D1POINT2F), ('gradientOriginOffset', D2D1POINT2F), ('radiusX', wintypes.FLOAT), ('radiusY', wintypes.FLOAT)]
+D2D1PRADIALGRADIENTBRUSHPROPERTIES = type('D2D1PRADIALGRADIENTBRUSHPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1RADIALGRADIENTBRUSHPROPERTIES)), {'_type_': D2D1RADIALGRADIENTBRUSHPROPERTIES})
+
+D2D1CapStyle = {'Flat': 0, 'Square': 1, 'Round': 2, 'Triangle': 3}
+D2D1CAPSTYLE = type('D2D1CAPSTYLE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1CapStyle.items()}, '_tab_cn': {c: n for n, c in D2D1CapStyle.items()}, '_def': 0})
+
+D2D1DashStyle = {'Solid': 0, 'Dash': 1, 'Dot': 2, 'DashDot': 3, 'DashDotDot': 4, 'Custom': 5}
+D2D1DASHSTYLE = type('D2D1DASHSTYLE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1DashStyle.items()}, '_tab_cn': {c: n for n, c in D2D1DashStyle.items()}, '_def': 0})
+
+D2D1LineJoin = {'Miter': 0, 'Bevel': 1, 'Round': 2, 'MiterOrBevel': 3}
+D2D1LINEJOIN = type('D2D1LINEJOIN', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1LineJoin.items()}, '_tab_cn': {c: n for n, c in D2D1LineJoin.items()}, '_def': 0})
+
+D2D1StrokeTransformType = {'Normal': 0, 'Fixed': 1, 'HairLine': 2}
+D2D1STROKETRANSFORMTYPE = type('D2D1STROKETRANSFORMTYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1StrokeTransformType.items()}, '_tab_cn': {c: n for n, c in D2D1StrokeTransformType.items()}, '_def': 0})
+
+class D2D1STROKESTYLEPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('startCap', D2D1CAPSTYLE), ('endCap', D2D1CAPSTYLE), ('dashCap', D2D1CAPSTYLE), ('lineJoin', D2D1LINEJOIN), ('miterLimit', wintypes.FLOAT), ('dashStyle', D2D1DASHSTYLE), ('dashOffset', wintypes.FLOAT), ('transformType', D2D1STROKETRANSFORMTYPE)]
+D2D1PSTROKESTYLEPROPERTIES = type('D2D1PSTROKESTYLEPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1STROKESTYLEPROPERTIES)), {'_type_': D2D1STROKESTYLEPROPERTIES})
 
 D2D1MappedOptions = {'None': 0, 'Read': 1, 'Write': 2, 'Discard': 4}
 D2D1MAPPEDOPTIONS = type('D2D1MAPPEDOPTIONS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D2D1MappedOptions.items()}, '_tab_cn': {c: n for n, c in D2D1MappedOptions.items()}, '_def': 1})
@@ -4157,6 +4221,40 @@ class ID2D1Bitmap(ID2D1Image):
     return self._protos['Unmap'](self.pI)
 ID2D1Bitmap1 = ID2D1Bitmap
 
+class ID2D1GradientStopCollection(ID2D1Resource):
+  IID = GUID(0xae1572f4, 0x5dd0, 0x4777, 0x99, 0x8b, 0x92, 0x79, 0x47, 0x2a, 0xe6, 0x3b)
+  _protos['GetGradientStopCount'] = 4, (), (), wintypes.UINT
+  _protos['GetColorInterpolationGamma'] = 6, (), (), D2D1GAMMA
+  _protos['GetExtendMode'] = 7, (), (), D2D1EXTENDMODE
+  _protos['GetGradientStops1'] = 8, (D2D1PGRADIENTSTOP, wintypes.UINT), (), None
+  _protos['GetPreInterpolationSpace'] = 9, (), (), D2D1COLORSPACE
+  _protos['GetPostInterpolationSpace'] = 10, (), (), D2D1COLORSPACE
+  _protos['GetBufferPrecision'] = 11, (), (), D2D1BUFFERPRECISION
+  _protos['GetColorInterpolationMode'] = 12, (), (), D2D1COLORINTERPOLATIONMODE
+  def GetGradientStopCount(self):
+    return self.__class__._protos['GetGradientStopCount'](self.pI)
+  def GetGradientStops(self, count=None):
+    if count is None:
+      count = self.GetGradientStopCount()
+    if count is None:
+      return None
+    gss = (D2D1GRADIENTSTOP * count)()
+    self.__class__._protos['GetGradientStops1'](self.pI, gss, count)
+    return gss.value
+  def GetExtendMode(self):
+    return self.__class__._protos['GetExtendMode'](self.pI)
+  def GetColorInterpolationGamma(self):
+    return self.__class__._protos['GetColorInterpolationGamma'](self.pI)
+  def GetPreInterpolationSpace(self):
+    return self.__class__._protos['GetPreInterpolationSpace'](self.pI)
+  def GetPostInterpolationSpace(self):
+    return self.__class__._protos['GetPostInterpolationSpace'](self.pI)
+  def GetBufferPrecision(self):
+    return self.__class__._protos['GetBufferPrecision'](self.pI)
+  def GetColorInterpolationMode(self):
+    return self.__class__._protos['GetColorInterpolationMode'](self.pI)
+ID2D1GradientStopCollection1 = ID2D1GradientStopCollection
+
 class ID2D1Brush(ID2D1Resource):
   IID = GUID(0x2cd906a8, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
   _protos['SetOpacity'] = 4, (wintypes.FLOAT,), (), None
@@ -4200,8 +4298,101 @@ class ID2D1BitmapBrush(ID2D1Brush):
     self.__class__._protos['SetExtendModeY'](self.pI, extend_mode)
 ID2D1BitmapBrush1 = ID2D1BitmapBrush
 
+class ID2D1SolidColorBrush(ID2D1Brush):
+  IID = GUID(0x2cd906a9, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
+  _protos['SetColor'] = 8, (D2D1COLORF,), (), None
+  _protos['GetColor'] = 9, (), (D2D1PCOLORF,), None
+  def GetColor(self):
+    return self.__class__._protos['GetColor'](self.pI)
+  def SetColor(self, color):
+    self.__class__._protos['SetColor'](self.pI, color)
+
+class ID2D1LinearGradientBrush(ID2D1Brush):
+  IID = GUID(0x2cd906ab, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
+  _protos['SetStartPoint'] = 8, (D2D1POINT2F,), (), None
+  _protos['SetEndPoint'] = 9, (D2D1POINT2F,), (), None
+  _protos['GetStartPoint'] = 10, (), (D2D1PPOINT2F,), None
+  _protos['GetEndPoint'] = 11, (), (D2D1PPOINT2F,), None
+  _protos['GetGradientStopCollection'] = 12, (), (wintypes.PLPVOID,), None
+  def GetStartPoint(self):
+    return self.__class__._protos['GetStartPoint'](self.pI)
+  def SetStartPoint(self, start_point):
+    self.__class__._protos['SetStartPoint'](self.pI, start_point)
+  def GetEndPoint(self):
+    return self.__class__._protos['GetEndPoint'](self.pI)
+  def SetEndPoint(self, end_point):
+    self.__class__._protos['SetEndPoint'](self.pI, end_point)
+  def GetGradientStopCollection(self):
+    return ID2D1GradientStopCollection(self.__class__._protos['GetGradientStopCollection'](self.pI), self.factory)
+
+class ID2D1RadialGradientBrush(ID2D1Brush):
+  IID = GUID(0x2cd906ac, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
+  _protos['SetCenter'] = 8, (D2D1POINT2F,), (), None
+  _protos['SetGradientOriginOffset'] = 9, (D2D1POINT2F,), (), None
+  _protos['SetRadiusX'] = 10, (wintypes.FLOAT,), (), None
+  _protos['SetRadiusY'] = 11, (wintypes.FLOAT,), (), None
+  _protos['GetCenter'] = 12, (), (D2D1PPOINT2F,), None
+  _protos['GetGradientOriginOffset'] = 13, (), (D2D1PPOINT2F,), None
+  _protos['GetRadiusX'] = 14, (), (), wintypes.FLOAT
+  _protos['GetRadiusY'] = 15, (), (), wintypes.FLOAT
+  _protos['GetGradientStopCollection'] = 16, (), (wintypes.PLPVOID,), None
+  def GetCenter(self):
+    return self.__class__._protos['GetCenter'](self.pI)
+  def SetCenter(self, center):
+    self.__class__._protos['SetCenter'](self.pI, center)
+  def GetGradientOriginOffset(self):
+    return self.__class__._protos['GetGradientOriginOffset'](self.pI)
+  def SetGradientOriginOffset(self, origin_offset):
+    self.__class__._protos['SetGradientOriginOffset'](self.pI, origin_offset)
+  def GetRadiusX(self):
+    return self.__class__._protos['GetRadiusX'](self.pI)
+  def SetRadiusX(self, radius_x):
+    self.__class__._protos['SetRadiusX'](self.pI, radius_x)
+  def GetRadiusY(self):
+    return self.__class__._protos['GetRadiusY'](self.pI)
+  def SetRadiusY(self, radius_y):
+    self.__class__._protos['SetRadiusY'](self.pI, radius_y)
+  def GetGradientStopCollection(self):
+    return ID2D1GradientStopCollection(self.__class__._protos['GetGradientStopCollection'](self.pI, ), self.factory)
+
 class ID2D1StrokeStyle(ID2D1Resource):
   IID = GUID(0x10a72a66, 0xe91c, 0x43f4, 0x99, 0x3f, 0xdd, 0xf4, 0xb8, 0x2b, 0x0b, 0x4a)
+  _protos['GetStartCap'] = 4, (), (), D2D1CAPSTYLE
+  _protos['GetEndCap'] = 5, (), (), D2D1CAPSTYLE
+  _protos['GetDashCap'] = 6, (), (), D2D1CAPSTYLE
+  _protos['GetMiterLimit'] = 7, (), (), wintypes.FLOAT
+  _protos['GetLineJoin'] = 8, (), (), D2D1LINEJOIN
+  _protos['GetDashOffset'] = 9, (), (), wintypes.FLOAT
+  _protos['GetDashStyle'] = 10, (), (), D2D1DASHSTYLE
+  _protos['GetDashesCount'] = 11, (), (), wintypes.UINT
+  _protos['GetDashes'] = 12, (wintypes.PFLOAT, wintypes.UINT), (), None
+  _protos['GetStrokeTransformType'] = 13, (), (), D2D1STROKETRANSFORMTYPE
+  def GetStartCap(self):
+    return self.__class__._protos['GetStartCap'](self.pI)
+  def GetEndCap(self):
+    return self.__class__._protos['GetEndCap'](self.pI)
+  def GetDashCap(self):
+    return self.__class__._protos['GetDashCap'](self.pI)
+  def GetMiterLimit(self):
+    return self.__class__._protos['GetMiterLimit'](self.pI)
+  def GetLineJoin(self):
+    return self.__class__._protos['GetLineJoin'](self.pI)
+  def GetDashOffset(self):
+    return self.__class__._protos['GetDashOffset'](self.pI)
+  def GetDashStyle(self):
+    return self.__class__._protos['GetDashStyle'](self.pI)
+  def GetDashesCount(self):
+    return self.__class__._protos['GetDashesCount'](self.pI)
+  def GetDashes(self, count=None):
+    if count is None:
+      count = self.GetDashesCount()
+    if count is None:
+      return None
+    d = (wintypes.FLOAT * count)()
+    self.__class__._protos['GetDashes'](self.pI, d, count)
+    return tuple(d)
+  def GetStrokeTransformType(self):
+    return self.__class__._protos['GetStrokeTransformType'](self.pI)
 ID2D1StrokeStyle1 = ID2D1StrokeStyle
 
 class ID2D1RenderTarget(ID2D1Resource):
@@ -4209,15 +4400,19 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['CreateBitmap'] = 4, (D2D1SIZEU, PBUFFER, wintypes.UINT, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
   _protos['CreateBitmapFromWICBitmap'] = 5, (wintypes.LPVOID, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
   _protos['CreateSharedBitmap'] = 6, (PUUID, wintypes.LPVOID, D2D1PBITMAPPROPERTIESRT), (wintypes.PLPVOID,)
-  _protos['CreateBitmapBrush'] = 7, (wintypes.LPVOID, D2D1BITMAPBRUSHPROPERTIESRT, D2D1BRUSHPROPERTIES), (wintypes.PLPVOID,)
+  _protos['CreateBitmapBrush'] = 7, (wintypes.LPVOID, D2D1PBITMAPBRUSHPROPERTIESRT, D2D1PBRUSHPROPERTIES), (wintypes.PLPVOID,)
+  _protos['CreateSolidColorBrush'] = 8, (D2D1PCOLORF, D2D1PBRUSHPROPERTIES), (wintypes.PLPVOID,)
+  _protos['CreateGradientStopCollection'] = 9, (D2D1PGRADIENTSTOP, wintypes.UINT, D2D1GAMMA, D2D1EXTENDMODE), (wintypes.PLPVOID,)
+  _protos['CreateLinearGradientBrush'] = 10, (D2D1PLINEARGRADIENTBRUSHPROPERTIES, D2D1PBRUSHPROPERTIES, wintypes.LPVOID), (wintypes.PLPVOID,)
+  _protos['CreateRadialGradientBrush'] = 11, (D2D1PRADIALGRADIENTBRUSHPROPERTIES, D2D1PBRUSHPROPERTIES, wintypes.LPVOID), (wintypes.PLPVOID,)
   _protos['CreateCompatibleRenderTarget'] = 12, (D2D1PSIZEF, D2D1PSIZEU, D2D1PPIXELFORMAT, D2D1COMPATIBLERENDERTARGETOPTIONS), (wintypes.PLPVOID,)
   _protos['DrawLine'] = 15, (D2D1POINT2F, D2D1POINT2F, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
-  _protos['DrawRectangle'] = 16, (D2D1RECTF, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
-  _protos['FillRectangle'] = 17, (D2D1RECTF, wintypes.LPVOID), (), None
-  _protos['DrawRoundedRectangle'] = 18, (D2D1ROUNDEDRECT, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
-  _protos['FillRoundedRectangle'] = 19, (D2D1ROUNDEDRECT, wintypes.LPVOID), (), None
-  _protos['DrawEllipse'] = 20, (D2D1ELLIPSE, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
-  _protos['FillEllipse'] = 21, (D2D1ELLIPSE, wintypes.LPVOID), (), None
+  _protos['DrawRectangle'] = 16, (D2D1PRECTF, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
+  _protos['FillRectangle'] = 17, (D2D1PRECTF, wintypes.LPVOID), (), None
+  _protos['DrawRoundedRectangle'] = 18, (D2D1PROUNDEDRECT, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
+  _protos['FillRoundedRectangle'] = 19, (D2D1PROUNDEDRECT, wintypes.LPVOID), (), None
+  _protos['DrawEllipse'] = 20, (D2D1PELLIPSE, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
+  _protos['FillEllipse'] = 21, (D2D1PELLIPSE, wintypes.LPVOID), (), None
   _protos['DrawBitmap'] = 26, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1BITMAPINTERPOLATIONMODE, D2D1PRECTF), (), None
   _protos['SetTransform'] = 30, (D2D1PMATRIX3X2F,), (), None
   _protos['GetTransform'] = 31, (), (D2D1PMATRIX3X2F,), None
@@ -4235,11 +4430,11 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['GetMaximumBitmapSize'] = 55, (), (), wintypes.UINT
   _protos['IsSupported'] = 56, (D2D1PRENDERTARGETPROPERTIES,), (), wintypes.BOOLE
   def CreateBitmap(self, width, height, properties, source_data=None, source_pitch=0):
-    return ID2D1Bitmap(self.__class__._protos['CreateBitmap'](self.pI, (width, height), source_data, source_pitch, properties), self.factory)
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateBitmap'](self.pI, (width, height), source_data, source_pitch, properties), self.factory), ID2D1Bitmap)
   def CreateBitmapFromWICBitmap(self, source, properties=None):
-    return ID2D1Bitmap(self.__class__._protos['CreateBitmapFromWICBitmap'](self.pI, source, properties), self.factory)
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateBitmapFromWICBitmap'](self.pI, source, properties), self.factory), ID2D1Bitmap)
   def CreateSharedBitmap(self, source, properties=None):
-    return ID2D1Bitmap(self.__class__._protos['CreateSharedBitmap'](self.pI, source.IID, source, properties), self.factory)
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateSharedBitmap'](self.pI, source.IID, source, properties), self.factory), ID2D1Bitmap)
   def CreateDefaultBitmap(self, source=None, source_pitch=0, width=0, height=0, format=0, alpha_mode=0, dpiX=0, dpiY=0):
     if isinstance(source, IWICBitmapSource):
       return self.CreateBitmapFromWICBitmap(source, ((format, alpha_mode), dpiX, dpiY))
@@ -4250,7 +4445,37 @@ class ID2D1RenderTarget(ID2D1Resource):
     else:
       return self.CreateBitmap(width, height, (((format or 'B8G8R8A8_UNORM'), (alpha_mode or 'Premultiplied')), dpiX, dpiY), source, source_pitch)
   def CreateBitmapBrush(self, bitmap, bitmap_brush_properties=None, brush_properties=None):
-    return ID2D1BitmapBrush(self.__class__._protos['CreateBitmapBrush'](self.pI, bitmap,  bitmap_brush_properties, brush_properties), self.factory)
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateBitmapBrush'](self.pI, bitmap, bitmap_brush_properties, brush_properties), self.factory), ID2D1BitmapBrush)
+  def CreateSolidColorBrush(self, color, brush_properties=None):
+    return ID2D1SolidColorBrush(self.__class__._protos['CreateSolidColorBrush'](self.pI, color, brush_properties), self.factory)
+  def CreateGradientStopCollection(self, gradient_stops, color_interpolation_gamma=0, extend_mode=0):
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateGradientStopCollection'](self.pI, (gradient_stops if gradient_stops is None or (isinstance(gradient_stops, ctypes.Array) and issubclass(gradient_stops._type_, D2D1GRADIENTSTOP)) else (D2D1GRADIENTSTOP *  len(gradient_stops))(*gradient_stops)), (0 if gradient_stops is None else len(gradient_stops)), color_interpolation_gamma, extend_mode), self.factory), ID2D1GradientStopCollection)
+  def CreateLinearGradientBrush(self, linear_gradient_brush_properties, gradient_stop_collection, brush_properties=None):
+    return ID2D1LinearGradientBrush(self.__class__._protos['CreateLinearGradientBrush'](self.pI, linear_gradient_brush_properties, brush_properties, gradient_stop_collection), self.factory)
+  def CreateRadialGradientBrush(self, radial_gradient_brush_properties, gradient_stop_collection, brush_properties=None):
+    return ID2D1RadialGradientBrush(self.__class__._protos['CreateRadialGradientBrush'](self.pI, radial_gradient_brush_properties, brush_properties, gradient_stop_collection), self.factory)
+  def CreateBrush(self, content, bitmap_interpolation_mode=None, gradient_start_point=None, gradient_end_point=None, gradient_center=None, gradient_origin_offset=None, gradient_radius=None, gradient_color_interpolation_gamma=None, extend_mode=None, opacity=None, transform=None):
+    if gradient_radius is not None and not isinstance(gradient_radius, (list, tuple)):
+      gradient_radius = (gradient_radius, gradient_radius)
+    lg = gradient_start_point is not None and gradient_end_point is not None
+    rg = gradient_center is not None and gradient_radius is not None
+    if isinstance(content, (tuple, list)):
+      if lg or rg:
+        if (content := self.CreateGradientStopCollection(content, gradient_color_interpolation_gamma or 0, extend_mode or 0)) is None:
+          return None
+      elif len(content) == 4:
+        content = D2D1COLORF(*content)
+      else:
+        return None
+    bp = None if opacity is None and transform is None else ((1 if opacity is None else opacity), (transform or ID21Factory.MakeIndentityMatrix()))
+    if isinstance(content, ID2D1Image):
+      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode), bp)
+    elif isinstance(content, ID2D1GradientStopCollection):
+      return self.CreateLinearGradientBrush((gradient_start_point, gradient_end_point), content, bp) if lg else self.CreateRadialGradientBrush((gradient_center, gradient_origin_offset, *gradient_radius), content, bp)
+    elif isinstance(content, D2D1COLORF):
+      return self.CreateSolidColorBrush(content, bp)
+    else:
+      return None
   def Clear(self, clear_color=None):
     self._protos['Clear'](self.pI, clear_color)
   def GetAntialiasMode(self):
@@ -4310,7 +4535,8 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   _protos['CreateColorContextFromFilename'] = 60, (wintypes.LPCWSTR,), (wintypes.PLPVOID,)
   _protos['CreateColorContextFromWicColorContext'] = 61, (wintypes.LPVOID,), (wintypes.PLPVOID,)
   _protos['CreateBitmapFromDxgiSurface'] = 62, (wintypes.LPVOID, D2D1PBITMAPPROPERTIESDC), (wintypes.PLPVOID,)
-  _protos['CreateBitmapBrush'] = 66, (wintypes.LPVOID, D2D1BITMAPBRUSHPROPERTIESDC, D2D1BRUSHPROPERTIES), (wintypes.PLPVOID,)
+  _protos['CreateGradientStopCollection'] = 64, (D2D1PGRADIENTSTOP, wintypes.UINT, D2D1COLORSPACE, D2D1COLORSPACE, D2D1BUFFERPRECISION, D2D1EXTENDMODE, D2D1COLORINTERPOLATIONMODE), (wintypes.PLPVOID,)
+  _protos['CreateBitmapBrush'] = 66, (wintypes.LPVOID, D2D1PBITMAPBRUSHPROPERTIESDC, D2D1PBRUSHPROPERTIES), (wintypes.PLPVOID,)
   _protos['IsDxgiFormatSupported'] = 68, (DXGIFORMAT,), (), wintypes.BOOLE
   _protos['IsBufferPrecisionSupported'] = 69, (D2D1BUFFERPRECISION,), (), wintypes.BOOLE
   _protos['GetImageLocalBounds'] = 70, (wintypes.LPVOID,), (D2D1PRECTF,)
@@ -4381,6 +4607,30 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
     return swap_chain, bitmap
   def CreateBitmapBrush(self, bitmap, bitmap_brush_properties=None, brush_properties=None):
     return ID2D1BitmapBrush(self.__class__._protos['CreateBitmapBrush'](self.pI, bitmap,  bitmap_brush_properties, brush_properties), self.factory)
+  def CreateGradientStopCollection(self, gradient_stops, pre_interpolation_space=1, post_interpolation_space=1, buffer_precision=1, extend_mode=0, color_interpolation_mode=1):
+    return ID2D1GradientStopCollection(self.__class__._protos['CreateGradientStopCollection'](self.pI, (gradient_stops if (isinstance(gradient_stops, ctypes.Array) and issubclass(gradient_stops._type_, D2D1GRADIENTSTOP)) else (D2D1GRADIENTSTOP *  len(gradient_stops))(*gradient_stops)), len(gradient_stops), pre_interpolation_space, post_interpolation_space, buffer_precision, extend_mode, color_interpolation_mode), self.factory)
+  def CreateBrush(self, content, bitmap_interpolation_mode=None, gradient_start_point=None, gradient_end_point=None, gradient_center=None, gradient_origin_offset=None, gradient_radius=None, gradient_pre_interpolation_space=None, gradient_post_interpolation_space=None, gradient_buffer_precision=None, gradient_color_interpolation_mode=None, extend_mode=None, opacity=None, transform=None):
+    if gradient_radius is not None and not isinstance(gradient_radius, (list, tuple)):
+      gradient_radius = (gradient_radius, gradient_radius)
+    lg = gradient_start_point is not None and gradient_end_point is not None
+    rg = gradient_center is not None and gradient_radius is not None
+    if isinstance(content, (tuple, list)):
+      if lg or rg:
+        if (content := self.CreateGradientStopCollection(content, gradient_pre_interpolation_space or 1, gradient_post_interpolation_space or 1, gradient_buffer_precision or 1, extend_mode or 0, (1 if gradient_color_interpolation_mode is None else gradient_color_interpolation_mode))) is None:
+          return None
+      elif len(content) == 4:
+        content = D2D1COLORF(*content)
+      else:
+        return None
+    bp = None if opacity is None and transform is None else ((1 if opacity is None else opacity), (transform or ID21Factory.MakeIndentityMatrix()))
+    if isinstance(content, ID2D1Image):
+      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode), bp)
+    elif isinstance(content, ID2D1GradientStopCollection):
+      return self.CreateLinearGradientBrush((gradient_start_point, gradient_end_point), content, bp) if lg else self.CreateRadialGradientBrush((gradient_center, gradient_origin_offset, *gradient_radius), content, bp)
+    elif isinstance(content, D2D1COLORF):
+      return self.CreateSolidColorBrush(content, bp)
+    else:
+      return None
   def CreateColorContext(self, color_space=1, buffer=None):
     return ID2D1ColorContext(self.__class__._protos['CreateColorContext'](self.pI, color_space, buffer, PBUFFER.length(buffer)), self.factory)
   def CreateColorContextFromFilename(self, file_name):
@@ -4456,10 +4706,13 @@ class ID2D1Device(ID2D1Resource):
 class ID2D1Factory(IUnknown):
   _lightweight = True
   IID = GUID(0xbb12d362, 0xdaee, 0x4b9a, 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f)
+  _protos['ReloadSystemMetrics'] = 3, (), ()
+  _protos['GetDesktopDpi'] = 4, (), (wintypes.PFLOAT, wintypes.PFLOAT), None
   _protos['CreateWicBitmapRenderTarget'] = 13, (wintypes.LPVOID, D2D1PRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateHwndRenderTarget'] = 14, (D2D1PRENDERTARGETPROPERTIES, D2D1PHWNDRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateDxgiSurfaceRenderTarget'] = 15, (wintypes.LPVOID, D2D1PRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
-  _protos['CreateDevice'] = 27, (wintypes.LPVOID,), (wintypes.PLPVOID,)
+  _protos['CreateDevice'] = 17, (wintypes.LPVOID,), (wintypes.PLPVOID,)
+  _protos['CreateStrokeStyle'] = 18, (D2D1PSTROKESTYLEPROPERTIES, wintypes.PFLOAT, wintypes.UINT), (wintypes.PLPVOID,)
   def __new__(cls, clsid_component=False, factory=None):
     if clsid_component is False:
       pI = wintypes.LPVOID()
@@ -4500,6 +4753,12 @@ class ID2D1Factory(IUnknown):
     if (render_target := self.CreateDxgiSurfaceRenderTarget(surface, ('Hardware', (format, (alpha_mode or 'Premultiplied')), dpiX, dpiY, usage, 'Default'))) is None:
       return None
     return surface, render_target
+  def CreateStrokeStyle(self, properties, dashes=None):
+    return ID2D1StrokeStyle(self.__class__._protos['CreateStrokeStyle'](self.pI, properties, (dashes if dashes is None or (isinstance(dashes, ctypes.Array) and issubclass(dashes._type_, wintypes.FLOAT)) else (wintypes.FLOAT *  len(dashes))(*dashes)), (0 if dashes is None else len(dashes))), self)
+  def ReloadSystemMetrics(self):
+    return self.__class__._protos['ReloadSystemMetrics'](self.pI)
+  def GetDesktopDpi(self):
+    return self.__class__._protos['GetDesktopDpi'](self.pI)
   MakeIdentityMatrix = staticmethod(D2D1MATRIX3X2F)
   MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F)(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
   MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
@@ -4508,7 +4767,7 @@ class ID2D1Factory(IUnknown):
   IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, D2D1PMATRIX3X2F)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix).value)
   InvertMatrix = staticmethod(lambda matrix, _im=ctypes.WINFUNCTYPE(wintypes.BOOLE, D2D1PMATRIX3X2F)(('D2D1InvertMatrix', d2d1), ((1,),)): _im(matrix).value)
   MultiplyMatrix = staticmethod(lambda a, b: a @ b)
-  ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1COLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
+  ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1PCOLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
   MakeIdentityMatrix4x4 = staticmethod(D2D1MATRIX4X4F)
   MakeRotationXMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), D2D1MATRIX4X4F(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1))[2])
   MakeRotationYMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), D2D1MATRIX4X4F(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1))[2])
