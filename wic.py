@@ -4423,6 +4423,8 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['SetAntialiasMode'] = 32, (D2D1ANTIALIASMODE,), (), None
   _protos['GetAntialiasMode'] = 33, (), (), D2D1ANTIALIASMODE
   _protos['Flush'] = 42, (), (wintypes.PULARGE_INTEGER, wintypes.PULARGE_INTEGER)
+  _protos['PushAxisAlignedClip'] = 45, (D2D1PRECTF, D2D1ANTIALIASMODE), (), None
+  _protos['PopAxisAlignedClip'] = 46, (), (), None
   _protos['Clear'] = 47, (D2D1PCOLORF,), (), None
   _protos['BeginDraw'] = 48, (), (), None
   _protos['EndDraw'] = 49, (), (wintypes.PULARGE_INTEGER, wintypes.PULARGE_INTEGER)
@@ -4502,8 +4504,12 @@ class ID2D1RenderTarget(ID2D1Resource):
     return self._protos['IsSupported'](self.pI, properties)
   def GetTransform(self):
     return self._protos['GetTransform'](self.pI)
-  def SetTransform(self, transform):
-    self._protos['SetTransform'](self.pI, transform)
+  def SetTransform(self, transform=None):
+    self._protos['SetTransform'](self.pI, transform or ID2D1Factory.MakeIdentityMatrix())
+  def PushAxisAlignedClip(self, clip_rect, antialias_mode=0):
+    self._protos['PushAxisAlignedClip'](self.pI, clip_rect, antialias_mode)
+  def PopAxisAlignedClip(self):
+    self._protos['PopAxisAlignedClip'](self.pI)
   def BeginDraw(self):
     self._protos['BeginDraw'](self.pI)
   def Flush(self):
