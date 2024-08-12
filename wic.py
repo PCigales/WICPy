@@ -334,13 +334,13 @@ class PBUFFER(wintypes.LPVOID):
     else:
       return len(obj) * getattr(obj, 'itemsize', 1)
   @classmethod
-  def from_param(cls, obj):
+  def from_param(cls, obj, pointer=False):
     if obj is None or isinstance(obj, (ctypes.c_void_p, ctypes.c_char_p, ctypes.CArg)):
       return obj
     elif isinstance(obj, bytes):
       return ctypes.c_char_p(obj)
     else:
-      return ctypes.byref((ctypes.c_char * PBUFFER.length(obj)).from_buffer(obj))
+      return (ctypes.pointer if pointer else ctypes.byref)((ctypes.c_char * PBUFFER.length(obj)).from_buffer(obj))
 
 class IStream(IUnknown):
   IID = GUID(0x0000000c, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
@@ -1082,9 +1082,9 @@ class _WSMeta(ctypes.Structure.__class__):
       elif (b := issubclass(t, wintypes.BOOLE)) or issubclass(t, (PCOM, BSTRING, DATE)):
         setattr(cls, '_' + n, getattr(cls, n))
         setattr(cls, n, property((lambda s, _n='_'+n, _t=t: getattr(s, _n).value) if b else (lambda s, _n='_'+n, _t=t: getattr(s, _n).content), lambda s, v, _n='_'+n, _t=t: setattr(s, _n, (v if isinstance(v, _t) else _t(v))), getattr(cls, '_' + n).__delete__))
-      elif (b := issubclass(t, PBUFFER)) or issubclass(t, (_BPStruct, _BPAStruct)):
+      elif issubclass(t, (PBUFFER, _BPStruct, _BPAStruct)):
         setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property(getattr(cls, '_' + n).__get__, lambda s, v, _n='_'+n, _t=t, _c=(t.from_param if b else None): setattr(s, _n, ctypes.cast((_c(v) if _c else v), _t)), getattr(cls, '_' + n).__delete__))
+        setattr(cls, n, property(getattr(cls, '_' + n).__get__, lambda s, v, _n='_'+n, _t=t: setattr(s, _n, ctypes.cast(_t.from_param(v, True), _t)), getattr(cls, '_' + n).__delete__))
   def __mul__(bcls, size):
     return _WSUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _WSUtil._asitem, 'value': property(_WSUtil._avalue)}))
 
@@ -1094,9 +1094,9 @@ class _BDStruct:
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, dict):
-      return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, (ctypes.Structure, _BPStruct)) else obj.get(n, 0)) for n, t in cls._fields_))
+      return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, ctypes.Structure) else obj.get(n, 0)) for n, t in cls._fields_))
     else:
-      return cls(*((t.from_param(o) if issubclass(t, (ctypes.Structure, _BPStruct)) else o) for (n, t), o in zip(cls._fields_, obj)))
+      return cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
   def to_dict(self):
     return {n: (getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n)) for n, t in self.__class__._fields_}
   @property
@@ -1108,7 +1108,7 @@ class _BDStruct:
 class _BTStruct:
   @classmethod
   def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, cls) else cls(*((t.from_param(o) if issubclass(t, (ctypes.Structure, _BPStruct)) else o) for (n, t), o in zip(cls._fields_, obj)))
+    return obj if obj is None or isinstance(obj, cls) else cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
   def to_tuple(self):
     return tuple(getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n) for n, t in self.__class__._fields_)
   @property
@@ -1119,18 +1119,18 @@ class _BTStruct:
 
 class _BPStruct:
   @classmethod
-  def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else cls._type_.from_param(obj))
+  def from_param(cls, obj, pointer=False):
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else cls._type_.from_param(obj))
   @property
   def value(self):
     return getattr((s := self.contents), 'value', s) if self else None
 
 class _BPAStruct:
   @classmethod
-  def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else (cls._type_ * len(obj))(*obj))
+  def from_param(cls, obj, pointer=False):
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else (cls._type_ * len(obj))(*obj))
   def value(self, count):
-    return getattr((a := ctypes.cast(self, ctypes.POINTER(cls.__bases__[1] * count)).contents), 'value', a) if self else None
+    return getattr((a := ctypes.cast(self, ctypes.POINTER(self.__class__._type_ * count)).contents), 'value', a) if self else None
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
 WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
@@ -3649,25 +3649,25 @@ DXGIPSWAPCHAINDESCFULLSCREEN = type('DXGIPSWAPCHAINDESCFULLSCREEN', (_BPStruct, 
 DXGIPresent = {'Present': 0, 'PresentTest': 0x1, 'DoNotSequence': 0x2, 'PresentRestart': 0x4, 'DoNotWait': 0x8, 'RestrictToOutput': 0x10, 'StereoPreferRight': 0x20, 'StereoTemporaryMono': 0x40, 'UseDuration': 0x100, 'AllowTearing': 2}
 DXGIPRESENT = type('DXGIPRESENT', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIPresent.items()}, '_tab_cn': {c: n for n, c in DXGIPresent.items()}, '_def': 0})
 
-RECT = type('RECT', (_BTStruct, wintypes.RECT), {})
+RECT = _WSMeta('RECT', (_BTStruct, wintypes.RECT), {})
 PRECT = type('PRECT', (_BPStruct, ctypes.POINTER(RECT)), {'_type_': RECT})
 PARECT = type('ARECT', (_BPAStruct, ctypes.POINTER(RECT)), {'_type_': RECT})
 
-POINT = type('POINT', (_BTStruct, wintypes.POINT), {})
+POINT = _WSMeta('POINT', (_BTStruct, wintypes.POINT), {})
 PPOINT = type('PPOINT', (_BPStruct, ctypes.POINTER(POINT)), {'_type_': POINT})
 
 class DXGIPRESENTPARAMETERS(ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('DirtyRectsCount', wintypes.UINT), ('pDirtyRects', PARECT), ('pScrollRect', PRECT), ('pScrollOffset', wintypes.PPOINT)]
+  _fields_ = [('DirtyRectsCount', wintypes.UINT), ('pDirtyRects', PARECT), ('pScrollRect', PRECT), ('pScrollOffset', PPOINT)]
   @classmethod
   def from_param(cls, obj):
     if obj is None or isinstance(obj, cls):
       return obj
     if isinstance(obj, dict):
-      return cls(len(obj.get('DirtyRects') or ()), *(t.from_param(obj.get(n)) for n, t in cls._fields_[1:]))
+      return cls(len(obj.get('pDirtyRects') or ()), *(obj.get(n) for n, t in cls._fields_[1:]))
     else:
-      return cls((0 if not obj or not obj[0] else len(obj[0])), *(t.from_param(o) for (n, t), o in zip(cls._fields_[1:], obj)))
+      return cls((0 if not obj or not obj[0] else len(obj[0])), *(o for f, o in zip(cls._fields_[1:], obj)))
   def to_dict(self):
-    return {'DirtyRects': self.pDirtyRects.value(self.DirtyRectsCount), 'ScrollRect': self.pScrollRect.value, 'ScrollOffset': self.pScrollOffset.value}
+    return {'pDirtyRects': self.pDirtyRects.value(self.DirtyRectsCount), 'pScrollRect': self.pScrollRect.value, 'pScrollOffset': self.pScrollOffset.value}
   @property
   def value(self):
     return self.to_dict()
