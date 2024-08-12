@@ -4555,7 +4555,7 @@ class ID2D1RenderTarget(ID2D1Resource):
       if (factory := self.factory) is None:
         if (factory := self.GetFactory()) is None:
           return None
-      if (block := self.factory.CreateDrawingStateBlock()) is None:
+      if (block := factory.CreateDrawingStateBlock()) is None:
         return None
     self._protos['SaveDrawingState'](self.pI, block)
     return block
