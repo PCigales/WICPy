@@ -1225,7 +1225,8 @@ class WICBITMAPPLANE(ctypes.Structure, metaclass=_WSMeta):
     elif isinstance(obj, dict):
       return cls(obj.get('Format', 'DontCare'), obj.get('pbBuffer', None), obj.get('cbStride', 0), PBUFFER.length(obj.get('pbBuffer', None)))
     else:
-      return cls(obj[0], obj[1], obj[2], PBUFFER.length(obj[1]))
+      l = len(obj)
+      return cls(('DontCare' if l < 1 else obj[0]), (None if l < 2 else obj[1]), (0 if l < 3 else obj[2]), PBUFFER.length(None if l < 2 else obj[1]))
   def to_dict(self):
     return {'Format': self.Format, 'pbBuffer': (ctypes.cast(self.pbBuffer, ctypes.POINTER(wintypes.BYTE * self.cbBufferSize)).contents if self.pbBuffer else None), 'cbStride': self.cbStride}
   @property
