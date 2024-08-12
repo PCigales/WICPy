@@ -4168,7 +4168,7 @@ class D2D1MAPPEDRECT(ctypes.Structure):
 D2D1PMAPPEDRECT = ctypes.POINTER(D2D1MAPPEDRECT)
 
 class D2D1DRAWINGSTATEDESCRIPTION(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('antialiasMode', D2D1ANTIALIASMODE), ('textAntialiasMode', wintypes.DWORD), ('tag1', wintypes.PULARGE_INTEGER), ('tag2', wintypes.PULARGE_INTEGER), ('transform', D2D1MATRIX3X2F), ('primitiveBlend', D2D1PRIMITIVEBLEND), ('unitMode', D2D1UNITMODE)]
+  _fields_ = [('antialiasMode', D2D1ANTIALIASMODE), ('textAntialiasMode', wintypes.DWORD), ('tag1', wintypes.ULARGE_INTEGER), ('tag2', wintypes.ULARGE_INTEGER), ('transform', D2D1MATRIX3X2F), ('primitiveBlend', D2D1PRIMITIVEBLEND), ('unitMode', D2D1UNITMODE)]
 D2D1PDRAWINGSTATEDESCRIPTION = type('D2D1PDRAWINGSTATEDESCRIPTION', (_BPStruct, ctypes.POINTER(D2D1DRAWINGSTATEDESCRIPTION)), {'_type_': D2D1DRAWINGSTATEDESCRIPTION})
 
 D2D1DeviceContextOptions = {'None': 0, 'Multithreaded': 1}
@@ -4455,8 +4455,8 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['SetAntialiasMode'] = 32, (D2D1ANTIALIASMODE,), (), None
   _protos['GetAntialiasMode'] = 33, (), (), D2D1ANTIALIASMODE
   _protos['Flush'] = 42, (), (wintypes.PULARGE_INTEGER, wintypes.PULARGE_INTEGER)
-  _protos['SaveDrawingState'] = 43, (wintypes.PLPVOID,), (), None
-  _protos['RestoreDrawingState'] = 44, (wintypes.PLPVOID,), (), None
+  _protos['SaveDrawingState'] = 43, (wintypes.LPVOID,), (), None
+  _protos['RestoreDrawingState'] = 44, (wintypes.LPVOID,), (), None
   _protos['PushAxisAlignedClip'] = 45, (D2D1PRECTF, D2D1ANTIALIASMODE), (), None
   _protos['PopAxisAlignedClip'] = 46, (), (), None
   _protos['Clear'] = 47, (D2D1PCOLORF,), (), None
@@ -4817,7 +4817,7 @@ class ID2D1Factory(IUnknown):
   def CreateStrokeStyle(self, properties, dashes=None):
     return ID2D1StrokeStyle(self.__class__._protos['CreateStrokeStyle'](self.pI, properties, (dashes if dashes is None or (isinstance(dashes, ctypes.Array) and issubclass(dashes._type_, wintypes.FLOAT)) else (wintypes.FLOAT *  len(dashes))(*dashes)), (0 if dashes is None else len(dashes))), self)
   def CreateDrawingStateBlock(self, description=None):
-    return ID2D1DrawingStateBlock(self.__class__._protos['CreateDrawingStateBlock'](self.pI, properties, None), self)
+    return ID2D1DrawingStateBlock(self.__class__._protos['CreateDrawingStateBlock'](self.pI, description, None), self)
   def ReloadSystemMetrics(self):
     return self.__class__._protos['ReloadSystemMetrics'](self.pI)
   def GetDesktopDpi(self):
