@@ -3,7 +3,10 @@
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
 import ctypes, ctypes.wintypes as wintypes
-ctypes.CArg = ctypes.byref(ctypes.c_byte()).__class__
+ctypes.CArgObject = ctypes.byref(ctypes.c_byte()).__class__
+if not hasattr(ctypes, '_Pointer'):
+  ctypes._Pointer = ctypes.POINTER(ctypes.c_byte).__mro__[1]
+ctypes._CData = ctypes.c_byte.__mro__[-2]
 wintypes.PLPVOID = ctypes.POINTER(wintypes.LPVOID)
 wintypes.PDOUBLE = ctypes.POINTER(wintypes.DOUBLE)
 wintypes.BOOLE = type('BOOLE', (wintypes.BOOL,), {'value': property(lambda s: bool(wintypes.BOOL.value.__get__(s)), wintypes.BOOL.value.__set__), '__ctypes_from_outparam__': lambda s: s.value})
@@ -107,7 +110,7 @@ class _IMeta(type):
         if not o:
           cls._protos[n].errcheck = _IUtil._errcheck_r
   def __mul__(bcls, size):
-    return _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
+    return _IUtil._mul_cache.get((bcls, size)) or _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -195,7 +198,7 @@ class _PCOMUtil:
 
 class _PCOMMeta(wintypes.LPVOID.__class__):
   def __mul__(bcls, size):
-    return _PCOMUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__getitem__': _PCOMUtil._agitem, '__setitem__': _PCOMUtil._asitem, '_base': bcls}))
+    return _PCOMUtil._mul_cache.get((bcls, size)) or _PCOMUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (wintypes.LPVOID * size,), {'__getitem__': _PCOMUtil._agitem, '__setitem__': _PCOMUtil._asitem, '_base': bcls}))
 
 class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
   icls = IUnknown
@@ -325,18 +328,26 @@ class PBUFFER(wintypes.LPVOID):
   def length(obj):
     if obj is None:
       return 0
-    elif isinstance(obj, ctypes.c_char):
-      return 1
+    elif isinstance(obj, ctypes._CData):
+      if isinstance(obj, ctypes._Pointer):
+        return ctypes.sizeof(obj.__class__._type_) if obj else 0
+      elif isinstance(obj, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes.CArgObject)):
+        raise TypeError('object of type \'%s\' has no length' % obj.__class__.__name__)
+      else:
+        return ctypes.sizeof(obj)
     elif isinstance(obj, memoryview):
       return obj.nbytes
-    elif isinstance(obj, ctypes.Array):
-      return ctypes.sizeof(obj)
     else:
       return len(obj) * getattr(obj, 'itemsize', 1)
   @classmethod
   def from_param(cls, obj, pointer=False):
-    if obj is None or isinstance(obj, (ctypes.c_void_p, ctypes.c_char_p, ctypes.CArg)):
-      return obj
+    if obj is None:
+      return None
+    elif isinstance(obj, ctypes._CData):
+      if isinstance(obj, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, ctypes.CArgObject)):
+        return obj
+      else:
+        return (ctypes.pointer if pointer else ctypes.byref)(obj)
     elif isinstance(obj, bytes):
       return ctypes.c_char_p(obj)
     else:
@@ -485,7 +496,7 @@ class _BGUID:
 class _BPGUID:
   @classmethod
   def from_param(cls, obj):
-    return obj if isinstance(obj, (cls.__bases__[1], wintypes.PGUID, wintypes.LPVOID, ctypes.c_char_p, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, wintypes.GUID) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, wintypes.GUID)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
+    return obj if isinstance(obj, (cls.__bases__[1], wintypes.PGUID, wintypes.LPVOID, ctypes.c_char_p, ctypes.CArgObject)) else (ctypes.byref(obj) if isinstance(obj, wintypes.GUID) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, wintypes.GUID)) else ctypes.c_char_p(cls._type_.name_guid(obj)))
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
@@ -506,7 +517,7 @@ class _GMeta(wintypes.GUID.__class__):
     if hasattr(cls, 'value'):
       del cls.value
   def __mul__(bcls, size):
-    return _GUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.wintypes.GUID.__class__.__mul__(bcls, size),), {'__setitem__': _GUtil._asitem, 'value': property(_GUtil._avalue)}))
+    return _GUtil._mul_cache.get((bcls, size)) or _GUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.wintypes.GUID.__class__.__mul__(bcls, size),), {'__setitem__': _GUtil._asitem, 'value': property(_GUtil._avalue)}))
 
 UUID = _GMeta('UUID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {}, '_tab_gn': {}, '_def': None, '__str__': lambda s: str(s.guid)})
 PUUID = type('PUUID', (_BPGUID, ctypes.POINTER(UUID)), {'_type_': UUID})
@@ -931,7 +942,7 @@ class _BSTRUtil:
 
 class _BSTRMeta(ctypes._Pointer.__class__):
   def __mul__(bcls, size):
-    return _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
+    return _BSTRUtil._mul_cache.get((bcls, size)) or _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
 
 class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
   _type_ = wintypes.WCHAR
@@ -1051,7 +1062,7 @@ class _DATEUtil:
 
 class _DATEMeta(wintypes.DOUBLE.__class__):
   def __mul__(bcls, size):
-    return _DATEUtil._mul_cache.setdefault((bcls, size), type('DATE_Array_%d' % size, (wintypes.DOUBLE.__class__.__mul__(bcls, size),), {'__getitem__': _DATEUtil._agitem, '__setitem__': _DATEUtil._asitem}))
+    return _DATEUtil._mul_cache.get((bcls, size)) or _DATEUtil._mul_cache.setdefault((bcls, size), type('DATE_Array_%d' % size, (wintypes.DOUBLE.__class__.__mul__(bcls, size),), {'__getitem__': _DATEUtil._agitem, '__setitem__': _DATEUtil._asitem}))
 
 class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
   def __init__(self, dt=0):
@@ -1086,7 +1097,7 @@ class _WSMeta(ctypes.Structure.__class__):
         setattr(cls, '_' + n, getattr(cls, n))
         setattr(cls, n, property(getattr(cls, '_' + n).__get__, lambda s, v, _n='_'+n, _t=t: setattr(s, _n, ctypes.cast(_t.from_param(v, True), _t)), getattr(cls, '_' + n).__delete__))
   def __mul__(bcls, size):
-    return _WSUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _WSUtil._asitem, 'value': property(_WSUtil._avalue)}))
+    return _WSUtil._mul_cache.get((bcls, size)) or _WSUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _WSUtil._asitem, 'value': property(_WSUtil._avalue)}))
 
 class _BDStruct:
   @classmethod
@@ -1120,7 +1131,7 @@ class _BTStruct:
 class _BPStruct:
   @classmethod
   def from_param(cls, obj, pointer=False):
-    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else cls._type_.from_param(obj))
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else cls._type_.from_param(obj))
   @property
   def value(self):
     return getattr((s := self.contents), 'value', s) if self else None
@@ -1128,7 +1139,7 @@ class _BPStruct:
 class _BPAStruct:
   @classmethod
   def from_param(cls, obj, pointer=False):
-    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else (cls._type_ * len(obj))(*obj))
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else (cls._type_ * len(obj))(*obj))
   def value(self, count):
     return getattr((a := ctypes.cast(self, ctypes.POINTER(self.__class__._type_ * count)).contents), 'value', a) if self else None
 
@@ -1467,7 +1478,7 @@ class _BLOBUtil:
 
 class _BLOBMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return _BLOBUtil._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__getitem__': _BLOBUtil._agitem, '__setitem__': _BLOBUtil._asitem}))
+    return _BLOBUtil._mul_cache.get((bcls, size)) or _BLOBUtil._mul_cache.setdefault((bcls, size), type('BLOB_Array_%d' % size, (ctypes.Structure.__class__.__mul__(bcls, size),), {'__getitem__': _BLOBUtil._agitem, '__setitem__': _BLOBUtil._asitem}))
 
 class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   _fields_ = [('cbSize', wintypes.ULONG), ('pBlobdata', wintypes.LPVOID)]
@@ -1714,7 +1725,7 @@ class _BVUtil:
 
 class _BVMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
-    return _BVUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel}))
+    return _BVUtil._mul_cache.get((bcls, size)) or _BVUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel}))
   def __new__(mcls, name, bases, namespace, **kwds):
     if (code_name := namespace.get('code_name')) is not None:
       cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for na, co in {na: co for co, na in code_name.items() if co != 14}.items()), ('pad', wintypes.BYTES16)]})
@@ -1878,7 +1889,7 @@ class _BVARIANT(metaclass=_BVMeta):
 class _BPBVARIANT:
   @classmethod
   def from_param(cls, obj):
-    return ctypes.byref(cls._type_(13, obj)) if isinstance(obj, (IUnknown, PCOM)) else (obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArg)) else (ctypes.byref(obj) if isinstance(obj, cls._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_)) else ctypes.byref(cls._type_(*obj) or cls._type_())))
+    return ctypes.byref(cls._type_(13, obj)) if isinstance(obj, (IUnknown, PCOM)) else (obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.byref(obj) if isinstance(obj, cls._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_)) else ctypes.byref(cls._type_(*obj) or cls._type_())))
 
 class VARIANT(_BVARIANT, ctypes.Structure):
   code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
@@ -1909,7 +1920,7 @@ class _PBUtil:
 class _PBMeta(ctypes.Structure.__class__):
   _mul_cache = {}
   def __mul__(bcls, size):
-    return bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _PBUtil._ainit, '__del__': _PBUtil._adel}))
+    return bcls.__class__._mul_cache.get((bcls, size)) or bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _PBUtil._ainit, '__del__': _PBUtil._adel}))
 
 class PROPBAG2(ctypes.Structure, metaclass=_PBMeta):
   _fields_ = [('dwType', wintypes.DWORD), ('_vt', ctypes.c_ushort), ('cfType', wintypes.DWORD), ('dwHint', wintypes.DWORD), ('pstrName', wintypes.LPOLESTR), ('clsid', wintypes.GUID)]
@@ -4013,7 +4024,7 @@ class D2D1PMATRIX3X2F(ctypes.POINTER(D2D1MATRIX3X2F)):
   _type_ = D2D1MATRIX3X2F
   @classmethod
   def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, (ctypes._Pointer, wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(D2D1MATRIX3X2F.from_param(obj))
+    return obj if obj is None or isinstance(obj, (ctypes._Pointer, wintypes.LPVOID, ctypes.CArgObject)) else ctypes.byref(D2D1MATRIX3X2F.from_param(obj))
 
 class D2D1MATRIX4X4F(wintypes.FLOAT * 16):
   @classmethod
@@ -4050,7 +4061,7 @@ class D2D1PMATRIX4X4F(ctypes.POINTER(D2D1MATRIX4X4F)):
   _type_ = D2D1MATRIX4X4F
   @classmethod
   def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, (ctypes._Pointer, wintypes.LPVOID, ctypes.CArg)) else ctypes.byref(D2D1MATRIX4X4F.from_param(obj))
+    return obj if obj is None or isinstance(obj, (ctypes._Pointer, wintypes.LPVOID, ctypes.CArgObject)) else ctypes.byref(D2D1MATRIX4X4F.from_param(obj))
 
 class D2D1RECTU(_BTStruct, ctypes.Structure):
   _fields_ = [('left', wintypes.UINT), ('top', wintypes.UINT), ('right', wintypes.UINT), ('bottom', wintypes.UINT)]
