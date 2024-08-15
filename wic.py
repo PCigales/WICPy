@@ -1765,7 +1765,7 @@ class _BVMeta(ctypes.Structure.__class__):
       cls.pclipdata = property(lambda s: _BVUtil._padup(s._pclipdata), lambda s, v: setattr(s, '_pclipdata', v if isinstance(v, wintypes.PBYTES16) else ((ctypes.pointer(v) if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16)))), cls._pclipdata.__delete__)
     if hasattr(cls, 'puuid'):
       cls._puuid = cls.puuid
-      cls.puuid = property(lambda s: _BVUtil._padup(s._puuid), lambda s, v: setattr(s, '_puuid', v if isinstance(v, wintypes.PGUID) else ((ctypes.cast(ctypes.pointer(v), wintypes.PGUID) if isinstance(v, wintypes.GUID) else ctypes.cast(ctypes.c_char_p(v), wintypes.PGUID)))), cls._puuid.__delete__)
+      cls.puuid = property(lambda s: UUID(_BVUtil._padup(s._puuid)), lambda s, v: setattr(s, '_puuid', v if isinstance(v, ctypes._Pointer) and issubclass(v._type_, wintypes.GUID) else (ctypes.cast(v, wintypes.PGUID)if isinstance(v, ctypes.c_char_p) else ((ctypes.cast(ctypes.pointer(v), wintypes.PGUID) if isinstance(v, wintypes.GUID) else ctypes.cast(ctypes.c_char_p(v), wintypes.PGUID))))), cls._puuid.__delete__)
     if hasattr(cls, 'pad'):
       cls._pad = cls.pad
       cls.pad = property(lambda s: _BVUtil._adup(s._pad), lambda s, v: setattr(s, '_pad', v if isinstance(v, wintypes.BYTES16) else ctypes.cast(ctypes.c_char_p(v), wintypes.PBYTES16).contents), cls._pad.__delete__)
@@ -2455,7 +2455,7 @@ class _IWICMQRMeta(_IMeta):
     'ISOSpeedRatings': (('/jpeg/app1/ifd/exif/{ushort=34855}', '/tiff/ifd/exif/{ushort=34855}'), 'VT_UI2', None, None),
     'DateTimeOriginal': (('/jpeg/app1/ifd/exif/{ushort=36867}', '/tiff/ifd/exif/{ushort=36867}'), 'VT_LPSTR', bytes.decode, str.encode),
     'DateTimeDigitized': (('/jpeg/app1/ifd/exif/{ushort=36868}', '/tiff/ifd/exif/{ushort=36868}'), 'VT_LPSTR', bytes.decode, str.encode),
-   'ComponentsConfiguration': (('/jpeg/app1/ifd/exif/{ushort=37121}', '/tiff/ifd/exif/{ushort=37121}'), 'VT_BLOB', *_IWICMQRUtil._blob(METADATACOMPONENTSCONFIGURATION)),
+    'ComponentsConfiguration': (('/jpeg/app1/ifd/exif/{ushort=37121}', '/tiff/ifd/exif/{ushort=37121}'), 'VT_BLOB', *_IWICMQRUtil._blob(METADATACOMPONENTSCONFIGURATION)),
     'CompressedBitsPerPixel': (('/jpeg/app1/ifd/exif/{ushort=37122}', '/tiff/ifd/exif/{ushort=37122}'), 'VT_UI8', MetadataFloatFraction.from_rational, MetadataFloatFraction.to_rational),
     'ShutterSpeedValue': (('/jpeg/app1/ifd/exif/{ushort=37377}', '/tiff/ifd/exif/{ushort=37377}'), 'VT_I8', MetadataSpeedFraction.from_rational, MetadataSpeedFraction.to_rational),
     'ApertureValue': (('/jpeg/app1/ifd/exif/{ushort=37378}', '/tiff/ifd/exif/{ushort=37378}'), 'VT_UI8', MetadataApertureFraction.from_rational, MetadataApertureFraction.to_rational),
@@ -4134,6 +4134,10 @@ class D2D1BITMAPBRUSHPROPERTIESDC(_BDStruct, ctypes.Structure, metaclass=_WSMeta
   _fields_ = [('extendModeX', D2D1EXTENDMODE), ('extendModeY', D2D1EXTENDMODE), ('interpolationMode', D2D1INTERPOLATIONMODE)]
 D2D1PBITMAPBRUSHPROPERTIESDC = type('D2D1PBITMAPBRUSHPROPERTIESDC', (_BPStruct, ctypes.POINTER(D2D1BITMAPBRUSHPROPERTIESDC)), {'_type_': D2D1BITMAPBRUSHPROPERTIESDC})
 
+class D2D1IMAGEBRUSHPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('sourceRectangle', D2D1RECTF), ('extendModeX', D2D1EXTENDMODE), ('extendModeY', D2D1EXTENDMODE), ('interpolationMode', D2D1INTERPOLATIONMODE)]
+D2D1PIMAGEBRUSHPROPERTIES = type('D2D1PIMAGEBRUSHPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1IMAGEBRUSHPROPERTIES)), {'_type_': D2D1IMAGEBRUSHPROPERTIES})
+
 class D2D1BRUSHPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('opacity', wintypes.FLOAT), ('transform', D2D1MATRIX3X2F)]
 D2D1PBRUSHPROPERTIES = type('D2D1PBRUSHPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1BRUSHPROPERTIES)), {'_type_': D2D1BRUSHPROPERTIES})
@@ -4182,6 +4186,82 @@ D2D1PMAPPEDRECT = ctypes.POINTER(D2D1MAPPEDRECT)
 class D2D1DRAWINGSTATEDESCRIPTION(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('antialiasMode', D2D1ANTIALIASMODE), ('textAntialiasMode', wintypes.DWORD), ('tag1', wintypes.ULARGE_INTEGER), ('tag2', wintypes.ULARGE_INTEGER), ('transform', D2D1MATRIX3X2F), ('primitiveBlend', D2D1PRIMITIVEBLEND), ('unitMode', D2D1UNITMODE)]
 D2D1PDRAWINGSTATEDESCRIPTION = type('D2D1PDRAWINGSTATEDESCRIPTION', (_BPStruct, ctypes.POINTER(D2D1DRAWINGSTATEDESCRIPTION)), {'_type_': D2D1DRAWINGSTATEDESCRIPTION})
+
+D2D1PropertyType = {'Unknown': 0, 'String': 1, 'Bool': 2, 'UInt': 3, 'UInt32': 3, 'Int': 4, 'Int32': 4, 'Float': 5, 'Vector2': 6, 'Vector3': 7, 'Vector4': 8, 'Blob': 9, 'IUnknown': 10, 'Enum': 11, 'Array': 12, 'Clsid': 13, 'Matrix3x2': 14, 'Matrix4x3': 15, 'Matrix4x4': 16, 'Matrix5x4': 17, 'ColorContext': 18}
+D2D1PROPERTYTYPE = type('D2D1PROPERTYTYPE', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D2D1PropertyType.items()}, '_tab_cn': {c: n for n, c in D2D1PropertyType.items()}, '_def': 1})
+
+D2D1EffectId = {
+  'LookupTable3D': GUID(0x349e0eda, 0x0088, 0x4a79, 0x9c, 0xa3, 0xc7, 0xe3, 0x00, 0x20, 0x20, 0x20),
+  'ColorManagement': GUID(0x1a28524c, 0xfdd6, 0x4aa4, 0xae, 0x8f, 0x83, 0x7e, 0xb8, 0x26, 0x7b, 0x37),
+  'ColorMatrix': GUID(0x921f03d6, 0x641c, 0x47df, 0x85, 0x2d, 0xb4, 0xbb, 0x61, 0x53, 0xae, 0x11),
+  'DiscreteTransfer': GUID(0x90866fcd, 0x488e, 0x454b, 0xaf, 0x06, 0xe5, 0x04, 0x1b, 0x66, 0xc3, 0x6c),
+  'DpiCompensation': GUID(0x6c26c5c7, 0x34e0, 0x46fc, 0x9c, 0xfd, 0xe5, 0x82, 0x37, 0x60, 0xe2, 0x28),
+  'GammaTransfer': GUID(0x409444c4, 0xc419, 0x41a0, 0xb0, 0xc1, 0x8c, 0xd0, 0xc0, 0xa1, 0x8e, 0x42),
+  'HdrToneMap': GUID(0x7b0b748d, 0x4610, 0x4486, 0xa9, 0x0c, 0x99, 0x9d, 0x9a, 0x2e, 0x2b, 0x11),
+  'HueToRgb': GUID(0x7b78a6bd, 0x0141, 0x4def, 0x8a, 0x52, 0x63, 0x56, 0xee, 0x0c, 0xbd, 0xd5),
+  'HueRotation': GUID(0x0f4458ec, 0x4b32, 0x491b, 0x9e, 0x85, 0xbd, 0x73, 0xf4, 0x4d, 0x3e, 0xb6),
+  'LinearTransfer': GUID(0xad47c8fd, 0x63ef, 0x4acc, 0x9b, 0x51, 0x67, 0x97, 0x9c, 0x03, 0x6c, 0x06),
+  'OpacityMetadata': GUID(0x6c53006a, 0x4450, 0x4199, 0xaa, 0x5b, 0xad, 0x16, 0x56, 0xfe, 0xce, 0x5e),
+  'Premultiply': GUID(0x06eab419, 0xdeed, 0x4018, 0x80, 0xd2, 0x3e, 0x1d, 0x47, 0x1a, 0xde, 0xb2),
+  'RgbToHue': GUID(0x23f3e5ec, 0x91e8, 0x4d3d, 0xad, 0x0a, 0xaf, 0xad, 0xc1, 0x00, 0x4a, 0xa1),
+  'Saturation': GUID(0x5cb2d9cf, 0x327d, 0x459f, 0xa0, 0xce, 0x40, 0xc0, 0xb2, 0x08, 0x6b, 0xf7),
+  'TableTransfer': GUID(0x5bf818c3, 0x5e43, 0x48cb, 0xb6, 0x31, 0x86, 0x83, 0x96, 0xd6, 0xa1, 0xd4),
+  'Tint': GUID(0x36312b17, 0xf7dd, 0x4014, 0x91, 0x5d, 0xff, 0xca, 0x76, 0x8c, 0xf2, 0x11),
+  'UnPremultiply': GUID(0xfb9ac489, 0xad8d, 0x41ed, 0x99, 0x99, 0xbb, 0x63, 0x47, 0xd1, 0x10, 0xf7),
+  'WhiteLevelAdjustment': GUID(0x44a1cadb, 0x6cdd, 0x4818, 0x8f, 0xf4, 0x26, 0xc1, 0xcf, 0xe9, 0x5b, 0xdb),
+  'YCbCr': GUID(0x99503cc1, 0x66c7, 0x45c9, 0xa8, 0x75, 0x8a, 0xd8, 0xa7, 0x91, 0x44, 0x01),
+  'AlphaMask': GUID(0xc80ecff0, 0x3fd5, 0x4f05, 0x83, 0x28, 0xc5, 0xd1, 0x72, 0x4b, 0x4f, 0x0a),
+  'ArithmeticComposite': GUID(0xfc151437, 0x049a, 0x4784, 0xa2, 0x4a, 0xf1, 0xc4, 0xda, 0xf2, 0x09, 0x87),
+  'Blend': GUID(0x81c5b77b, 0x13f8, 0x4cdd, 0xad, 0x20, 0xc8, 0x90, 0x54, 0x7a, 0xc6, 0x5d),
+  'Composite': GUID(0x48fc9f51, 0xf6ac, 0x48f1, 0x8b, 0x58, 0x3b, 0x28, 0xac, 0x46, 0xf7, 0x6d),
+  'CrossFade': GUID(0x12f575e8, 0x4db1, 0x485f, 0x9a, 0x84, 0x03, 0xa0, 0x7d, 0xd3, 0x82, 0x9f),
+  'ConvolveMatrix': GUID(0x407f8c08, 0x5533, 0x4331, 0xa3, 0x41, 0x23, 0xcc, 0x38, 0x77, 0x84, 0x3e),
+  'DirectionalBlur': GUID(0x174319a6, 0x58e9, 0x49b2, 0xbb, 0x63, 0xca, 0xf2, 0xc8, 0x11, 0xa3, 0xdb),
+  'EdgeDetection': GUID(0xeff583ca, 0xcb07, 0x4aa9, 0xac, 0x5d, 0x2c, 0xc4, 0x4c, 0x76, 0x46, 0x0f),
+  'GaussianBlur': GUID(0x1feb6d69, 0x2fe6, 0x4ac9, 0x8c, 0x58, 0x1d, 0x7f, 0x93, 0xe7, 0xa6, 0xa5),
+  'Morphology': GUID(0xeae6c40d, 0x626a, 0x4c2d, 0xbf, 0xcb, 0x39, 0x10, 0x01, 0xab, 0xe2, 0x02),
+  'DisplacementMap': GUID(0xedc48364, 0x0417, 0x4111, 0x94, 0x50, 0x43, 0x84, 0x5f, 0xa9, 0xf8, 0x90),
+  'DistantDiffuse': GUID(0x3e7efd62, 0xa32d, 0x46d4, 0xa8, 0x3c, 0x52, 0x78, 0x88, 0x9a, 0xc9, 0x54),
+  'DistantSpecular': GUID(0x428c1ee5, 0x77b8, 0x4450, 0x8a, 0xb5, 0x72, 0x21, 0x9c, 0x21, 0xab, 0xda),
+  'Emboss': GUID(0xb1c5eb2b, 0x0348, 0x43f0, 0x81, 0x07, 0x49, 0x57, 0xca, 0xcb, 0xa2, 0xae),
+  'PointDiffuse': GUID(0xb9e303c3, 0xc08c, 0x4f91, 0x8b, 0x7b, 0x38, 0x65, 0x6b, 0xc4, 0x8c, 0x20),
+  'PointSpecular': GUID(0x09c3ca26, 0x3ae2, 0x4f09, 0x9e, 0xbc, 0xed, 0x38, 0x65, 0xd5, 0x3f, 0x22),
+  'Posterize': GUID(0x2188945e, 0x33a3, 0x4366, 0xb7, 0xbc, 0x08, 0x6b, 0xd0, 0x2d, 0x08, 0x84),
+  'Shadow': GUID(0xc67ea361, 0x1863, 0x4e69, 0x89, 0xdb, 0x69, 0x5d, 0x3e, 0x9a, 0x5b, 0x6b),
+  'SpotDiffuse': GUID(0x818a1105, 0x7932, 0x44f4, 0xaa, 0x86, 0x08, 0xae, 0x7b, 0x2f, 0x2c, 0x93),
+  'SpotSpecular': GUID(0xedae421e, 0x7654, 0x4a37, 0x9d, 0xb8, 0x71, 0xac, 0xc1, 0xbe, 0xb3, 0xc1),
+  'Brightness': GUID(0x8cea8d1e, 0x77b0, 0x4986, 0xb3, 0xb9, 0x2f, 0x0c, 0x0e, 0xae, 0x78, 0x87),
+  'Contrast': GUID(0xb648a78a, 0x0ed5, 0x4f80, 0xa9, 0x4a, 0x8e, 0x82, 0x5a, 0xca, 0x6b, 0x77),
+  'Exposure': GUID(0xb56c8cfa, 0xf634, 0x41ee, 0xbe, 0xe0, 0xff, 0xa6, 0x17, 0x10, 0x60, 0x04),
+  'Grayscale': GUID(0x36dde0eb, 0x3725, 0x42e0, 0x83, 0x6d, 0x52, 0xfb, 0x20, 0xae, 0xe6, 0x44),
+  'HighlightsShadows': GUID(0xcadc8384, 0x323f, 0x4c7e, 0xa3, 0x61, 0x2e, 0x2b, 0x24, 0xdf, 0x6e, 0xe4),
+  'Histogram': GUID(0x881db7d0, 0xf7ee, 0x4d4d, 0xa6, 0xd2, 0x46, 0x97, 0xac, 0xc6, 0x6e, 0xe8),
+  'Invert': GUID(0xe0c3784d, 0xcb39, 0x4e84, 0xb6, 0xfd, 0x6b, 0x72, 0xf0, 0x81, 0x02, 0x63),
+  'Sepia': GUID(0x3a1af410, 0x5f1d, 0x4dbe, 0x84, 0xdf, 0x91, 0x5d, 0xa7, 0x9b, 0x71, 0x53),
+  'Sharpen': GUID(0xc9b887cb, 0xc5ff, 0x4dc5, 0x97, 0x79, 0x27, 0x3d, 0xcf, 0x41, 0x7c, 0x7d),
+  'Straighten': GUID(0x4da47b12, 0x79a3, 0x4fb0, 0x82, 0x37, 0xbb, 0xc3, 0xb2, 0xa4, 0xde, 0x08),
+  'TemperatureTint': GUID(0x89176087, 0x8af9, 0x4a08, 0xae, 0xb1, 0x89, 0x5f, 0x38, 0xdb, 0x17, 0x66),
+  'Vignette': GUID(0xc00c40be, 0x5e67, 0x4ca3, 0x95, 0xb4, 0xf4, 0xb0, 0x2c, 0x11, 0x51, 0x35),
+  'BitmapSource': GUID(0x5fb6c24d, 0xc6dd, 0x4231, 0x94, 0x04, 0x50, 0xf4, 0xd5, 0xc3, 0x25, 0x2d),
+  'Flood': GUID(0x61c23c20, 0xae69, 0x4d8e, 0x94, 0xcf, 0x50, 0x07, 0x8d, 0xf6, 0x38, 0xf2),
+  'Turbulence': GUID(0xcf2bb6ae, 0x889a, 0x4ad7, 0xba, 0x29, 0xa2, 0xfd, 0x73, 0x2c, 0x9f, 0xc9),
+  '2DAffineTransform': GUID(0x6aa97485, 0x6354, 0x4cfc, 0x90, 0x8c, 0xe4, 0xa7, 0x4f, 0x62, 0xc9, 0x6c),
+  '3DTransform': GUID(0xe8467b04, 0xec61, 0x4b8a, 0xb5, 0xde, 0xd4, 0xd7, 0x3d, 0xeb, 0xea, 0x5a),
+  '3DPerspectiveTransform': GUID(0xc2844d0b, 0x3d86, 0x46e7, 0x85, 0xba, 0x52, 0x6c, 0x92, 0x40, 0xf3, 0xfb),
+  'Atlas': GUID(0x913e2be4, 0xfdcf, 0x4fe2, 0xa5, 0xf0, 0x24, 0x54, 0xf1, 0x4f, 0xf4, 0x8),
+  'Border': GUID(0x2a2d49c0, 0x4acf, 0x43c7, 0x8c, 0x6a, 0x7c, 0x4a, 0x27, 0x87, 0x4d, 0x27),
+  'Crop': GUID(0xe23f7110, 0x0e9a, 0x4324, 0xaf, 0x47, 0x6a, 0x2c, 0x0c, 0x46, 0xf3, 0x5b),
+  'Scale': GUID(0x9daf9369, 0x3846, 0x4d0e, 0xa4, 0x4e, 0x0c, 0x60, 0x79, 0x34, 0xa5, 0xd7),
+  'Tile': GUID(0xb0784138, 0x3b76, 0x4bc5, 0xb1, 0x3b, 0x0f, 0xa2, 0xad, 0x02, 0x65, 0x9f),
+  'ChromaKey': GUID(0x74c01f5b, 0x2a0d, 0x408c, 0x88, 0xe2, 0xc7, 0xa3, 0xc7, 0x19, 0x77, 0x42),
+  'LuminanceToAlpha': GUID(0x41251ab7, 0x0beb, 0x46f8, 0x9d, 0xa7, 0x59, 0xe9, 0x3f, 0xcc, 0xe5, 0xde),
+  'Opacity': GUID(0x811d79a4, 0xde28, 0x4454, 0x80, 0x94, 0xc6, 0x46, 0x85, 0xf8, 0xbd, 0x4c)
+}
+D2D1EFFECTID = _GMeta('D2D1EFFECTID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in D2D1EffectId.items()}, '_tab_gn': {g: n for n, g in D2D1EffectId.items()}, '_def': None})
+D2D1PEFFECTID = type('D2D1PEFFECTID', (_BPGUID, ctypes.POINTER(D2D1EFFECTID)), {'_type_': D2D1EFFECTID})
+
+D2D1CompositeMode = {'SourceOver': 0, 'DestinationOver': 1, 'SourceIn': 2, 'DestinationIn': 3, 'SourceOut': 4, 'DestinationOut': 5, 'SourceAtop': 6, 'DestinationAtop': 7, 'XOr': 8, 'Plus': 9, 'SourceCopy': 10, 'BoundedSourceCopy': 11, 'MaskInvert': 12}
+D2D1COMPOSITEMODE = type('D2D1COMPOSITEMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1CompositeMode.items()}, '_tab_cn': {c: n for n, c in D2D1CompositeMode.items()}, '_def': 0})
 
 D2D1DeviceContextOptions = {'None': 0, 'Multithreaded': 1}
 D2D1DEVICECONTEXTOPTIONS = type('D2D1DEVICECONTEXTOPTIONS', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1DeviceContextOptions.items()}, '_tab_cn': {c: n for n, c in D2D1DeviceContextOptions.items()}, '_def': 0})
@@ -4253,6 +4333,198 @@ class ID2D1Bitmap(ID2D1Image):
   def Unmap(self):
     return self._protos['Unmap'](self.pI)
 ID2D1Bitmap1 = ID2D1Bitmap
+
+VEC2F = type('VEC2F', (wintypes.FLOAT * 2,), {'value' : property(tuple)})
+VEC3F = type('VEC3F', (wintypes.FLOAT * 3,), {'value' : property(tuple)})
+VEC4F = type('VEC4F', (wintypes.FLOAT * 4,), {'value' : property(tuple)})
+
+
+class _ID2D1PUtil:
+  _types = (None, wintypes.WCHAR, wintypes.BOOLE, wintypes.UINT, wintypes.INT, wintypes.FLOAT, VEC2F, VEC3F, VEC4F, wintypes.CHAR, PCOM, wintypes.UINT, wintypes.UINT, UUID, D2D1MATRIX3X2F, (wintypes.FLOAT * 12), D2D1MATRIX4X4F, (wintypes.FLOAT * 20), PCOMD2D1COLORCONTEXT)
+  @classmethod
+  def _sizeof(cls, data_type):
+    data_type = D2D1PROPERTYTYPE.to_int(data_type)
+    return None if data_type in (0, 1, 9) else ctypes.sizeof(cls._types[data_type])
+  @classmethod
+  def _to_value(cls, data_type, data_buffer, data_size):
+    if not data_type or not data_buffer:
+      return None
+    data_type = D2D1PROPERTYTYPE.to_int(data_type)
+    if data_type == 1:
+      t = wintypes.WCHAR * (data_size // ctypes.sizeof(wintypes.WCHAR))
+    elif data_type == 9:
+      t = wintypes.CHAR * (data_size // ctypes.sizeof(wintypes.CHAR))
+    else:
+      t = cls._types[data_type]
+    v = t.from_buffer(data_buffer)
+    return getattr(v, 'content', getattr(v, 'raw', getattr(v, 'value', v)))
+  @classmethod
+  def _from_value(cls, data_type, value):
+    if not data_type:
+      return None
+    data_type = D2D1PROPERTYTYPE.to_int(data_type)
+    if isinstance(value, ctypes._CData):
+      v = value
+    elif data_type == 1:
+      v = ctypes.create_unicode_buffer(value)
+    elif data_type == 9:
+      v = ctypes.create_string_buffer(value, len(value))
+    elif data_type in (6, 7, 8, 15, 17):
+      v = cls._types[data_type](*value)
+    else:
+      v = cls._types[data_type](value)
+    return v, ctypes.sizeof(v)
+
+class ID2D1Properties(IUnknown):
+  IID = GUID(0x483473d7, 0xcd46, 0x4f9d, 0x9d, 0x3a, 0x31, 0x12, 0xaa, 0x80, 0x15, 0x9d)
+  _protos['GetPropertyCount'] = 3, (), (), wintypes.UINT
+  _protos['GetPropertyName'] = 4, (wintypes.UINT, wintypes.LPWSTR, wintypes.UINT), ()
+  _protos['GetPropertyNameLength'] = 5, (wintypes.UINT,), (), wintypes.UINT
+  _protos['GetType'] = 6, (wintypes.UINT,), (), D2D1PROPERTYTYPE
+  _protos['GetPropertyIndex'] = 7, (wintypes.LPCWSTR,), (), wintypes.UINT
+  _protos['SetValueByName'] = 8, (wintypes.LPCWSTR, D2D1PROPERTYTYPE, wintypes.LPVOID, wintypes.UINT), ()
+  _protos['SetValue'] = 9, (wintypes.UINT, D2D1PROPERTYTYPE, wintypes.LPVOID, wintypes.UINT), ()
+  _protos['GetValueByName'] = 10, (wintypes.LPCWSTR, D2D1PROPERTYTYPE, wintypes.LPVOID, wintypes.UINT), ()
+  _protos['GetValue'] = 11, (wintypes.UINT, D2D1PROPERTYTYPE, wintypes.LPVOID, wintypes.UINT), ()
+  _protos['GetValueSize'] = 12, (wintypes.UINT,), (), wintypes.UINT
+  _protos['GetSubProperties'] = 13, (wintypes.UINT,), (wintypes.PLPVOID,)
+  def GetPropertyCount(self):
+    return self.__class__._protos['GetPropertyCount'](self.pI)
+  def GetPropertyIndex(self, name):
+    return None if (i := self.__class__._protos['GetPropertyIndex'](self.pI, name)) == 4294967295 else i
+  def GetPropertyNameLength(self, index):
+    return self.__class__._protos['GetPropertyNameLength'](self.pI, index)
+  def GetPropertyName(self, index, name_count=None):
+    if name_count is None:
+      if not (name_count := self.GetPropertyNameLength(index)):
+        return None
+    name_count += 1
+    n = ctypes.create_unicode_buffer(name_count * ctypes.sizeof(wintypes.WCHAR))
+    return None if self.__class__._protos['GetPropertyName'](self.pI, index, n, name_count) is None else n.value
+  def GetType(self, index):
+    return self.__class__._protos['GetType'](self.pI, index)
+  def GetValueSize(self, index):
+    return self.__class__._protos['GetValueSize'](self.pI, index)
+  def GetValue(self, index, property_type=0, data_size=0):
+    if property_type:
+      property_type = D2D1PROPERTYTYPE(property_type)
+    elif not (property_type := self.GetType(index)):
+      return None
+    if not data_size:
+      if not (data_size := _ID2D1PUtil._sizeof(property_type)):
+        if not (data_size := self.GetValueSize(index)):
+          return None
+    d = ctypes.create_string_buffer(data_size)
+    if self.__class__._protos['GetValue'](self.pI, index, property_type, d, data_size) is None:
+      return None
+    v = _ID2D1PUtil._to_value(property_type, d, data_size)
+    if property_type == 12:
+      if (sp := self.GetSubProperties(index)) is None:
+        return None
+      return tuple(sp.GetValue(i) for i in range(v))
+    elif property_type == 11:
+      if (sp := self.GetSubProperties(index)) is None:
+        return None
+      if not (ens := sp.GetValue(0x80000005)):
+        return None
+      if (sp := sp.GetSubProperties(0x80000005)) is None:
+        return None
+      evs = tuple(None if (f := sp.GetSubProperties(i)) is None else f.GetValue(0) for i in range(len(ens)))
+      return next((en for ev, en in zip(evs, ens) if v == ev), None)
+    else:
+      return v
+  def GetValueByName(self, name, property_type=0, data_size=0):
+    index = None
+    if property_type:
+      property_type = D2D1PROPERTYTYPE(property_type)
+    else:
+      if (index := self.GetPropertyIndex(name)) is None:
+        return None
+      if not (property_type := self.GetType(index)):
+        return None
+    if not data_size:
+      if not (data_size := _ID2D1PUtil._sizeof(property_type)):
+        if index is None and (index := self.GetPropertyIndex(name)) is None:
+          return None
+        if not (data_size := self.GetValueSize(index)):
+          return None
+    if property_type in (11, 12):
+      if index is None and (index := self.GetPropertyIndex(name)) is None:
+        return None
+      return self.GetValue(index, property_type, data_size)
+    else:
+      d = ctypes.create_string_buffer(data_size)
+      if self.__class__._protos['GetValueByName'](self.pI, name, property_type, d, data_size) is None:
+        return None
+      return _ID2D1PUtil._to_value(property_type, d, data_size)
+  def SetValue(self, index, data, property_type=0):
+    if property_type:
+      property_type = D2D1PROPERTYTYPE(property_type)
+    elif not (property_type := self.GetType(index)):
+      return None
+    if property_type == 11 and isinstance(data, str):
+      if (sp := self.GetSubProperties(index)) is None:
+        return None
+      if not (ens := sp.GetValue(0x80000005)):
+        return None
+      enls = (en.lower() if isinstance(en, str) else en for en in ens)
+      if (sp := sp.GetSubProperties(0x80000005)) is None:
+        return None
+      n = data.lower()
+      evs = tuple(None if (f := sp.GetSubProperties(i)) is None else f.GetValue(0) for i in range(len(ens)))
+      if (data := next((ev for ev, en in zip(evs, enls) if n == en), None)) is None:
+        return None
+    if (d_s := _ID2D1PUtil._from_value(property_type, data)) is None:
+      return None
+    return self.__class__._protos['SetValue'](self.pI, index, property_type, ctypes.byref(d_s[0]), d_s[1])
+  def SetValueByName(self, name, data, property_type=0, data_size=None):
+    index = None
+    if property_type:
+      property_type = D2D1PROPERTYTYPE(property_type)
+    else:
+      if (index := self.GetPropertyIndex(name)) is None:
+        return None
+      if not (property_type := self.GetType(index)):
+        return None
+    if property_type == 11 and isinstance(data, str):
+      if index is None and (index := self.GetPropertyIndex(name)) is None:
+        return None
+      return self.SetValue(index, data, property_type)
+    else:
+      if (d_s := _ID2D1PUtil._from_value(property_type, data)) is None:
+        return None
+      return self.__class__._protos['SetValueByName'](self.pI, name, property_type, ctypes.byref(d_s[0]), d_s[1])
+  def GetSubProperties(self, index):
+    return ID2D1Properties(self.__class__._protos['GetSubProperties'](self.pI, index), self.factory)
+  def __getattr__(self, name):
+    index = None
+    if name.startswith('Get'):
+      if (index := self.GetPropertyIndex(name[3:])) is not None:
+        return lambda : self.GetValue(index)
+    elif name.startswith('Set'):
+      if (index := self.GetPropertyIndex(name[3:])) is not None:
+        return lambda d: self.SetValue(index, d)
+    return self.__getattribute__(name)
+
+class ID2D1Effect(ID2D1Properties):
+  IID = GUID(0x28211a43, 0x7d89, 0x476f, 0x81, 0x81, 0x2d, 0x61, 0x59, 0xb2, 0x20, 0xad)
+  _protos['SetInput'] = 14, (wintypes.UINT, wintypes.LPVOID, wintypes.BOOLE), (), None
+  _protos['SetInputCount'] = 15, (wintypes.UINT,), ()
+  _protos['GetInput'] = 16, (wintypes.UINT,), (wintypes.PLPVOID,), None
+  _protos['GetInputCount'] = 17, (), (), wintypes.UINT
+  _protos['GetOutput'] = 18, (), (wintypes.PLPVOID,), None
+  def SetInput(self, index, input=None, invalidate=False):
+    self.__class__._protos['SetInput'](self.pI, index, input, invalidate)
+  def SetInputCount(self, count):
+    return self.__class__._protos['SetInputCount'](self.pI, count)
+  def GetInput(self, index):
+    return ID2D1Image(self.__class__._protos['GetInput'](self.pI, index), self.factory)
+  def GetInputCount(self):
+    return self.__class__._protos['GetInputCount'](self.pI)
+  def GetOutput(self):
+    return ID2D1Image(self.__class__._protos['GetOutput'](self.pI), self.factory)
+  def SetInputEffect(self, index, input_effect=None, invalidate=False):
+    self.__class__._protos['SetInput'](self.pI, index, (None if input_effect is None else input_effect.GetOutput()), invalidate)
 
 class ID2D1GradientStopCollection(ID2D1Resource):
   IID = GUID(0xae1572f4, 0x5dd0, 0x4777, 0x99, 0x8b, 0x92, 0x79, 0x47, 0x2a, 0xe6, 0x3b)
@@ -4393,6 +4665,39 @@ class ID2D1RadialGradientBrush(ID2D1Brush):
   def GetGradientStopCollection(self):
     return ID2D1GradientStopCollection(self.__class__._protos['GetGradientStopCollection'](self.pI), self.factory)
 
+class ID2D1ImageBrush(ID2D1Brush):
+  IID = GUID(0xfe9e984d, 0x3f95, 0x407c, 0xb5, 0xdb, 0xcb, 0x94, 0xd4, 0xe8, 0xf8, 0x7c)
+  _protos['SetImage'] = 8, (wintypes.LPVOID,), (), None
+  _protos['SetExtendModeX'] = 9, (D2D1EXTENDMODE,), (), None
+  _protos['SetExtendModeY'] = 10, (D2D1EXTENDMODE,), (), None
+  _protos['SetInterpolationMode'] = 11, (D2D1INTERPOLATIONMODE,), (), None
+  _protos['SetSourceRectangle'] = 12, (D2D1PRECTF,), (), None
+  _protos['GetImage'] = 13, (), (wintypes.PLPVOID,), None
+  _protos['GetExtendModeX'] = 14, (), (), D2D1EXTENDMODE
+  _protos['GetExtendModeY'] = 15, (), (), D2D1EXTENDMODE
+  _protos['GetInterpolationMode'] = 16, (), (), D2D1INTERPOLATIONMODE
+  _protos['GetSourceRectangle'] = 17, (), (D2D1PRECTF,), None
+  def GetImage(self):
+    return ID2D1Image(self.__class__._protos['GetImage'](self.pI), self.factory)
+  def SetImage(self, image):
+    self.__class__._protos['SetImage'](self.pI, image)
+  def GetInterpolationMode(self):
+    return self.__class__._protos['GetInterpolationMode'](self.pI)
+  def SetInterpolationMode(self, interpolation_mode=0):
+    self.__class__._protos['SetInterpolationMode'](self.pI, interpolation_mode)
+  def GetExtendModeX(self):
+    return self.__class__._protos['GetExtendModeX'](self.pI)
+  def SetExtendModeX(self, extend_mode=0):
+    self.__class__._protos['SetExtendModeX'](self.pI, extend_mode)
+  def GetExtendModeY(self):
+    return self.__class__._protos['GetExtendModeY'](self.pI)
+  def SetExtendModeY(self, extend_mode=0):
+    self.__class__._protos['SetExtendModeY'](self.pI, extend_mode)
+  def GetSourceRectangle(self):
+    return self.__class__._protos['GetSourceRectangle'](self.pI)
+  def SetSourceRectangle(self, source_rectangle):
+    self.__class__._protos['SetSourceRectangle'](self.pI, source_rectangle)
+
 class ID2D1StrokeStyle(ID2D1Resource):
   IID = GUID(0x10a72a66, 0xe91c, 0x43f4, 0x99, 0x3f, 0xdd, 0xf4, 0xb8, 0x2b, 0x0b, 0x4a)
   _protos['GetStartCap'] = 4, (), (), D2D1CAPSTYLE
@@ -4440,7 +4745,6 @@ class ID2D1DrawingStateBlock(ID2D1Resource):
     return self.__class__._protos['GetDescription'](self.pI)
   def SetDescription(self, description):
     return self.__class__._protos['SetDescription'](self.pI, description)
-
 ID2D1DrawingStateBlock1 = ID2D1DrawingStateBlock
 
 class ID2D1RenderTarget(ID2D1Resource):
@@ -4496,7 +4800,7 @@ class ID2D1RenderTarget(ID2D1Resource):
       return self.CreateSharedBitmap(source, ((format, alpha_mode), dpiX, dpiY))
     else:
       return self.CreateBitmap(width, height, (((format or 'B8G8R8A8_UNORM'), (alpha_mode or 'Premultiplied')), dpiX, dpiY), source, source_pitch)
-  def CreateBitmapBrush(self, bitmap, bitmap_brush_properties=None, brush_properties=None):
+  def CreateBitmapBrush(self, bitmap, bitmap_brush_properties, brush_properties=None):
     return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateBitmapBrush'](self.pI, bitmap, bitmap_brush_properties, brush_properties), self.factory), ID2D1BitmapBrush)
   def CreateSolidColorBrush(self, color, brush_properties=None):
     return ID2D1SolidColorBrush(self.__class__._protos['CreateSolidColorBrush'](self.pI, color, brush_properties), self.factory)
@@ -4521,7 +4825,7 @@ class ID2D1RenderTarget(ID2D1Resource):
         return None
     bp = None if opacity is None and transform is None else ((1 if opacity is None else opacity), (transform or ID21Factory.MakeIndentityMatrix()))
     if isinstance(content, ID2D1Image):
-      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode), bp)
+      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode or 0), bp)
     elif isinstance(content, ID2D1GradientStopCollection):
       return self.CreateLinearGradientBrush((gradient_start_point, gradient_end_point), content, bp) if lg else self.CreateRadialGradientBrush((gradient_center, gradient_origin_offset, *gradient_radius), content, bp)
     elif isinstance(content, D2D1COLORF):
@@ -4607,7 +4911,9 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   _protos['CreateColorContextFromFilename'] = 60, (wintypes.LPCWSTR,), (wintypes.PLPVOID,)
   _protos['CreateColorContextFromWicColorContext'] = 61, (wintypes.LPVOID,), (wintypes.PLPVOID,)
   _protos['CreateBitmapFromDxgiSurface'] = 62, (wintypes.LPVOID, D2D1PBITMAPPROPERTIESDC), (wintypes.PLPVOID,)
+  _protos['CreateEffect'] = 63, (D2D1PEFFECTID,), (wintypes.PLPVOID,)
   _protos['CreateGradientStopCollection'] = 64, (D2D1PAGRADIENTSTOP, wintypes.UINT, D2D1COLORSPACE, D2D1COLORSPACE, D2D1BUFFERPRECISION, D2D1EXTENDMODE, D2D1COLORINTERPOLATIONMODE), (wintypes.PLPVOID,)
+  _protos['CreateImageBrush'] = 65, (wintypes.LPVOID, D2D1PIMAGEBRUSHPROPERTIES, D2D1PBRUSHPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateBitmapBrush'] = 66, (wintypes.LPVOID, D2D1PBITMAPBRUSHPROPERTIESDC, D2D1PBRUSHPROPERTIES), (wintypes.PLPVOID,)
   _protos['IsDxgiFormatSupported'] = 68, (DXGIFORMAT,), (), wintypes.BOOLE
   _protos['IsBufferPrecisionSupported'] = 69, (D2D1BUFFERPRECISION,), (), wintypes.BOOLE
@@ -4622,6 +4928,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   _protos['GetPrimitiveBlend'] = 79, (), (), D2D1PRIMITIVEBLEND
   _protos['SetUnitMode'] = 80, (D2D1UNITMODE,), (), None
   _protos['GetUnitMode'] = 81, (), (), D2D1UNITMODE
+  _protos['DrawImage'] = 83, (wintypes.LPVOID, D2D1POINT2F, D2D1PRECTF, D2D1INTERPOLATIONMODE, D2D1COMPOSITEMODE), (), None
   _protos['DrawBitmap'] = 85, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1INTERPOLATIONMODE, D2D1PRECTF, D2D1PMATRIX4X4F), (), None
   def CreateBitmap(self, width, height, properties, source_data=None, source_pitch=0):
     return ID2D1Bitmap(self.__class__._protos['CreateBitmap'](self.pI, (width, height), source_data, source_pitch, properties), self.factory)
@@ -4677,11 +4984,15 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
     if (bitmap := self.CreateBitmapFromDxgiSurface(surface)) is None:
       return None
     return swap_chain, bitmap
-  def CreateBitmapBrush(self, bitmap, bitmap_brush_properties=None, brush_properties=None):
+  def CreateEffect(self, effect):
+    return ID2D1Effect(self._protos['CreateEffect'](self.pI, effect), self.factory)
+  def CreateBitmapBrush(self, bitmap, bitmap_brush_properties, brush_properties=None):
     return ID2D1BitmapBrush(self.__class__._protos['CreateBitmapBrush'](self.pI, bitmap,  bitmap_brush_properties, brush_properties), self.factory)
   def CreateGradientStopCollection(self, gradient_stops, pre_interpolation_space=1, post_interpolation_space=1, buffer_precision=1, extend_mode=0, color_interpolation_mode=1):
     return ID2D1GradientStopCollection(self.__class__._protos['CreateGradientStopCollection'](self.pI, gradient_stops, (0 if not gradient_stops else len(gradient_stops)), pre_interpolation_space, post_interpolation_space, buffer_precision, extend_mode, color_interpolation_mode), self.factory)
-  def CreateBrush(self, content, bitmap_interpolation_mode=None, gradient_start_point=None, gradient_end_point=None, gradient_center=None, gradient_origin_offset=None, gradient_radius=None, gradient_pre_interpolation_space=None, gradient_post_interpolation_space=None, gradient_buffer_precision=None, gradient_color_interpolation_mode=None, extend_mode=None, opacity=None, transform=None):
+  def CreateImageBrush(self, image, image_brush_properties, brush_properties=None):
+    return ID2D1ImageBrush(self.__class__._protos['CreateImageBrush'](self.pI, image,  image_brush_properties, brush_properties), self.factory)
+  def CreateBrush(self, content, bitmap_interpolation_mode=None, gradient_start_point=None, gradient_end_point=None, gradient_center=None, gradient_origin_offset=None, gradient_radius=None, gradient_pre_interpolation_space=None, gradient_post_interpolation_space=None, gradient_buffer_precision=None, gradient_color_interpolation_mode=None, image_source_rectangle=None, image_interpolation_mode=None, extend_mode=None, opacity=None, transform=None):
     if gradient_radius is not None and not isinstance(gradient_radius, (list, tuple)):
       gradient_radius = (gradient_radius, gradient_radius)
     lg = gradient_start_point is not None and gradient_end_point is not None
@@ -4695,12 +5006,14 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
       else:
         return None
     bp = None if opacity is None and transform is None else ((1 if opacity is None else opacity), (transform or ID21Factory.MakeIndentityMatrix()))
-    if isinstance(content, ID2D1Image):
-      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode), bp)
+    if isinstance(content, ID2D1Bitmap):
+      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode or 0), bp)
     elif isinstance(content, ID2D1GradientStopCollection):
       return self.CreateLinearGradientBrush((gradient_start_point, gradient_end_point), content, bp) if lg else self.CreateRadialGradientBrush((gradient_center, gradient_origin_offset, *gradient_radius), content, bp)
     elif isinstance(content, D2D1COLORF):
       return self.CreateSolidColorBrush(content, bp)
+    elif isinstance(content, ID2D1Image):
+      return self.CreateImageBrush(content, (image_source_rectangle or self.GetImageLocalBounds(content), *(extend_mode or (0, 0)), image_interpolation_mode or 0), bp)
     else:
       return None
   def CreateColorContext(self, color_space=1, buffer=None):
@@ -4737,6 +5050,8 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
     return self.__class__._protos['GetImageWorldBounds'](self.pI, image)
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None, perspective_transform=None):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, perspective_transform)
+  def DrawImage(self, image, target_offset=None, image_rectangle=None, interpolation_mode=0, composite_mode=0):
+    self.__class__._protos['DrawImage'](self.pI, image, target_offset, image_rectangle, interpolation_mode, composite_mode)
 
 class ID2D1BitmapRenderTarget(ID2D1RenderTarget):
   IID = GUID(0x2cd90695, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
