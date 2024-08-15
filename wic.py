@@ -4195,7 +4195,7 @@ D2D1EffectId = {
   'ColorManagement': GUID(0x1a28524c, 0xfdd6, 0x4aa4, 0xae, 0x8f, 0x83, 0x7e, 0xb8, 0x26, 0x7b, 0x37),
   'ColorMatrix': GUID(0x921f03d6, 0x641c, 0x47df, 0x85, 0x2d, 0xb4, 0xbb, 0x61, 0x53, 0xae, 0x11),
   'DiscreteTransfer': GUID(0x90866fcd, 0x488e, 0x454b, 0xaf, 0x06, 0xe5, 0x04, 0x1b, 0x66, 0xc3, 0x6c),
-  'DpiCompensation': GUID(0x6c26c5c7, 0x34e0, 0x46fc, 0x9c, 0xfd, 0xe5, 0x82, 0x37, 0x60, 0xe2, 0x28),
+  'DpiCompensation': GUID(0x6c26c5c7, 0x34e0, 0x46fc, 0x9c, 0xfd, 0xe5, 0x82, 0x37, 0x06, 0xe2, 0x28),
   'GammaTransfer': GUID(0x409444c4, 0xc419, 0x41a0, 0xb0, 0xc1, 0x8c, 0xd0, 0xc0, 0xa1, 0x8e, 0x42),
   'HdrToneMap': GUID(0x7b0b748d, 0x4610, 0x4486, 0xa9, 0x0c, 0x99, 0x9d, 0x9a, 0x2e, 0x2b, 0x11),
   'HueToRgb': GUID(0x7b78a6bd, 0x0141, 0x4def, 0x8a, 0x52, 0x63, 0x56, 0xee, 0x0c, 0xbd, 0xd5),
@@ -4217,6 +4217,7 @@ D2D1EffectId = {
   'CrossFade': GUID(0x12f575e8, 0x4db1, 0x485f, 0x9a, 0x84, 0x03, 0xa0, 0x7d, 0xd3, 0x82, 0x9f),
   'ConvolveMatrix': GUID(0x407f8c08, 0x5533, 0x4331, 0xa3, 0x41, 0x23, 0xcc, 0x38, 0x77, 0x84, 0x3e),
   'DirectionalBlur': GUID(0x174319a6, 0x58e9, 0x49b2, 0xbb, 0x63, 0xca, 0xf2, 0xc8, 0x11, 0xa3, 0xdb),
+  'DirectionalBlurKernel': GUID(0x58eb6e2a, 0xd779, 0x4b7d, 0xad, 0x39, 0x6f, 0x5a, 0x9f, 0xc9, 0xd2, 0x88),
   'EdgeDetection': GUID(0xeff583ca, 0xcb07, 0x4aa9, 0xac, 0x5d, 0x2c, 0xc4, 0x4c, 0x76, 0x46, 0x0f),
   'GaussianBlur': GUID(0x1feb6d69, 0x2fe6, 0x4ac9, 0x8c, 0x58, 0x1d, 0x7f, 0x93, 0xe7, 0xa6, 0xa5),
   'Morphology': GUID(0xeae6c40d, 0x626a, 0x4c2d, 0xbf, 0xcb, 0x39, 0x10, 0x01, 0xab, 0xe2, 0x02),
@@ -4338,7 +4339,6 @@ VEC2F = type('VEC2F', (wintypes.FLOAT * 2,), {'value' : property(tuple)})
 VEC3F = type('VEC3F', (wintypes.FLOAT * 3,), {'value' : property(tuple)})
 VEC4F = type('VEC4F', (wintypes.FLOAT * 4,), {'value' : property(tuple)})
 
-
 class _ID2D1PUtil:
   _types = (None, wintypes.WCHAR, wintypes.BOOLE, wintypes.UINT, wintypes.INT, wintypes.FLOAT, VEC2F, VEC3F, VEC4F, wintypes.CHAR, PCOM, wintypes.UINT, wintypes.UINT, UUID, D2D1MATRIX3X2F, (wintypes.FLOAT * 12), D2D1MATRIX4X4F, (wintypes.FLOAT * 20), PCOMD2D1COLORCONTEXT)
   @classmethod
@@ -4411,7 +4411,7 @@ class ID2D1Properties(IUnknown):
     elif not (property_type := self.GetType(index)):
       return None
     if not data_size:
-      if not (data_size := _ID2D1PUtil._sizeof(property_type)):
+      if (data_size := _ID2D1PUtil._sizeof(property_type)) is None:
         if not (data_size := self.GetValueSize(index)):
           return None
     d = ctypes.create_string_buffer(data_size)
@@ -4443,7 +4443,7 @@ class ID2D1Properties(IUnknown):
       if not (property_type := self.GetType(index)):
         return None
     if not data_size:
-      if not (data_size := _ID2D1PUtil._sizeof(property_type)):
+      if (data_size := _ID2D1PUtil._sizeof(property_type)) is None:
         if index is None and (index := self.GetPropertyIndex(name)) is None:
           return None
         if not (data_size := self.GetValueSize(index)):
@@ -5051,7 +5051,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None, perspective_transform=None):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, perspective_transform)
   def DrawImage(self, image, target_offset=None, image_rectangle=None, interpolation_mode=0, composite_mode=0):
-    self.__class__._protos['DrawImage'](self.pI, image, target_offset, image_rectangle, interpolation_mode, composite_mode)
+    self.__class__._protos['DrawImage'](self.pI, (image.GetOutput() if isinstance(image, ID2D1Effect) else image), target_offset, image_rectangle, interpolation_mode, composite_mode)
 
 class ID2D1BitmapRenderTarget(ID2D1RenderTarget):
   IID = GUID(0x2cd90695, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
@@ -5101,6 +5101,8 @@ class ID2D1Factory(IUnknown):
   _protos['CreateDevice'] = 17, (wintypes.LPVOID,), (wintypes.PLPVOID,)
   _protos['CreateStrokeStyle'] = 18, (D2D1PSTROKESTYLEPROPERTIES, wintypes.PFLOAT, wintypes.UINT), (wintypes.PLPVOID,)
   _protos['CreateDrawingStateBlock'] = 20, (D2D1PDRAWINGSTATEDESCRIPTION, wintypes.LPVOID), (wintypes.PLPVOID,)
+  _protos['GetRegisteredEffects'] = 25, (D2D1PEFFECTID, wintypes.UINT), (wintypes.PUINT, wintypes.PUINT)
+  _protos['GetEffectProperties'] = 26, (D2D1PEFFECTID,), (wintypes.PLPVOID,)
   def __new__(cls, clsid_component=False, factory=None):
     if clsid_component is False:
       pI = wintypes.LPVOID()
@@ -5145,6 +5147,17 @@ class ID2D1Factory(IUnknown):
     return ID2D1StrokeStyle(self.__class__._protos['CreateStrokeStyle'](self.pI, properties, (dashes if dashes is None or (isinstance(dashes, ctypes.Array) and issubclass(dashes._type_, wintypes.FLOAT)) else (wintypes.FLOAT *  len(dashes))(*dashes)), (0 if dashes is None else len(dashes))), self)
   def CreateDrawingStateBlock(self, description=None):
     return ID2D1DrawingStateBlock(self.__class__._protos['CreateDrawingStateBlock'](self.pI, description, None), self)
+  def GetRegisteredEffects(self):
+    if (ac := self.__class__._protos['GetRegisteredEffects'](self.pI, None, 0)) is None:
+      return None
+    if (n := ac[1]) == 0:
+      return ()
+    e = (D2D1EFFECTID * n)()
+    if (ac := self.__class__._protos['GetRegisteredEffects'](self.pI, e, n)) is None:
+      return None
+    return tuple(e[i] for i in range(ac[0]))
+  def GetEffectProperties(self, effect):
+    return ID2D1Properties(self.__class__._protos['GetEffectProperties'](self.pI, effect), self)
   def ReloadSystemMetrics(self):
     return self.__class__._protos['ReloadSystemMetrics'](self.pI)
   def GetDesktopDpi(self):
