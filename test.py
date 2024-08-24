@@ -1196,7 +1196,6 @@ D2D1BitmapBrush.SetOpacity(0.5)
 D2D1DeviceContext.FillRoundedRectangle(((200, 110, 300, 200), 50, 20), D2D1BitmapBrush)
 D2D1BitmapBrush.SetOpacity(1)
 D2D1DeviceContext.DrawRoundedRectangle(((200, 110, 300, 200), 50, 20), D2D1RadialGradientBrush, 20)
-
 #Creating a brightness effect and handling its properties
 D2D1Effect = D2D1DeviceContext.CreateEffect('Brightness')
 print(D2D1Effect.GetCustom())
@@ -1244,7 +1243,7 @@ IBitmapFrameEncode.SetPixelFormat('24bppBGR')
 IImageEncoder.WriteFrame(D2D1Bitmap2, IBitmapFrameEncode)
 IBitmapFrameEncode.Commit()
 IEncoder.Commit()
-tuple(map(IUnknown.Release, (IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext, D2D1StrokeStyle, D2D1ColorBrush, D2D1LinearGradientBrush, D2D1GradientStopCollection, D2D1RadialGradientBrush, D2D1BitmapBrush, D2D1BitmapB, IScaler)))
+tuple(map(IUnknown.Release, (IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext, D2D1StrokeStyle, D2D1ColorBrush, D2D1LinearGradientBrush, D2D1GradientStopCollection, D2D1RadialGradientBrush, D2D1BitmapBrush, D2D1Effect, D2D1Effect2, D2D1Effect3, D2D1BitmapB, IScaler)))
 D2D1Device.ClearResources()
 
 #Creating a software D2D1 device
