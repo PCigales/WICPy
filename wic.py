@@ -164,12 +164,14 @@ class IUnknown(metaclass=_IMeta):
     if (i := icls(self.__class__._protos['QueryInterface'](self.pI, icls.IID), (None if factory is False else (factory if factory is not None else self.factory)))) is None:
       return None
     return i
+  def __bool__(self):
+    return bool(self.pI) and self.refs > 0
   @property
   def _as_parameter_(self):
     return self.pI
   def __del__(self):
     if getattr(self.__class__, '_lightweight', False) or ((__IUtil := globals().get('_IUtil')) and hasattr(__IUtil._local, 'initialized')):
-      while self.pI and self.refs > 0:
+      while self:
         self.Release()
   def __enter__(self):
     return self
@@ -225,6 +227,14 @@ class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
   @property
   def content(self):
     return _PCOMUtil._interface(self)
+  @property
+  def raw(self):
+    i = object.__new__(self.icls)
+    i.pI = ctypes.cast(self, wintypes.LPVOID) or None
+    i.refs = 0
+    i.factory = None
+    i.AddRef()
+    return i
 
 class IClassFactory(IUnknown):
   IID = GUID('00000001-0000-0000-c000-000000000046')
@@ -829,13 +839,13 @@ class _BCode:
     return obj if isinstance(obj, cls.__bases__[1]) else cls.__bases__[1](cls.name_code(obj))
   @classmethod
   def to_int(cls, obj):
-    return obj.code if isinstance(obj, cls.__bases__[1]) else cls.name_code(obj)
+    return getattr(obj, 'code', obj.value) if isinstance(obj, cls.__bases__[1]) else cls.name_code(obj)
   @property
   def value(self):
     return self
   @value.setter
   def value(self, val):
-    self.__class__.__bases__[1].value.__set__(self, val.__class__.__bases__[1].value.__get__(self))
+    self.__class__.__bases__[1].value.__set__(self, val.__class__.__bases__[1].value.__get__(val))
   @property
   def code(self):
     return self.__class__.__bases__[1].value.__get__(self)
@@ -854,7 +864,9 @@ class _BCode:
     else:
       self.__class__.__bases__[1].__init__(self, self.__class__.to_int(val))
   def __eq__(self, other):
-    return self.code == (other.code if isinstance(other, _BCode) else self.__class__.name_code(other))
+    return self.code == self.__class__.to_int(other)
+  def __index__(self):
+    return self.code
   def __str__(self):
     c = self.__class__.__bases__[1].value.__get__(self)
     return '<%d: %s>' % (c, self.__class__.code_name(c))
@@ -4188,7 +4200,7 @@ class D2D1DRAWINGSTATEDESCRIPTION(_BDStruct, ctypes.Structure, metaclass=_WSMeta
 D2D1PDRAWINGSTATEDESCRIPTION = type('D2D1PDRAWINGSTATEDESCRIPTION', (_BPStruct, ctypes.POINTER(D2D1DRAWINGSTATEDESCRIPTION)), {'_type_': D2D1DRAWINGSTATEDESCRIPTION})
 
 D2D1PropertyType = {'Unknown': 0, 'String': 1, 'Bool': 2, 'UInt': 3, 'UInt32': 3, 'Int': 4, 'Int32': 4, 'Float': 5, 'Vector2': 6, 'Vector3': 7, 'Vector4': 8, 'Blob': 9, 'IUnknown': 10, 'Enum': 11, 'Array': 12, 'Clsid': 13, 'Matrix3x2': 14, 'Matrix4x3': 15, 'Matrix4x4': 16, 'Matrix5x4': 17, 'ColorContext': 18}
-D2D1PROPERTYTYPE = type('D2D1PROPERTYTYPE', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D2D1PropertyType.items()}, '_tab_cn': {c: n for n, c in D2D1PropertyType.items()}, '_def': 1})
+D2D1PROPERTYTYPE = type('D2D1PROPERTYTYPE', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D2D1PropertyType.items()}, '_tab_cn': {c: n for n, c in D2D1PropertyType.items()}, '_def': 0})
 
 D2D1EffectId = {
   'LookupTable3D': GUID(0x349e0eda, 0x0088, 0x4a79, 0x9c, 0xa3, 0xc7, 0xe3, 0x00, 0x20, 0x20, 0x20),
@@ -4335,21 +4347,22 @@ class ID2D1Bitmap(ID2D1Image):
     return self._protos['Unmap'](self.pI)
 ID2D1Bitmap1 = ID2D1Bitmap
 
-VEC2F = type('VEC2F', (wintypes.FLOAT * 2,), {'value' : property(tuple)})
-VEC3F = type('VEC3F', (wintypes.FLOAT * 3,), {'value' : property(tuple)})
-VEC4F = type('VEC4F', (wintypes.FLOAT * 4,), {'value' : property(tuple)})
-
 class _ID2D1PUtil:
-  _types = (None, wintypes.WCHAR, wintypes.BOOLE, wintypes.UINT, wintypes.INT, wintypes.FLOAT, VEC2F, VEC3F, VEC4F, wintypes.CHAR, PCOM, wintypes.UINT, wintypes.UINT, UUID, D2D1MATRIX3X2F, (wintypes.FLOAT * 12), D2D1MATRIX4X4F, (wintypes.FLOAT * 20), PCOMD2D1COLORCONTEXT)
+  _BFloatArray = type('_BFloatArray', (), {'__init__': lambda self, *args: self.__class__.__bases__[1].__init__(self, *(args[0] if len(args) == 1 else args))})
+  VEC2F = type('VEC2F', (_BFloatArray, wintypes.FLOAT * 2), {'value': property(tuple)})
+  VEC3F = type('VEC3F', (_BFloatArray, wintypes.FLOAT * 3), {'value': property(tuple)})
+  VEC4F = type('VEC4F', (_BFloatArray, wintypes.FLOAT * 4), {'value': property(tuple)})
+  MATRIX4X3F = type('MATRIX4X3F', (_BFloatArray, wintypes.FLOAT * 12), {})
+  MATRIX5X4F = type('MATRIX5X4F', (_BFloatArray, wintypes.FLOAT * 20), {})
+  _types = (None, wintypes.WCHAR, wintypes.BOOLE, wintypes.UINT, wintypes.INT, wintypes.FLOAT, VEC2F, VEC3F, VEC4F, wintypes.CHAR, PCOM, wintypes.UINT, wintypes.UINT, UUID, D2D1MATRIX3X2F, MATRIX4X3F, D2D1MATRIX4X4F, MATRIX5X4F, PCOMD2D1COLORCONTEXT)
+  D2D1PSystemRange = range(0x80000000, 0x8000000a)
   @classmethod
   def _sizeof(cls, data_type):
-    data_type = D2D1PROPERTYTYPE.to_int(data_type)
-    return None if data_type in (0, 1, 9) else ctypes.sizeof(cls._types[data_type])
+    return None if int(data_type) in (0, 1, 9) else ctypes.sizeof(cls._types[data_type])
   @classmethod
   def _to_value(cls, data_type, data_buffer, data_size):
     if not data_type or not data_buffer:
       return None
-    data_type = D2D1PROPERTYTYPE.to_int(data_type)
     if data_type == 1:
       t = wintypes.WCHAR * (data_size // ctypes.sizeof(wintypes.WCHAR))
     elif data_type == 9:
@@ -4357,23 +4370,150 @@ class _ID2D1PUtil:
     else:
       t = cls._types[data_type]
     v = t.from_buffer(data_buffer)
-    return getattr(v, 'content', getattr(v, 'raw', getattr(v, 'value', v)))
+    return v.raw if data_type in (9, 10, 18) else getattr(v, 'value', v)
   @classmethod
   def _from_value(cls, data_type, value):
     if not data_type:
       return None
-    data_type = D2D1PROPERTYTYPE.to_int(data_type)
     if isinstance(value, ctypes._CData):
       v = value
     elif data_type == 1:
       v = ctypes.create_unicode_buffer(value)
     elif data_type == 9:
       v = ctypes.create_string_buffer(value, len(value))
-    elif data_type in (6, 7, 8, 15, 17):
-      v = cls._types[data_type](*value)
     else:
       v = cls._types[data_type](value)
     return v, ctypes.sizeof(v)
+  @staticmethod
+  def _get_base_index(properties, name):
+    b = properties
+    i = None
+    for na in name.split('.'):
+      if i is not None and (b := b.GetSubProperties(i)) is None:
+        return None
+      if (i := b.GetPropertyIndex(na)) is None:
+        return None
+    return b, i
+  @classmethod
+  def _get_item(cls, properties, key=True):
+    if key is None or (not isinstance(key, bool) and isinstance(key, (int, str))):
+      return _D2D1PropertySet(_D2D1Property(properties, key))
+    if properties is None:
+      return _D2D1PropertySet()
+    n = properties.GetPropertyCount()
+    g = []
+    sr = cls.D2D1PSystemRange
+    for k in (key if isinstance(key, (tuple, list)) else (key,)):
+      if k is True:
+        g = [range(n), cls.D2D1PSystemRange]
+        break
+      if isinstance(k, (int, str)):
+        g.append((k,))
+      else:
+        try:
+          if k.start is not None and k.start >= sr.start:
+            g.append(range(k.start, (sr.stop if k.stop is None else min(k.stop, sr.stop)), (1 if k.step is None else k.step)))
+          elif k.stop is not None and k.stop >= sr.start:
+            g.append(range(n)[k])
+            g.append(range((sr.start if k.start is None else max(k.start, sr.start)), min(k.stop, sr.stop), (1 if k.step is None else k.step)))
+          else:
+            g.append(range(n)[k])
+        except:
+          pass
+    return _D2D1PropertySet(tuple(_D2D1Property(properties, k) for r in g for k in r))
+
+class _D2D1PEnumValue(int):
+  def __new__(cls, code=None, label=None, name=None):
+    if code is None or label is None or name is None:
+      return None
+    self = int.__new__(cls, code)
+    self.label = label
+    self.name = name
+    return self
+  def __init__(self, code=None, key=None, name=None):
+    super().__init__()
+  @property
+  def code(self):
+    return int(self)
+  @property
+  def key(self):
+    return self.label
+  def __eq__(self, other):
+    return (self.code == other.code and self.label == other.label and self.name == other.name) if isinstance(other, _D2D1PEnumValue) else (self.code == other if isinstance(other, int) else (other.lower() in (self.label.lower(), self.name.lower()) if isinstance(other, str) else False))
+  def __str__(self):
+    return '<%d: %s [%s]>' % (self.code, self.label, self.name)
+  def __repr__(self):
+    return str(self)
+
+class _D2D1PropertySet:
+  def __init__(self, keys=None, values=None):
+    self._keys = () if keys is None else keys
+    self._values = self._keys if values is None else values
+    self._mul = isinstance(self._keys, (tuple, list))
+  def GetIndex(self):
+    return tuple(p.GetIndex() for p in self._values) if self._mul else self._values.GetIndex()
+  def GetName(self):
+    return tuple(p.GetName() for p in self._values) if self._mul else self._values.GetName()
+  def GetType(self):
+    return tuple(p.GetType() for p in self._values) if self._mul else self._values.GetType()
+  def GetValue(self, property_type=0, data_size=0):
+    return tuple(p.GetValue(property_type, data_size) for p in self._values) if self._mul else self._values.GetValue(property_type, data_size)
+  def GetSubs(self):
+    return tuple(p.GetSubs() for p in self._values) if self._mul else self._values.GetSubs()
+  GetSubProperties = GetSubs
+  def SetValue(self, data, property_type=0):
+    if self._mul:
+      g = (p.SetValue(d, property_type) for p, d in zip(self._values, data))
+      return tuple(next(g, None) for p in self._values)
+    else:
+      return self._values.SetValue(data, property_type)
+  def __getitem__(self, key):
+    return _D2D1PropertySet(self._keys, (tuple(p.__getitem__(key) for p in self._values) if self._mul else self._values.__getitem__(key)))
+  def __iter__(self):
+    return iter((na, p) for na, p in zip((p.GetName() for p in (self._keys if self._mul else (self._keys,))), (self._values if self._mul else (self._values,))) if na)
+  def __len__(self):
+    return sum(1 for e in self)
+  def __call__(self, *args, **kwargs):
+    if len(args) > 1:
+      raise TypeError('call takes from 0 to 1 positional arguments but %d were given' % len(args))
+    return self.SetValue(args[0], **kwargs) if args else self.GetValue(**kwargs)
+  def Get(self, sub=False):
+    return {na: p.Get(sub) for na, p in self}
+
+class _D2D1Property:
+  def __init__(self, properties, key):
+    self._properties = properties
+    if properties is None:
+      self._index = None
+      self._name = None
+    elif isinstance(key, str):
+      self._index = properties.GetPropertyIndex(key)
+      self._name = None if self._index is None else key
+    else:
+      self._index = key
+  def __bool__(self):
+    return self._properties is not None and self._index is not None
+  def GetIndex(self):
+    return None if self.GetName() is None else self._index
+  def GetName(self):
+    if not hasattr(self, '_name'):
+      self._name = self._properties.GetPropertyName(self._index) if self else None
+    return self._name
+  def GetType(self):
+    if not hasattr(self, '_type'):
+      self._type = self._properties.GetType(self._index) if self else None
+    return self._type
+  def GetValue(self, property_type=0, data_size=0):
+    return self._properties.GetValue(self._index, property_type, data_size) if self else None
+  def GetSubs(self):
+    return self._properties.GetSubProperties(self._index) if self else None
+  GetSubProperties = GetSubs
+  def SetValue(self, data, property_type=0):
+    return self._properties.SetValue(self._index, data, property_type) if self else None
+  def __getitem__(self, key):
+    return _ID2D1PUtil._get_item(self.GetSubs(), key)
+  def Get(self, sub=False):
+    return (self.GetValue(), _ID2D1PUtil._get_item(self.GetSubs()).Get(True)) if sub else self.GetValue()
 
 class ID2D1Properties(IUnknown):
   IID = GUID(0x483473d7, 0xcd46, 0x4f9d, 0x9d, 0x3a, 0x31, 0x12, 0xaa, 0x80, 0x15, 0x9d)
@@ -4403,11 +4543,16 @@ class ID2D1Properties(IUnknown):
     return None if self.__class__._protos['GetPropertyName'](self.pI, index, n, name_count) is None else n.value
   def GetType(self, index):
     return self.__class__._protos['GetType'](self.pI, index)
+  def GetTypeByName(self, name):
+    if (b_i := _ID2D1PUtil._get_base_index(self, name)) is None:
+      return None
+    return b_i[0].GetType(b_i[1])
   def GetValueSize(self, index):
     return self.__class__._protos['GetValueSize'](self.pI, index)
   def GetValue(self, index, property_type=0, data_size=0):
     if property_type:
-      property_type = D2D1PROPERTYTYPE(property_type)
+      if not (property_type := D2D1PROPERTYTYPE(property_type)):
+        return None
     elif not (property_type := self.GetType(index)):
       return None
     if not data_size:
@@ -4421,37 +4566,43 @@ class ID2D1Properties(IUnknown):
     if property_type == 12:
       if (sp := self.GetSubProperties(index)) is None:
         return None
+      if index == 0x80000005 and not isinstance(self, ID2D1Effect):
+        if (f := sp.GetSubProperties(0)) is not None and f.GetTypeByName('Index') == 'UInt32':
+          return tuple(_D2D1PEnumValue((None if (f := sp.GetSubProperties(i)) is None else f.GetValueByName('Index', 'UInt32')), sp.GetPropertyName(i), sp.GetValue(i, 'String')) for i in range(v))
       return tuple(sp.GetValue(i) for i in range(v))
     elif property_type == 11:
       if (sp := self.GetSubProperties(index)) is None:
         return None
-      if not (ens := sp.GetValue(0x80000005)):
-        return None
       if (sp := sp.GetSubProperties(0x80000005)) is None:
         return None
-      evs = tuple(None if (f := sp.GetSubProperties(i)) is None else f.GetValue(0) for i in range(len(ens)))
-      return next((en for ev, en in zip(evs, ens) if v == ev), None)
+      if not (n := sp.GetPropertyCount()):
+        return None
+      ind = min(v, n)
+      if (ind := next((i for r in (range(ind, -1, -1), range(ind + 1, n)) for i in r if v == (None if (f := sp.GetSubProperties(i)) is None else f.GetValueByName('Index', 'UInt32'))), None)) is None:
+        return None
+      return _D2D1PEnumValue(v, sp.GetPropertyName(ind), sp.GetValue(ind, 'String'))
     else:
       return v
   def GetValueByName(self, name, property_type=0, data_size=0):
-    index = None
+    b_i = None
     if property_type:
-      property_type = D2D1PROPERTYTYPE(property_type)
-    else:
-      if (index := self.GetPropertyIndex(name)) is None:
+      if not (property_type := D2D1PROPERTYTYPE(property_type)):
         return None
-      if not (property_type := self.GetType(index)):
+    else:
+      if (b_i := _ID2D1PUtil._get_base_index(self, name)) is None:
+        return None
+      if not (property_type := b_i[0].GetType(b_i[1])):
         return None
     if not data_size:
       if (data_size := _ID2D1PUtil._sizeof(property_type)) is None:
-        if index is None and (index := self.GetPropertyIndex(name)) is None:
+        if b_i is None and (b_i := _ID2D1PUtil._get_base_index(self, name)) is None:
           return None
-        if not (data_size := self.GetValueSize(index)):
+        if not (data_size := b_i[0].GetValueSize(b_i[1])):
           return None
     if property_type in (11, 12):
-      if index is None and (index := self.GetPropertyIndex(name)) is None:
+      if b_i is None and (b_i := _ID2D1PUtil._get_base_index(self, name)) is None:
         return None
-      return self.GetValue(index, property_type, data_size)
+      return b_i[0].GetValue(b_i[1], property_type, data_size)
     else:
       d = ctypes.create_string_buffer(data_size)
       if self.__class__._protos['GetValueByName'](self.pI, name, property_type, d, data_size) is None:
@@ -4459,52 +4610,58 @@ class ID2D1Properties(IUnknown):
       return _ID2D1PUtil._to_value(property_type, d, data_size)
   def SetValue(self, index, data, property_type=0):
     if property_type:
-      property_type = D2D1PROPERTYTYPE(property_type)
+      if not (property_type := D2D1PROPERTYTYPE(property_type)):
+        return None
     elif not (property_type := self.GetType(index)):
       return None
     if property_type == 11 and isinstance(data, str):
       if (sp := self.GetSubProperties(index)) is None:
         return None
-      if not (ens := sp.GetValue(0x80000005)):
-        return None
-      enls = (en.lower() if isinstance(en, str) else en for en in ens)
       if (sp := sp.GetSubProperties(0x80000005)) is None:
         return None
-      n = data.lower()
-      evs = tuple(None if (f := sp.GetSubProperties(i)) is None else f.GetValue(0) for i in range(len(ens)))
-      if (data := next((ev for ev, en in zip(evs, enls) if n == en), None)) is None:
+      if not (n := sp.GetPropertyCount()):
+        return None
+      nam = data.lower()
+      if (ind := next((i for i in range(n) if nam == (None if (k := sp.GetPropertyName(i)) is None else k.lower())), None)) is None:
+        if (ind := next((i for i in range(n) if nam == (None if (na := sp.GetValue(i, 'String')) is None else na.lower())), None)) is None:
+          return None
+      if (data := (None if (f := sp.GetSubProperties(ind)) is None else f.GetValueByName('Index', 'UInt32'))) is None:
         return None
     if (d_s := _ID2D1PUtil._from_value(property_type, data)) is None:
       return None
     return self.__class__._protos['SetValue'](self.pI, index, property_type, ctypes.byref(d_s[0]), d_s[1])
   def SetValueByName(self, name, data, property_type=0, data_size=None):
-    index = None
+    b_i = None
     if property_type:
-      property_type = D2D1PROPERTYTYPE(property_type)
-    else:
-      if (index := self.GetPropertyIndex(name)) is None:
+      if not (property_type := D2D1PROPERTYTYPE(property_type)):
         return None
-      if not (property_type := self.GetType(index)):
+    else:
+      if (b_i := _ID2D1PUtil._get_base_index(self, name)) is None:
+        return None
+      if not (property_type := b_i[0].GetType(b_i[1])):
         return None
     if property_type == 11 and isinstance(data, str):
-      if index is None and (index := self.GetPropertyIndex(name)) is None:
+      if b_i is None and (b_i := _ID2D1PUtil._get_base_index(self, name)) is None:
         return None
-      return self.SetValue(index, data, property_type)
+      return b_i[0].SetValue(b_i[1], data, property_type)
     else:
       if (d_s := _ID2D1PUtil._from_value(property_type, data)) is None:
         return None
       return self.__class__._protos['SetValueByName'](self.pI, name, property_type, ctypes.byref(d_s[0]), d_s[1])
   def GetSubProperties(self, index):
     return ID2D1Properties(self.__class__._protos['GetSubProperties'](self.pI, index), self.factory)
-  def __getattr__(self, name):
-    index = None
-    if name.startswith('Get'):
-      if (index := self.GetPropertyIndex(name[3:])) is not None:
-        return lambda : self.GetValue(index)
-    elif name.startswith('Set'):
-      if (index := self.GetPropertyIndex(name[3:])) is not None:
-        return lambda d: self.SetValue(index, d)
-    return self.__getattribute__(name)
+  def GetSubPropertiesByName(self, name):
+    if (b_i := _ID2D1PUtil._get_base_index(self, name)) is None:
+      return None
+    return b_i[0].GetSubProperties(b_i[1])
+  def __getitem__(self, key):
+    return _ID2D1PUtil._get_item(self, key)
+  def GetAll(self, sub=False):
+    return self[True].Get(sub)
+  def GetCustom(self, sub=False):
+    return self[:].Get(sub)
+  def GetSystem(self, sub=False):
+    return self[_ID2D1PUtil.D2D1PSystemRange.start:].Get(sub)
 
 class ID2D1Effect(ID2D1Properties):
   IID = GUID(0x28211a43, 0x7d89, 0x476f, 0x81, 0x81, 0x2d, 0x61, 0x59, 0xb2, 0x20, 0xad)
@@ -4513,7 +4670,7 @@ class ID2D1Effect(ID2D1Properties):
   _protos['GetInput'] = 16, (wintypes.UINT,), (wintypes.PLPVOID,), None
   _protos['GetInputCount'] = 17, (), (), wintypes.UINT
   _protos['GetOutput'] = 18, (), (wintypes.PLPVOID,), None
-  def SetInput(self, index, input=None, invalidate=False):
+  def SetInput(self, index, input=None, invalidate=True):
     self.__class__._protos['SetInput'](self.pI, index, input, invalidate)
   def SetInputCount(self, count):
     return self.__class__._protos['SetInputCount'](self.pI, count)
@@ -4521,9 +4678,13 @@ class ID2D1Effect(ID2D1Properties):
     return ID2D1Image(self.__class__._protos['GetInput'](self.pI, index), self.factory)
   def GetInputCount(self):
     return self.__class__._protos['GetInputCount'](self.pI)
+  def GetInputs(self):
+    inp = self.GetValue(0x80000005, 'Array') or ()
+    c = len(inp)
+    return {(inp[i] if i < c else i): self.GetInput(i) for i in range(self.GetInputCount())}
   def GetOutput(self):
     return ID2D1Image(self.__class__._protos['GetOutput'](self.pI), self.factory)
-  def SetInputEffect(self, index, input_effect=None, invalidate=False):
+  def SetInputEffect(self, index, input_effect=None, invalidate=True):
     self.__class__._protos['SetInput'](self.pI, index, (None if input_effect is None else input_effect.GetOutput()), invalidate)
 
 class ID2D1GradientStopCollection(ID2D1Resource):
@@ -4680,7 +4841,7 @@ class ID2D1ImageBrush(ID2D1Brush):
   def GetImage(self):
     return ID2D1Image(self.__class__._protos['GetImage'](self.pI), self.factory)
   def SetImage(self, image):
-    self.__class__._protos['SetImage'](self.pI, image)
+    self.__class__._protos['SetImage'](self.pI, (image.GetOutput() if isinstance(image, ID2D1Effect) else image))
   def GetInterpolationMode(self):
     return self.__class__._protos['GetInterpolationMode'](self.pI)
   def SetInterpolationMode(self, interpolation_mode=0):
@@ -4991,7 +5152,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   def CreateGradientStopCollection(self, gradient_stops, pre_interpolation_space=1, post_interpolation_space=1, buffer_precision=1, extend_mode=0, color_interpolation_mode=1):
     return ID2D1GradientStopCollection(self.__class__._protos['CreateGradientStopCollection'](self.pI, gradient_stops, (0 if not gradient_stops else len(gradient_stops)), pre_interpolation_space, post_interpolation_space, buffer_precision, extend_mode, color_interpolation_mode), self.factory)
   def CreateImageBrush(self, image, image_brush_properties, brush_properties=None):
-    return ID2D1ImageBrush(self.__class__._protos['CreateImageBrush'](self.pI, image,  image_brush_properties, brush_properties), self.factory)
+    return ID2D1ImageBrush(self.__class__._protos['CreateImageBrush'](self.pI, (image.GetOutput() if isinstance(image, ID2D1Effect) else image), image_brush_properties, brush_properties), self.factory)
   def CreateBrush(self, content, bitmap_interpolation_mode=None, gradient_start_point=None, gradient_end_point=None, gradient_center=None, gradient_origin_offset=None, gradient_radius=None, gradient_pre_interpolation_space=None, gradient_post_interpolation_space=None, gradient_buffer_precision=None, gradient_color_interpolation_mode=None, image_source_rectangle=None, image_interpolation_mode=None, extend_mode=None, opacity=None, transform=None):
     if gradient_radius is not None and not isinstance(gradient_radius, (list, tuple)):
       gradient_radius = (gradient_radius, gradient_radius)
@@ -5006,14 +5167,14 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
       else:
         return None
     bp = None if opacity is None and transform is None else ((1 if opacity is None else opacity), (transform or ID21Factory.MakeIndentityMatrix()))
-    if isinstance(content, ID2D1Bitmap):
-      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode or 0), bp)
+    if isinstance(content, ID2D1Bitmap) and (bitmap_interpolation_mode is not None or image_source_rectangle is None):
+      return self.CreateBitmapBrush(content, (*(extend_mode or (0, 0)), bitmap_interpolation_mode or image_interpolation_mode or 0), bp)
     elif isinstance(content, ID2D1GradientStopCollection):
       return self.CreateLinearGradientBrush((gradient_start_point, gradient_end_point), content, bp) if lg else self.CreateRadialGradientBrush((gradient_center, gradient_origin_offset, *gradient_radius), content, bp)
     elif isinstance(content, D2D1COLORF):
       return self.CreateSolidColorBrush(content, bp)
-    elif isinstance(content, ID2D1Image):
-      return self.CreateImageBrush(content, (image_source_rectangle or self.GetImageLocalBounds(content), *(extend_mode or (0, 0)), image_interpolation_mode or 0), bp)
+    elif isinstance(content, (ID2D1Image, ID2D1Effect)):
+      return self.CreateImageBrush(content, (image_source_rectangle or self.GetImageLocalBounds(content) or (0, 0, 0, 0), *(extend_mode or (0, 0)), image_interpolation_mode or 0), bp)
     else:
       return None
   def CreateColorContext(self, color_space=1, buffer=None):
@@ -5045,9 +5206,9 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   def SetUnitMode(self, unit_mode=0):
     self.__class__._protos['SetUnitMode'](self.pI, unit_mode)
   def GetImageLocalBounds(self, image):
-    return self.__class__._protos['GetImageLocalBounds'](self.pI, image)
+    return self.__class__._protos['GetImageLocalBounds'](self.pI, (image.GetOutput() if isinstance(image, ID2D1Effect) else image))
   def GetImageWorldBounds(self, image):
-    return self.__class__._protos['GetImageWorldBounds'](self.pI, image)
+    return self.__class__._protos['GetImageWorldBounds'](self.pI, (image.GetOutput() if isinstance(image, ID2D1Effect) else image))
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None, perspective_transform=None):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb, perspective_transform)
   def DrawImage(self, image, target_offset=None, image_rectangle=None, interpolation_mode=0, composite_mode=0):
