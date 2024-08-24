@@ -4396,8 +4396,14 @@ class _ID2D1PUtil:
     return b, i
   @classmethod
   def _get_item(cls, properties, key=True):
-    if key is None or (not isinstance(key, bool) and isinstance(key, (int, str))):
+    if key is None or isinstance(key, str):
       return _D2D1PropertySet(_D2D1Property(properties, key))
+    if not isinstance(key, bool) and isinstance(key, int):
+      try:
+        n = properties.GetPropertyCount()
+        return _D2D1PropertySet(_D2D1Property(properties, range(n)[key]))
+      except:
+        return _D2D1PropertySet(_D2D1Property(properties, key))
     if properties is None:
       return _D2D1PropertySet()
     n = properties.GetPropertyCount()
@@ -4407,8 +4413,13 @@ class _ID2D1PUtil:
       if k is True:
         g = [range(n), cls.D2D1PSystemRange]
         break
-      if isinstance(k, (int, str)):
+      if isinstance(k, str):
         g.append((k,))
+      elif not isinstance(k, bool) and isinstance(k, int):
+        try:
+          g.append((range(n)[k],))
+        except:
+          g.append((k,))
       else:
         try:
           if k.start is not None and k.start >= sr.start:
