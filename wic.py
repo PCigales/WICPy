@@ -4410,25 +4410,28 @@ class _ID2D1PUtil:
     g = []
     sr = cls.D2D1PSystemRange
     for k in (key if isinstance(key, (tuple, list)) else (key,)):
-      if k is True:
-        g = [range(n), cls.D2D1PSystemRange]
+      if isinstance(k, bool):
+        g = (range(n), sr) if k else (range(n),)
         break
       if isinstance(k, str):
         g.append((k,))
-      elif not isinstance(k, bool) and isinstance(k, int):
+      elif isinstance(k, int):
         try:
           g.append((range(n)[k],))
         except:
           g.append((k,))
       else:
         try:
-          if k.start is not None and k.start >= sr.start:
-            g.append(range(k.start, (sr.stop if k.stop is None else min(k.stop, sr.stop)), (1 if k.step is None else k.step)))
-          elif k.stop is not None and k.stop >= sr.start:
-            g.append(range(n)[k])
-            g.append(range((sr.start if k.start is None else max(k.start, sr.start)), min(k.stop, sr.stop), (1 if k.step is None else k.step)))
-          else:
-            g.append(range(n)[k])
+          g.append(range(n)[k])
+          if (k.start is not None and k.start >= sr.start) or (k.stop is not None and k.stop >= sr.start):
+            ste = 1 if k.step is None else k.step
+            if ste >= 0:
+              sta = sr.start if k.start is None else min(max(k.start, sr.start), sr.stop)
+              sto = sr.stop if k.stop is None else min(max(k.stop, sr.start), sr.stop)
+            else:
+              sta = sr.stop - 1 if k.start is None else min(max(k.start, sr.start - 1), sr.stop - 1)
+              sto = sr.start - 1 if k.stop is None else min(max(k.stop, sr.start - 1), sr.stop - 1)
+            g.append(range(sta, sto, ste))
         except:
           pass
     return _D2D1PropertySet(tuple(_D2D1Property(properties, k) for r in g for k in r))
@@ -4670,7 +4673,7 @@ class ID2D1Properties(IUnknown):
   def GetAll(self, sub=False):
     return self[True].Get(sub)
   def GetCustom(self, sub=False):
-    return self[:].Get(sub)
+    return self[False].Get(sub)
   def GetSystem(self, sub=False):
     return self[_ID2D1PUtil.D2D1PSystemRange.start:].Get(sub)
 
@@ -5075,6 +5078,12 @@ class ID2D1RenderTarget(ID2D1Resource):
   def GetDeviceContext(self):
     return self.QueryInterface(ID2D1DeviceContext, self.factory)
 
+class ID2D1CommandList(ID2D1Image):
+  IID = GUID(0xb4f34a19, 0x2383, 0x4d76, 0x94, 0xf6, 0xec, 0x34, 0x36, 0x57, 0xc3, 0xdc)
+  _protos['Close'] = 5, (), ()
+  def Close(self):
+    return self._protos['Close'](self.pI)
+
 class ID2D1DeviceContext(ID2D1RenderTarget):
   IID = GUID(0xe8f7fe7a, 0x191c, 0x466d, 0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98)
   _protos['CreateBitmap'] = 57, (D2D1SIZEU, PBUFFER, wintypes.UINT, D2D1PBITMAPPROPERTIESDC), (wintypes.PLPVOID,)
@@ -5087,6 +5096,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   _protos['CreateGradientStopCollection'] = 64, (D2D1PAGRADIENTSTOP, wintypes.UINT, D2D1COLORSPACE, D2D1COLORSPACE, D2D1BUFFERPRECISION, D2D1EXTENDMODE, D2D1COLORINTERPOLATIONMODE), (wintypes.PLPVOID,)
   _protos['CreateImageBrush'] = 65, (wintypes.LPVOID, D2D1PIMAGEBRUSHPROPERTIES, D2D1PBRUSHPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateBitmapBrush'] = 66, (wintypes.LPVOID, D2D1PBITMAPBRUSHPROPERTIESDC, D2D1PBRUSHPROPERTIES), (wintypes.PLPVOID,)
+  _protos['CreateCommandList'] = 67, (), (wintypes.PLPVOID,)
   _protos['IsDxgiFormatSupported'] = 68, (DXGIFORMAT,), (), wintypes.BOOLE
   _protos['IsBufferPrecisionSupported'] = 69, (D2D1BUFFERPRECISION,), (), wintypes.BOOLE
   _protos['GetImageLocalBounds'] = 70, (wintypes.LPVOID,), (D2D1PRECTF,)
@@ -5194,6 +5204,8 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
     return ID2D1ColorContext(self.__class__._protos['CreateColorContextFromFilename'](self.pI, file_name), self.factory)
   def CreateColorContextFromWicColorContext(self, color_context):
     return ID2D1ColorContext(self.__class__._protos['CreateColorContextFromWicColorContext'](self.pI, color_context), self.factory)
+  def CreateCommandList(self):
+    return ID2D1CommandList(self._protos['CreateCommandList'](self.pI), self.factory)
   def GetDevice(self):
     return ID2D1Device(self._protos['GetDevice'](self.pI), self.factory)
   def SetTarget(self, target=None):

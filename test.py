@@ -1,4 +1,4 @@
-﻿try:
+try:
   from WICPy import *
 except:
   from wic import *
@@ -1147,6 +1147,9 @@ D2D1Bitmap2.CopyFromBitmap(D2D1Bitmap)
 #Mapping the D2D1 bitmap for reading then unmapping it
 print(D2D1Bitmap2.Map('read')[1][0:320*4:4])
 D2D1Bitmap2.Unmap()
+#Creating and attaching a D2D1 command list
+D2D1CommandList = D2D1DeviceContext.CreateCommandList()
+D2D1DeviceContext.SetTarget(D2D1CommandList)
 #Starting to draw again
 D2D1DeviceContext.BeginDraw()
 #Drawing the D2D1 bitmap created from the WIC bitmap
@@ -1228,7 +1231,14 @@ D2D1Effect3.SetInputEffect(0, D2D1Effect2)
 D2D1DeviceContext.DrawImage(D2D1Effect3, composite_mode='plus')
 #Finishing drawing
 D2D1DeviceContext.EndDraw()
-D2D1Bitmap3.Release()
+#Closing the command list
+D2D1CommandList.Close()
+#Setting the D2D1 bitmap created for rendering as the target of the D2D1 device context
+D2D1DeviceContext.SetTarget(D2D1Bitmap)
+#Drawing the command list
+D2D1DeviceContext.BeginDraw()
+D2D1DeviceContext.DrawImage(D2D1CommandList)
+D2D1DeviceContext.EndDraw()
 #Copying the target of the D2D1 device context in this D2D1 bitmap
 D2D1Bitmap2.CopyFromRenderTarget(D2D1DeviceContext)
 #Writing the D2D1 bitmap to a WIC encoder frame and saving the jpg to a file
@@ -1246,7 +1256,7 @@ IBitmapFrameEncode.SetPixelFormat('24bppBGR')
 IImageEncoder.WriteFrame(D2D1Bitmap2, IBitmapFrameEncode)
 IBitmapFrameEncode.Commit()
 IEncoder.Commit()
-tuple(map(IUnknown.Release, (IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext, D2D1StrokeStyle, D2D1ColorBrush, D2D1LinearGradientBrush, D2D1GradientStopCollection, D2D1RadialGradientBrush, D2D1BitmapBrush, D2D1Effect, D2D1Effect2, D2D1Effect3, D2D1BitmapB, IScaler)))
+tuple(map(IUnknown.Release, (D2D1Bitmap3, IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext, D2D1StrokeStyle, D2D1ColorBrush, D2D1LinearGradientBrush, D2D1GradientStopCollection, D2D1RadialGradientBrush, D2D1BitmapBrush, D2D1Effect, D2D1Effect2, D2D1Effect3, D2D1BitmapB, IScaler, D2D1CommandList)))
 D2D1Device.ClearResources()
 
 #Creating a software D2D1 device
@@ -1361,7 +1371,7 @@ def PyWndProcedure(hWnd, Msg, wParam, lParam):
     D2D1Bitmap3.Release()
     DXGISwapChain.Present()
   elif Msg == 16:
-    user32.PostMessageW(hWnd, Msg, wParam, lParam) 
+    user32.PostMessageW(hWnd, Msg, wParam, lParam)
     return 0
   return user32.DefWindowProcW(wintypes.HWND(hWnd), wintypes.UINT(Msg), wintypes.WPARAM(wParam), wintypes.LPARAM(lParam))
 wname = 'WICPy test resizable'
