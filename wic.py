@@ -4530,6 +4530,7 @@ class _D2D1Property:
     return (self.GetValue(), _ID2D1PUtil._get_item(self.GetSubs()).Get(True)) if sub else self.GetValue()
 
 class ID2D1Properties(IUnknown):
+  _lightweight = True
   IID = GUID(0x483473d7, 0xcd46, 0x4f9d, 0x9d, 0x3a, 0x31, 0x12, 0xaa, 0x80, 0x15, 0x9d)
   _protos['GetPropertyCount'] = 3, (), (), wintypes.UINT
   _protos['GetPropertyName'] = 4, (wintypes.UINT, wintypes.LPWSTR, wintypes.UINT), ()
