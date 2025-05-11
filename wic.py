@@ -6057,7 +6057,7 @@ WSPITEMIDLIST.ILIsParent = staticmethod(lambda pidl_parent, pidl_child, immediat
 WSPITEMIDLIST.ILRemoveLastID = staticmethod(lambda pidl, _ilrlid=_WSUtil._wrap('ILRemoveLastID', (wintypes.BOOLE, 0), (WSPITEMIDLIST, 1)): _ilrlid(pidl))
 WSPITEMIDLIST.SHGetIDListFromObject = staticmethod(lambda obj, _shgidlfo=_WSUtil._wrap('SHGetIDListFromObject', (wintypes.LPVOID, 1), (WSPPITEMIDLIST, 2)): _shgidlfo(obj) or None)
 WSPITEMIDLIST.SHGetNameFromIDList = staticmethod(lambda pidl, name_form=0, _shgnfidl=_WSUtil._wrap('SHGetNameFromIDList', (WSPITEMIDLIST, 1), (WSSIGDN, 1), (wintypes.PLPVOID, 2)): _WSUtil._get_str(_shgnfidl(pidl, name_form)))
-WSPITEMIDLIST.SHGetPathFromIDList = staticmethod(lambda pidl, _shgpfidl=_WSUtil._wrap('SHGetPathFromIDListW', (wintypes.BOOL, 0), (WSPITEMIDLIST, 1), (wintypes.LPWSTR, 1)): p.value if (p := ctypes.create_unicode_buffer(261)) and _shgpfidl(pidl, p) else None)
+WSPITEMIDLIST.SHGetPathFromIDList = staticmethod(lambda pidl, _shgpfidl=_WSUtil._wrap('SHGetPathFromIDListW', (wintypes.BOOL, 0), (WSPITEMIDLIST, 1), (wintypes.LPWSTR, 1)): p.value if (p := ctypes.create_unicode_buffer(261)) and _shgpfidl(pidl, p) is not None else None)
 WSPITEMIDLIST.SHParseDisplayName = staticmethod(lambda name, query_attributes=0, bind_context=None, _shpdn=_WSUtil._wrap('SHParseDisplayName', (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (WSPPITEMIDLIST, 2), (WSSFGAO, 1), (WSPSFGAO, 2)): None if (p_a := _shpdn(name, bind_context, query_attributes)) is None else (p_a if query_attributes else p_a[0]))
 PIDL = WSPITEMIDLIST
 
@@ -6147,17 +6147,13 @@ class IShellFolder(IUnknown):
   def EnumObjects(self, include_flags=0x60):
     return IEnumIDList(self._protos['EnumObjects'](self.pI, None, include_flags), self.factory)
   def BindToObject(self, pidl, interface=None, bind_context=None):
-    if interface is None:
-      interface = self.__class__
-    return interface(self._protos['BindToObject'](self.pI, pidl, bind_context, interface.IID), self.factory)
+    return (interface or self.__class__)(self._protos['BindToObject'](self.pI, pidl, bind_context, (interface or self.__class__).IID), self.factory)
   def BindToStorage(self, pidl, interface=None, bind_context=None):
-    if interface is None:
-      interface = IStream
-    return interface(self._protos['BindToStorage'](self.pI, pidl, bind_context, interface.IID), self.factory)
+    return (interface or IStream)(self._protos['BindToStorage'](self.pI, pidl, bind_context, (interface or IStream).IID), self.factory)
   def CreateItemFromRelativeIDList(self, pidl, interface=None):
     return IShellItem.SHCreateItemWithParent(self, pidl, interface)
   def GetDisplayName(self, name_form=0):
-    return WSPITEMIDLIST(self).GetName(name_form)
+    return None if (pidl := WSPITEMIDLIST(self)) is None else pidl.GetName(name_form)
   @property
   def Name(self):
     return self.GetDisplayName('NormalDisplay')
@@ -6175,20 +6171,25 @@ class IShellFolder(IUnknown):
     return self.GetDisplayName('ParentRelativeEditing')
   @property
   def SubFolders(self):
-    return {self.GetDisplayNameOf(pidl, 'InFolder'): self.BindToObject(pidl) for pidl in self.EnumObjects('Folders')}
+    return None if (e := self.EnumObjects('Folders')) is None else {(self.GetDisplayNameOf(pidl, 'InFolder') or tuple(pidl.content)): self.BindToObject(pidl) for pidl in e}
   @property
   def Children(self):
-    return {self.GetDisplayNameOf(pidl, 'InFolder'): self.CreateItemFromRelativeIDList(pidl) for pidl in self.EnumObjects('NonFolders')}
+    return None if None in (es := (self.EnumObjects('Folders'), self.EnumObjects('NonFolders'))) else tuple({(self.GetDisplayNameOf(pidl, 'InFolder') or tuple(pidl.content)): self.CreateItemFromRelativeIDList(pidl) for pidl in e} for e in es)
   def GetSubFolderFromRelativeParsingName(self, name, parsing_name=True):
     return None if (pidl := self.ParseDisplayName(name)) is None else self.BindToObject(pidl)
   def GetSubFolderFromRelativeName(self, name):
     name = name.lower()
-    return next((self.BindToObject(pidl) for pidl in self.EnumObjects('Folders') if self.GetDisplayNameOf(pidl, 'InFolder').lower() == name), None)
+    return None if (e := self.EnumObjects('Folders')) is None else next((self.BindToObject(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 'InFolder') or '').lower() == name), None)
   def GetChildFromRelativeParsingName(self, name):
     return self.CreateItemFromRelativeIDList(self.ParseDisplayName(name))
   def GetChildFromRelativeName(self, name):
     name = name.lower()
-    return next((self.CreateItemFromRelativeIDList(pidl) for pidl in self.EnumObjects('NonFolders') if self.GetDisplayNameOf(pidl, 'InFolder').lower() == name), None)
+    return None if (e := self.EnumObjects('Folders | NonFolders')) is None else next((self.CreateItemFromRelativeIDList(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 'InFolder') or '').lower() == name), None)
+  def GetPath(self):
+    return None if (pidl := WSPITEMIDLIST(self)) is None else pidl.GetPath()
+  @property
+  def Path(self):
+    return self.GetPath()
   def __iter__(self):
     return self.EnumObjects()
   SHBindToFolderIDListParentEx = classmethod(lambda cls, root, pidl, interface=None, bind_context=None, _shbtfidlp=_WSUtil._wrap('SHBindToFolderIDListParentEx', (wintypes.LPVOID, 1), (WSPITEMIDLIST, 1), (wintypes.PLPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), (WSPPITEMIDLIST, 2)): None if (p_p := _shbtfidlp(root, pidl, bind_context, (interface or cls).IID)) is None else ((interface or cls)(p_p[0], getattr(root, 'factory', None)), _WSUtil._bind_pidls(p_p[1], pidl)))
@@ -6253,6 +6254,11 @@ class IShellItem(IUnknown):
     return self.GetParent()
   def CreateItemFromRelativeName(self, name, interface=None, bind_context=None):
     return self.SHCreateItemFromRelativeName(self, name, interface, bind_context)
+  def GetPath(self):
+    return None if (pidl := WSPITEMIDLIST(self)) is None else pidl.GetPath()
+  @property
+  def Path(self):
+    return self.GetPath()
   SHCreateItemFromIDList = staticmethod(lambda pidl, interface=None, _shcifidl=_WSUtil._wrap('SHCreateItemFromIDList', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifidl(pidl, (interface or cls).IID)))
   SHCreateItemFromParsingName = classmethod(lambda cls, name, interface=None, bind_context=None, _shcifpn=_WSUtil._wrap('SHCreateItemFromParsingName', (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifpn(name, bind_context, (interface or cls).IID)))
   SHCreateItemFromRelativeName = classmethod(lambda cls, parent, name, interface=None, bind_context=None, _shcifrn=_WSUtil._wrap('SHCreateItemFromRelativeName', (wintypes.LPVOID, 1), (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifrn(parent, name, bind_context, (interface or cls).IID)))
