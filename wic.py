@@ -5657,7 +5657,6 @@ class _WSUtil:
     ole32.CoTaskMemFree(pwstr)
     return s
 
-
 WSBindFlags = {'MayBotherUser': 1, 'JustTestExistence': 2}
 WSBINDFLAGS = type('WSBINDFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSBindFlags.items()}, '_tab_cn': {c: n for n, c in WSBindFlags.items()}, '_def': 0})
 
