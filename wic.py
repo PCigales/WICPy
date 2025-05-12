@@ -6473,6 +6473,7 @@ class IFileOperation(IUnknown):
   def GetAnyOperationsAborted(self):
     return self._protos['GetAnyOperationsAborted'](self.pI)
 
+
 def Initialize(mode=6):
   if isinstance(mode, str):
     mode = 4 if mode.lower() in ('mt', 'mta') else 6
