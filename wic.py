@@ -24,13 +24,14 @@ import math
 from fractions import Fraction
 import datetime
 
-kernel32 = ctypes.WinDLL('kernel32',  use_last_error=True)
+kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 ole32 = ctypes.WinDLL('ole32', use_last_error=True)
 oleauto32 = ctypes.WinDLL('oleaut32', use_last_error=True)
 shl = ctypes.WinDLL('shlwapi', use_last_error=True)
-sh = ctypes.WinDLL('shell32', use_last_error=True)
+sh32 = ctypes.WinDLL('shell32', use_last_error=True)
 d2d1 = ctypes.WinDLL('d2d1', use_last_error=True)
 d3d11 = ctypes.WinDLL('d3d11', use_last_error=True)
+gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
 
 class WError(int):
   def __new__(cls, code):
@@ -96,8 +97,7 @@ class _IUtil:
 class _IMeta(type):
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
-    kwds['_protos'] = {**getattr(bases[0], '_protos', {})} if len(bases) > 0 else {}
-    return kwds
+    return {'_protos': {**p} if len(bases) > 0 and (p := getattr(bases[0], '_protos', None)) is not None else {}}
   def __init__(cls, *args, **kwargs):
     super().__init__(*args, **kwargs)
     for n, pro in tuple((n, pro) for n, pro in cls._protos.items() if isinstance(pro, tuple)):
@@ -116,16 +116,20 @@ class _IMeta(type):
 class _ICOMMeta(ctypes.Structure.__class__):
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
-    kwds['_vtbl'] = {**bases[0]._vtbl} if bases else {}
-    return kwds
+    return {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new}
   def __new__(mcls, name, bases, namespace, **kwds):
-    namespace['_fields_'][0:0] = (('pVtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), ('vtbl', wintypes.LPVOID * len(namespace['_vtbl'])))
-    if bases:
-      namespace['_IIDs'].update(bases[0]._IIDs)
-      for n in bases[0]._vtbl:
-        namespace['_' + n] = object.__getattribute__(bases[0], '_' + n)
-      namespace['__new__'] = object.__getattribute__(bases[0], '__new__')
+    namespace['_fields_'] = [('pvtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), ('vtbl', wintypes.LPVOID * len(namespace['_vtbl'])), *namespace['_vars'].items()]
     return super().__new__(mcls, name, (ctypes.Structure,), namespace, **kwds)
+  @staticmethod
+  def _new(cls):
+    self = ctypes.Structure.__new__(cls)
+    pI = ctypes.addressof(self)
+    cls._refs[pI] = self
+    self.pvtbl = pI + cls.vtbl.offset
+    self.refs = 1
+    for i, n in enumerate(cls._vtbl):
+      self.vtbl[i] = ctypes.cast(getattr(cls, n), wintypes.LPVOID)
+    return pI
   def __init__(cls, *args, **kwargs):
     super().__init__(*args, **kwargs)
     cls._refs = {}
@@ -133,16 +137,15 @@ class _ICOMMeta(ctypes.Structure.__class__):
       setattr(cls, n, ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n)))
 
 class _COM_IUnknown(metaclass=_ICOMMeta):
-  _IIDs = {GUID('00000000-0000-0000-c000-000000000046')}
+  _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
   _vtbl['QueryInterface'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PBYTES16, wintypes.PLPVOID)
   _vtbl['AddRef'] = (wintypes.ULONG, wintypes.LPVOID)
   _vtbl['Release'] = (wintypes.ULONG, wintypes.LPVOID)
-  _fields_ = []
   @classmethod
   def _QueryInterface(cls, pI, riid, pObj):
     if not (self := cls._refs.get(pI)):
       return 0x80004003
-    if GUID(riid.contents) in cls._IIDs:
+    if GUID(riid.contents) in cls._iids:
       self.refs += 1
       pObj.contents.value = ctypes.addressof(self)
       return 0
@@ -161,15 +164,6 @@ class _COM_IUnknown(metaclass=_ICOMMeta):
     if not self.refs:
       cls._refs.pop(ctypes.addressof(self), None)
     return self.refs
-  def __new__(cls):
-    self = ctypes.Structure.__new__(cls)
-    pI = ctypes.addressof(self)
-    cls._refs[pI] = self
-    self.pVtbl = pI + cls.vtbl.offset
-    self.refs = 1
-    for i, n in enumerate(cls._vtbl):
-      self.vtbl[i] = ctypes.cast(getattr(cls, n), wintypes.LPVOID)
-    return pI
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -177,12 +171,14 @@ class IUnknown(metaclass=_IMeta):
   _protos['AddRef'] = 1, (), (), wintypes.ULONG
   _protos['Release'] = 2, (), (), wintypes.ULONG
   def __new__(cls, clsid_component=False, factory=None):
+    lw = None
     if not clsid_component:
       if clsid_component is not False:
         return None
       if (clsid_component := getattr(cls, 'CLSID', None)) is None:
         if (c := globals().get('_COM_' + cls.__name__)):
           clsid_component = c()
+          lw = True
         else:
           raise TypeError('%s does not have an implicit constructor' % cls.__name__)
     if isinstance(clsid_component, int):
@@ -203,6 +199,8 @@ class IUnknown(metaclass=_IMeta):
     self.pI = pI
     self.refs = 1
     self.factory = factory
+    if lw:
+      self._lightweight = True
     return self
   def AddRef(self, own_ref=True):
     if self.pI is None:
@@ -232,7 +230,7 @@ class IUnknown(metaclass=_IMeta):
   def _as_parameter_(self):
     return self.pI
   def __del__(self):
-    if getattr(self.__class__, '_lightweight', False) or ((__IUtil := globals().get('_IUtil')) and hasattr(__IUtil._local, 'initialized')):
+    if getattr(self, '_lightweight', False) or ((__IUtil := globals().get('_IUtil')) and hasattr(__IUtil._local, 'initialized')):
       while self:
         self.Release()
   def __enter__(self):
@@ -1091,7 +1089,7 @@ class BSTRING(BSTR):
     return super().__ctypes_from_outparam__().content
 PBSTRING = ctypes.POINTER(BSTRING)
 
-class FDate(float):
+class _DT:
   def __new__(cls, dt=0):
     if isinstance(dt, str):
       try:
@@ -1106,17 +1104,20 @@ class FDate(float):
           except:
             return None
     if isinstance(dt, datetime.datetime):
-      dt = (dt - datetime.datetime(1899, 12, 30, 0, 0, 0, 0, (None if dt.tzinfo is None else datetime.timezone.utc))) / datetime.timedelta(1)
-    elif isinstance(dt, (int, float)):
+      dt = (dt - datetime.datetime(*cls._origin, (None if dt.tzinfo is None else datetime.timezone.utc))) / datetime.timedelta(**{cls._unit[0]: 1}) / cls._unit[1]
+    if isinstance(dt, int):
       pass
-    elif isinstance(dt, wintypes.DOUBLE):
-      dt = dt.value
+    elif isinstance(dt, float):
+      if issubclass(cls, int):
+        dt = round(dt)
+    elif isinstance(dt, cls._ctype):
+      dt = (dt.dwLowDateTime + (dt.dwHighDateTime << 32)) if issubclass(cls, int) else dt.value
     else:
       return None
-    self = float.__new__(cls, dt)
+    self = (int if issubclass(cls, int) else float).__new__(cls, dt)
     return self
   def to_utc(self):
-    return (datetime.datetime(1899, 12, 30, 0, 0, 0, 0, datetime.timezone.utc) + datetime.timedelta(self))
+    return (datetime.datetime(*self.__class__._origin, datetime.timezone.utc) + datetime.timedelta(**{self.__class__._unit[0]: self * self.__class__._unit[1]}))
   def to_locale(self):
     return self.to_utc().astimezone()
   def to_string(self):
@@ -1126,21 +1127,29 @@ class FDate(float):
     return l.replace(microsecond=0).strftime('%x %X %z')
   def __str__(self):
     try:
-      return '<%f: %s>' % (self, self.to_string())
+      return ('<%%%s: %%s>' % ('d' if isinstance(self, int) else 'f')) % (self, self.to_string())
     except:
-      return '<%f: >' % self
+      return ('<%%%s: >' % ('d' if isinstance(self, int) else 'f')) % self
   def __repr__(self):
     return str(self)
 
-class _DATEUtil:
-  _mul_cache = {}
+class _DTUtil:
   @staticmethod
   def _agitem(arr, key):
     e = arr.__class__.__bases__[0].__getitem__(arr, key)
     return e.content if isinstance(key, int) else [d.content for d in e]
   @staticmethod
   def _asitem(arr, key, value):
-    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, DATE) else DATE(value)) if isinstance(key, int) else [v if isinstance(v, DATE) else DATE(v) for v in value])
+    cls = arr.__class__.__bases__[0]._type_
+    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, cls) else cls(value)) if isinstance(key, int) else [v if isinstance(v, cls) else cls(v) for v in value])
+
+class FDate(_DT, float):
+  _origin = (1899, 12, 30, 0, 0, 0, 0)
+  _unit = ('days', 1)
+  _ctype = wintypes.DOUBLE
+
+class _DATEUtil(_DTUtil):
+  _mul_cache = {}
 
 class _DATEMeta(wintypes.DOUBLE.__class__):
   def __mul__(bcls, size):
@@ -1155,6 +1164,36 @@ class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
   @content.setter
   def content(self, data):
     self.value = FDate(data)
+
+class IFileTime(_DT, int):
+  _origin = (1601, 1, 1, 0, 0, 0, 0)
+  _unit = ('microseconds', 0.1)
+  _ctype = wintypes.FILETIME
+
+class _FILETIMEUtil(_DTUtil):
+  _mul_cache = {}
+
+class _FILETIMEMeta(wintypes.FILETIME.__class__):
+  def __mul__(bcls, size):
+    return _FILETIMEUtil._mul_cache.get((bcls, size)) or _FILETIMEUtil._mul_cache.setdefault((bcls, size), type('FILETIME_Array_%d' % size, (wintypes.FILETIME.__class__.__mul__(bcls, size),), {'__getitem__': _FILETIMEUtil._agitem, '__setitem__': _FILETIMEUtil._asitem}))
+
+class FILETIME(wintypes.FILETIME, metaclass=_FILETIMEMeta):
+  def __init__(self, dt=0):
+    if isinstance(dt, wintypes.FILETIME):
+      wintypes.FILETIME.__init__(self, dt.dwLowDateTime, dt.dwHighDateTime)
+    else:
+      fd = IFileTime(dt)
+      wintypes.FILETIME.__init__(self, (fd & 0xffffffff), (fd >> 32))
+  @classmethod
+  def from_param(cls, obj):
+    return obj if obj is None or isinstance(obj, cls) else cls(obj)
+  @property
+  def content(self):
+    return IFileTime(self)
+  @content.setter
+  def content(self, data):
+    self.__init__(data)
+  value = content
 
 class _WSUtil:
   _mul_cache = {}
@@ -1833,7 +1872,7 @@ class _BVMeta(ctypes.Structure.__class__):
       cls.bstrVal = property(lambda s: s._bstrVal.content, lambda s, v: setattr(s, '_bstrVal', BSTR(v)), cls._bstrVal.__delete__)
     if hasattr(cls, 'filetime'):
       cls._filetime = cls.filetime
-      cls.filetime = property(lambda s: wintypes.FILETIME.from_buffer_copy(s._filetime), cls._filetime.__set__, cls._filetime.__delete__)
+      cls.filetime = property(lambda s: FILETIME(s._filetime).content, lambda s, v: setattr(s, '_filetime', FILETIME(v)), cls._filetime.__delete__)
     if hasattr(cls, 'date'):
       cls._date = cls.date
       cls.date = property(lambda s: DATE(s._date).content, lambda s, v: setattr(s, '_date', DATE(v)), cls._date.__delete__)
@@ -2135,9 +2174,7 @@ class _IWICEPBMeta(_IMeta):
   }
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
-    for n in mcls._options:
-      kwds[n] = _WICEncoderOption()
-    return kwds
+    return {n: _WICEncoderOption() for n in mcls._options}
 
 class IWICEncoderPropertyBag(IPropertyBag2, metaclass=_IWICEPBMeta):
   def GetPropertyInfo(self, first=0, number=None):
@@ -2574,18 +2611,18 @@ class _IWICMQRMeta(_IMeta):
   }
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
-    kwds = super(mcls, mcls).__prepare__(name, bases, **kwds)
+    ns = super(mcls, mcls).__prepare__(name, bases, **kwds)
     if 'Reader' in name:
       for n in mcls._queries:
-        kwds['Get' + n] = _WICMetadataQuery()
-      kwds['GetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, True))
-      kwds['GetResolution'] = property(lambda s: _IWICMQRUtil._res(s, True))
+        ns['Get' + n] = _WICMetadataQuery()
+      ns['GetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, True))
+      ns['GetResolution'] = property(lambda s: _IWICMQRUtil._res(s, True))
     elif 'Writer' in name:
       for n in mcls._queries:
-        kwds['Set' + n] = _WICMetadataQuery()
-      kwds['SetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, False))
-      kwds['SetResolution'] = property(lambda s: _IWICMQRUtil._res(s, False))
-    return kwds
+        ns['Set' + n] = _WICMetadataQuery()
+      ns['SetPosition'] = property(lambda s: _IWICMQRUtil._pos(s, False))
+      ns['SetResolution'] = property(lambda s: _IWICMQRUtil._res(s, False))
+    return ns
 
 class IWICMetadataQueryReader(IUnknown, metaclass=_IWICMQRMeta):
   IID = GUID(0x30989668, 0xe1c9, 0x4597, 0xb3, 0x95, 0x45, 0x8e, 0xed, 0xb8, 0x08, 0xdf)
@@ -5683,7 +5720,7 @@ IWMPCore3 = IWMPCore
 
 class _WShUtil:
   @staticmethod
-  def _wrap(n, *r_a, p=sh):
+  def _wrap(n, *r_a, p=sh32):
     r, *a = r_a if r_a and r_a[0][1] == 0 else (None, *r_a)
     if r is None:
       f = ctypes.WINFUNCTYPE(wintypes.ULONG, *(t[0] for t in a))(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((t[1],) for t in a))
@@ -5760,9 +5797,9 @@ WSFileAttributes = {'ReadOnly': 1, 'Hidden': 2, 'System': 4, 'Directory': 16, 'A
 WSFILEATTRIBUTES = type('WSFILEATTRIBUTES', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSFileAttributes.items()}, '_tab_cn': {c: n for n, c in WSFileAttributes.items()}, '_def': 128})
 
 class WSFINDDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('dwFileAttributes', WSFILEATTRIBUTES), ('ftCreationTime', wintypes.FILETIME), ('ftLastAccessTime', wintypes.FILETIME), ('ftLastWriteTime', wintypes.FILETIME), ('nFileSizeHigh', wintypes.DWORD), ('nFileSizeLow', wintypes.DWORD), ('dwReserved0', wintypes.DWORD), ('dwReserved1', wintypes.DWORD), ('cFileName', wintypes.WCHAR * 260), ('cAlternateFileName', wintypes.WCHAR * 14)]
+  _fields_ = [('dwFileAttributes', WSFILEATTRIBUTES), ('ftCreationTime', FILETIME), ('ftLastAccessTime', FILETIME), ('ftLastWriteTime', FILETIME), ('nFileSizeHigh', wintypes.DWORD), ('nFileSizeLow', wintypes.DWORD), ('dwReserved0', wintypes.DWORD), ('dwReserved1', wintypes.DWORD), ('cFileName', wintypes.WCHAR * 260), ('cAlternateFileName', wintypes.WCHAR * 14)]
   def to_tuple(self):
-    return tuple(getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n) for n, t in self.__class__._fields_)
+    return tuple(getattr(self, n) for n, t in self.__class__._fields_)
 WSPFINDDATA = type('WSPFINDDATA', (_BPStruct, ctypes.POINTER(WSFINDDATA)),  {'_type_': WSFINDDATA})
 
 class WSBINDOPTS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
@@ -5810,18 +5847,26 @@ WSPBHID = type('WSPBHID', (_BPGUID, ctypes.POINTER(WSBHID)), {'_type_': WSBHID})
 WSSiattribflags = {'And': 0x1, 'Or': 0x2, 'AppCompat': 0x3, 'AllItems': 0x4000}
 WSSIATTRIBFLAGS = type('WSSIATTRIBFLAGS', (_BCodeOr, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSSiattribflags.items()}, '_tab_cn': {c: n for n, c in WSSiattribflags.items()}, '_def': 0})
 
+SIZE = _WSMeta('SIZE', (_BTStruct, wintypes.SIZE), {})
+
+WSSiigbf = {'ResizeToFit': 0, 'BiggerSizeOK': 0x1, 'MemoryOnly': 0x2, 'IconOnly': 0x4, 'ThumbnailOnly': 0x8, 'InCacheOnly': 0x10, 'CropToSquare': 0x20, 'WideThumbnails': 0x40, 'IconBackground': 0x80, 'ScaleUp': 0x100}
+WSSIIGBF = type('WSSIIGBF', (_BCodeOr, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSSiigbf.items()}, '_tab_cn': {c: n for n, c in WSSiigbf.items()}, '_def': 0})
+
 WSOperationFlags = {'AllowUndo': 0x40, 'FilesOnly': 0x80, 'NoConfirmation': 0x10, 'NoConfirmMkDir': 0x200, 'NoConnectedElements': 0x2000, 'NoCopySecurityAttribs': 0x800, 'NoErrorUI': 0x400, 'NoRecursion': 0x1000, 'RenameOnCollision': 0x8, 'Silent': 0x4, 'WantNukeWarning': 0x4000, 'AddUndoRecord': 0x20000000, 'NoSkipJunctions': 0x10000, 'PreferHardLink': 0x20000, 'ShowElevationPrompt': 0x40000, 'EarlyFailure': 0x100000, 'PreserveFileExtensions': 0x200000, 'KeepNewerFile': 0x400000, 'NoCopyHooks': 0x800000, 'NoMinimizeBox': 0x1000000, 'MoveACLSAcrossVolumes': 0x2000000, 'DontDisplaySourcePath': 0x4000000, 'RecycleOnDelete': 0x80000, 'RequireElevation': 0x10000000, 'CopyAsDownload': 0x40000000, 'DontDisplayLocations': 0x80000000}
 WSOPERATIONFLAGS = type('WSOPERATIONFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSOperationFlags.items()}, '_tab_cn': {c: n for n, c in WSOperationFlags.items()}, '_def': 0x240})
 
 class _COM_IFileSystemBindData(_COM_IUnknown):
-  _IIDs = {GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8), GUID(0x01e18d10, 0x4d8b, 0x11d2, 0x85, 0x5d, 0x00, 0x60, 0x08, 0x05, 0x93, 0x67)}
+  _iids.add(GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8))
+  _iids.add(GUID(0x01e18d10, 0x4d8b, 0x11d2, 0x85, 0x5d, 0x00, 0x60, 0x08, 0x05, 0x93, 0x67))
   _vtbl['SetFindData'] = (wintypes.ULONG, wintypes.LPVOID, WSPFINDDATA)
   _vtbl['GetFindData'] = (wintypes.ULONG, wintypes.LPVOID, WSPFINDDATA)
   _vtbl['SetFileID'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.LARGE_INTEGER)
   _vtbl['GetFileID'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PLARGE_INTEGER)
   _vtbl['SetJunctionCLSID'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PBYTES16)
   _vtbl['GetJunctionCLSID'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PBYTES16)
-  _fields_ = [('fd', WSFINDDATA), ('fid', wintypes.LARGE_INTEGER), ('jclsid', wintypes.BYTES16)]
+  _vars['fd'] = WSFINDDATA
+  _vars['fid'] = wintypes.LARGE_INTEGER
+  _vars['jclsid'] = wintypes.BYTES16
   @classmethod
   def _SetFindData(cls, pI, pfd):
     if not (self := cls._refs.get(pI)):
@@ -5860,7 +5905,6 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
     return 0
 
 class IFileSystemBindData(IUnknown):
-  _lightweight = True
   IID = GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8)
   _protos['SetFindData'] = 3, (WSPFINDDATA,), ()
   _protos['GetFindData'] = 4, (), (WSPFINDDATA,)
@@ -5970,7 +6014,7 @@ class WSITEMIDLIST(ctypes.Structure):
         return l
       l += 1
       o += i.cb
-class _WSPIIILUtil:
+class _WSPIIDLUtil:
   @staticmethod
   def _ainit(arr, *args, needsfree=False, **kwargs):
     arr.__class__.__bases__[0].__init__(arr, *args, **kwargs)
@@ -5982,11 +6026,11 @@ class _WSPIIILUtil:
         if bool(s):
           ole32.CoTaskMemFree(s)
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
-class _WSPIIILMeta(ctypes.POINTER(WSITEMIDLIST).__class__):
+class _WSPIIDLMeta(ctypes.POINTER(WSITEMIDLIST).__class__):
   _mul_cache = {}
   def __mul__(bcls, size):
-    return bcls.__class__._mul_cache.get((bcls, size)) or bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.POINTER(WSITEMIDLIST).__class__.__mul__(bcls, size),), {'__init__': _WSPIIILUtil._ainit, '__del__': _WSPIIILUtil._adel}))
-class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIILMeta):
+    return bcls.__class__._mul_cache.get((bcls, size)) or bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.POINTER(WSITEMIDLIST).__class__.__mul__(bcls, size),), {'__init__': _WSPIIDLUtil._ainit, '__del__': _WSPIIDLUtil._adel}))
+class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
   _type_ = WSITEMIDLIST
   def __new__(cls, *args, _needsfree=False):
     if len(args) == 1:
@@ -5994,7 +6038,7 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIILMeta):
       if isinstance(a, WSPITEMIDLIST):
         return a.Clone()
       if isinstance(a, str):
-        if (self := WSPITEMIDLIST.SHParseDisplayName(a.rstrip('\\'))) is None:
+        if ('::' in a or (self := WSPITEMIDLIST.ILCreateFromPath(a.rstrip('\\'))) is None) and (self := WSPITEMIDLIST.SHParseDisplayName(a.rstrip('\\'))) is None:
           self = WSPITEMIDLIST.SHParseDisplayName(a.rstrip('\\'), bind_context=getattr(IBindCtx, 'AllowNonExistingFolder' if a.endswith('\\') else 'AllowNonExistingFile'))
         return self
       if isinstance(a, (IShellFolder, IShellItem)):
@@ -6081,6 +6125,19 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIILMeta):
   @property
   def Path(self):
     return self.GetPath()
+  @classmethod
+  def FromPath(cls, path):
+    return cls.ILCreateFromPath(path)
+  def GetData(self):
+    return None if (pr := self.GetParentAndRelativeIDList(IShellFolder)) is None else WSPITEMIDLIST.SHGetDataFromIDList(*pr)
+  @property
+  def Data(self):
+    return self.GetData()
+  def GetParentAndRelativeIDList(self, interface=None):
+    return IShellFolder.SHBindToParent(self, interface)
+  @property
+  def ParentAndRelative(self):
+    return self.GetParentAndRelativeIDList()
 WSPPITEMIDLIST = ctypes.POINTER(WSPITEMIDLIST)
 WSPITEMIDLIST.ILAppendID = staticmethod(lambda pidl, pmkid, append=True, _ilaid=_WShUtil._wrap('ILAppendID', (WSPITEMIDLIST, 0), (WSPITEMIDLIST, 1), (WSPSHITEMID, 1), (wintypes.BOOL, 1)): _WShUtil._subst_pidls((_ilaid(pidl, pmkid, append) or None), pidl))
 WSPITEMIDLIST.ILClone = staticmethod(lambda pidl, _ilc=_WShUtil._wrap('ILClone', (WSPITEMIDLIST, 0), (WSPITEMIDLIST, 1)): _ilc(pidl) or None)
@@ -6100,6 +6157,7 @@ WSPITEMIDLIST.SHGetIDListFromObject = staticmethod(lambda obj, _shgidlfo=_WShUti
 WSPITEMIDLIST.SHGetNameFromIDList = staticmethod(lambda pidl, name_form=0, _shgnfidl=_WShUtil._wrap('SHGetNameFromIDList', (WSPITEMIDLIST, 1), (WSSIGDN, 1), (wintypes.PLPVOID, 2)): _WShUtil._get_str(_shgnfidl(pidl, name_form)))
 WSPITEMIDLIST.SHGetPathFromIDList = staticmethod(lambda pidl, _shgpfidl=_WShUtil._wrap('SHGetPathFromIDListW', (wintypes.BOOL, 0), (WSPITEMIDLIST, 1), (wintypes.LPWSTR, 1)): p.value if (p := ctypes.create_unicode_buffer(261)) and _shgpfidl(pidl, p) is not None else None)
 WSPITEMIDLIST.SHParseDisplayName = staticmethod(lambda name, query_attributes=0, bind_context=None, _shpdn=_WShUtil._wrap('SHParseDisplayName', (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (WSPPITEMIDLIST, 2), (WSSFGAO, 1), (WSPSFGAO, 2)): None if (p_a := _shpdn(name, bind_context, query_attributes)) is None else (p_a if query_attributes else p_a[0]))
+WSPITEMIDLIST.SHGetDataFromIDList = staticmethod(lambda parent, pidl, _shgdfidl=_WShUtil._wrap('SHGetDataFromIDListW', (wintypes.LPVOID, 1), (WSPITEMIDLIST, 1), (wintypes.INT, 1), (WSPFINDDATA, 2), (wintypes.INT, 1)): _shgdfidl(parent, pidl, 1, ctypes.sizeof(WSFINDDATA)))
 PIDL = WSPITEMIDLIST
 
 class WSSTRRET(ctypes.Structure):
@@ -6195,8 +6253,6 @@ class IShellFolder(IUnknown):
     return (interface or self.__class__)(self._protos['BindToObject'](self.pI, pidl, bind_context, (interface or self.__class__).IID), self.factory)
   def BindToStorage(self, pidl, interface=None, bind_context=None):
     return (interface or IStream)(self._protos['BindToStorage'](self.pI, pidl, bind_context, (interface or IStream).IID), self.factory)
-  def CreateItemFromRelativeIDList(self, pidl, interface=None):
-    return IShellItem.SHCreateItemWithParent(self, pidl, interface)
   def GetDisplayName(self, name_form=0):
     return None if (pidl := WSPITEMIDLIST(self)) is None else pidl.GetName(name_form)
   @property
@@ -6235,6 +6291,15 @@ class IShellFolder(IUnknown):
   @property
   def Path(self):
     return self.GetPath()
+  def GetData(self):
+    return None if (pidl := PIDL(self)) is None else pidl.Data
+  @property
+  def Data(self):
+    return self.GetData()
+  def GetDataFromRelativeIDList(self, pidl):
+    return WSPITEMIDLIST.SHGetDataFromIDList(self, pidl)
+  def CreateItemFromRelativeIDList(self, pidl, interface=None):
+    return IShellItem.SHCreateItemWithParent(self, pidl, interface)
   def __iter__(self):
     return self.EnumObjects()
   SHBindToFolderIDListParentEx = classmethod(lambda cls, root, pidl, interface=None, bind_context=None, _shbtfidlp=_WShUtil._wrap('SHBindToFolderIDListParentEx', (wintypes.LPVOID, 1), (WSPITEMIDLIST, 1), (wintypes.PLPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), (WSPPITEMIDLIST, 2)): None if (p_p := _shbtfidlp(root, pidl, bind_context, (interface or cls).IID)) is None else ((interface or cls)(p_p[0], getattr(root, 'factory', None)), _WShUtil._bind_pidls(p_p[1], pidl)))
@@ -6254,9 +6319,7 @@ class IShellItem(IUnknown):
     if clsid_component is False:
       return IShellItem(IShellFolder(), factory)
     if isinstance(clsid_component, str):
-      if (self := _WShUtil._set_factory(cls.SHCreateItemFromParsingName(clsid_component.rstrip('\\'), cls), factory)) is None:
-        self = _WShUtil._set_factory(cls.SHCreateItemFromParsingName(clsid_component.rstrip('\\'), cls, bind_context=getattr(IBindCtx, 'AllowNonExistingFolder' if clsid_component.endswith('\\') else 'AllowNonExistingFile')), factory)
-      return self
+      clsid_component = WSPITEMIDLIST(clsid_component)
     if isinstance(clsid_component, WSPITEMIDLIST):
       return _WShUtil._set_factory(cls.SHCreateItemFromIDList(clsid_component, cls), factory)
     if isinstance(clsid_component, (IShellFolder, IShellItem)):
@@ -6322,6 +6385,11 @@ class IShellItem(IUnknown):
   @property
   def Path(self):
     return self.GetPath()
+  def GetData(self):
+    return None if (pidl := PIDL(self)) is None else pidl.Data
+  @property
+  def Data(self):
+    return self.GetData()
   def AsFolder(self, bind_context=None):
     return self.BindToHandler('SFObject', bind_context)
   def AsStream(self, bind_context=None):
@@ -6332,6 +6400,10 @@ class IShellItem(IUnknown):
     return self.BindToHandler('EnumItems', bind_context)
   def GetStorageContent(self, bind_context=None):
     return self.BindToHandler('StorageEnum', bind_context)
+  def GetImageFactory(self):
+    return self.QueryInterface(IShellItemImageFactory, self.factory)
+  def GetImage(self, size, flags=0):
+    return None if (f := self.GetImageFactory()) is None else f.GetImage(size, flags)
   SHCreateItemFromIDList = classmethod(lambda cls, pidl, interface=None, _shcifidl=_WShUtil._wrap('SHCreateItemFromIDList', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifidl(pidl, (interface or cls).IID)))
   SHCreateItemFromParsingName = classmethod(lambda cls, name, interface=None, bind_context=None, _shcifpn=_WShUtil._wrap('SHCreateItemFromParsingName', (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifpn(name, bind_context, (interface or cls).IID)))
   SHCreateItemFromRelativeName = classmethod(lambda cls, parent, name, interface=None, bind_context=None, _shcifrn=_WShUtil._wrap('SHCreateItemFromRelativeName', (wintypes.LPVOID, 1), (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): _WShUtil._set_factory((interface or cls)(_shcifrn(parent, name, bind_context, (interface or cls).IID)), getattr(parent, 'factory', None)))
@@ -6425,13 +6497,36 @@ class IShellItemArray(IUnknown):
   SHCreateShellItemArrayFromIDLists = classmethod(lambda cls, pidls, _shcsiafidl=_WShUtil._wrap('SHCreateShellItemArrayFromIDLists', (wintypes.UINT, 1), (WSPPITEMIDLIST, 1), (wintypes.PLPVOID, 2)): cls(_shcsiafidl((0 if pidls is None else len(pidls)), (pidls if pidls is None or isinstance(pidls, ctypes.Array) else (WSPITEMIDLIST * len(pidls))(*pidls)))))
   SHCreateShellItemArrayFromShellItem = classmethod(lambda cls, item, interface=None, _shcsiafsi=_WShUtil._wrap('SHCreateShellItemArrayFromShellItem', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): _WShUtil._set_factory((interface or cls)(_shcsiafsi(item, (interface or cls).IID)), getattr(item, 'factory', None)))
   def __len__(self):
-    return self.GetCount()
+    if (l := getattr(self, '_len', False)) is False:
+      l = self.GetCount()
+      self._len = l
+    return l
   def __getitem__(self, key):
-    if not isinstance(key, int):
-      raise TypeError
-    if (i := self.GetItemAt(key if key >= 0 else len(self) + key)) is None:
-      raise IndexError
-    return i
+    return self.GetItemAt(k) if isinstance((k := range(len(self))[key]), int) else tuple(map(self.GetItemAt, k))
+
+class HBITMAP(wintypes.HBITMAP):
+  def __del__(self):
+    gdi32.DeleteObject(self)
+  def Save(self, path):
+    if (fact := IWICImagingFactory()) is None or (bm := fact.CreateBitmapFromHBITMAP(self)) is None or (enc := fact.CreateEncoder(path.rsplit('.', 1)[-1])) is None or (istr := IStream.CreateOnFile(path, 'write')) is None or not enc.Initialize(istr) or (nf := enc.CreateNewFrame()) is None or not (fenc := nf[0]).Initialize() or not fenc.WriteSource(bm) or not fenc.Commit() or not enc.Commit():
+      return False
+    return True
+PHBITMAP = ctypes.POINTER(HBITMAP)
+
+class IShellItemImageFactory(IUnknown):
+  IID = GUID(0xbcc18b79, 0xba16, 0x442f, 0x80, 0xc4, 0x8a, 0x59, 0xc3, 0x0c, 0x46, 0x3b)
+  _protos['GetImage'] = 3, (SIZE, WSSIIGBF), (PHBITMAP,)
+  def __new__(cls, clsid_component=False, factory=None):
+    if isinstance(clsid_component, str):
+      if '::' in clsid_component or (clsid_component := WSPITEMIDLIST.ILCreateFromPath(clsid_component)) is None:
+        clsid_component = WSPITEMIDLIST.SHParseDisplayName(clsid_component)
+    if isinstance(clsid_component, WSPITEMIDLIST):
+      return _WShUtil._set_factory(IShellItem.SHCreateItemFromIDList(clsid_component, IShellItemImageFactory), factory)
+    if isinstance(clsid_component, IShellItem):
+      return _WShUtil._set_factory(clsid_component.GetImageFactory(), factory)
+    return IUnknown.__new__(cls, clsid_component, factory)
+  def GetImage(self, size, flags=0):
+    return self.__class__._protos['GetImage'](self.pI, size, flags)
 
 class IFileOperation(IUnknown):
   CLSID = GUID(0x3ad05575, 0x8857, 0x4850, 0x92, 0x77, 0x11, 0xb8, 0x5b, 0xdb, 0x8e, 0x09)
