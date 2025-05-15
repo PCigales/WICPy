@@ -6038,9 +6038,7 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
       if isinstance(a, WSPITEMIDLIST):
         return a.Clone()
       if isinstance(a, str):
-        if ('::' in a or (self := WSPITEMIDLIST.ILCreateFromPath(a.rstrip('\\'))) is None) and (self := WSPITEMIDLIST.SHParseDisplayName(a.rstrip('\\'))) is None:
-          self = WSPITEMIDLIST.SHParseDisplayName(a.rstrip('\\'), bind_context=getattr(IBindCtx, 'AllowNonExistingFolder' if a.endswith('\\') else 'AllowNonExistingFile'))
-        return self
+        return WSPITEMIDLIST.SHParseDisplayName(a.rstrip('\\'), bind_context=getattr(IBindCtx, 'AllowNonExistingFolder' if a.endswith('\\') else 'AllowNonExistingFile'))
       if isinstance(a, (IShellFolder, IShellItem)):
         return WSPITEMIDLIST.SHGetIDListFromObject(a)
     return cls.__bases__[0].__new__(cls, *args, _needsfree=False)
@@ -6055,6 +6053,12 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
     if self and getattr(self, '_needsfree', False):
       ole32.CoTaskMemFree(self)
     getattr(self.__class__.__bases__[0], '__del__', id)(self)
+  @classmethod
+  def FromName(cls, name, bind_context=None):
+    return cls.SHParseDisplayName(name, bind_context=bind_context)
+  @classmethod
+  def FromPath(cls, path):
+    return cls.ILCreateFromPath(path)
   @property
   def content(self):
     return None if self is None else self.contents.value
@@ -6253,6 +6257,12 @@ class IShellFolder(IUnknown):
     return (interface or self.__class__)(self._protos['BindToObject'](self.pI, pidl, bind_context, (interface or self.__class__).IID), self.factory)
   def BindToStorage(self, pidl, interface=None, bind_context=None):
     return (interface or IStream)(self._protos['BindToStorage'](self.pI, pidl, bind_context, (interface or IStream).IID), self.factory)
+  @classmethod
+  def FromName(cls, name, bind_context=None, factory=None):
+    return None if (pidl := WSPITEMIDLIST.FromName(name, bind_context)) is None else _WShUtil._set_factory(cls.SHBindToObject(None, pidl), factory)
+  @classmethod
+  def FromPath(cls, path, factory=None):
+    return None if (pidl := WSPITEMIDLIST.FromPath(path)) is None else _WShUtil._set_factory(cls.SHBindToObject(None, pidl), factory)
   def GetDisplayName(self, name_form=0):
     return None if (pidl := WSPITEMIDLIST(self)) is None else pidl.GetName(name_form)
   @property
@@ -6319,7 +6329,7 @@ class IShellItem(IUnknown):
     if clsid_component is False:
       return IShellItem(IShellFolder(), factory)
     if isinstance(clsid_component, str):
-      clsid_component = WSPITEMIDLIST(clsid_component)
+      return _WShUtil._set_factory(cls.SHCreateItemFromParsingName(clsid_component.rstrip('\\'), cls, bind_context=getattr(IBindCtx, 'AllowNonExistingFolder' if clsid_component.endswith('\\') else 'AllowNonExistingFile')), factory)
     if isinstance(clsid_component, WSPITEMIDLIST):
       return _WShUtil._set_factory(cls.SHCreateItemFromIDList(clsid_component, cls), factory)
     if isinstance(clsid_component, (IShellFolder, IShellItem)):
@@ -6360,6 +6370,12 @@ class IShellItem(IUnknown):
     if interface is None:
       return None
     return interface(self._protos['BindToHandler'](self.pI, bind_context, handler_guid, interface.IID), self.factory)
+  @classmethod
+  def FromName(cls, name, bind_context=None, factory=None):
+    return _WShUtil._set_factory(cls.SHCreateItemFromParsingName(name, cls, bind_context), factory)
+  @classmethod
+  def FromPath(cls, path, factory=None):
+    return None if (pidl := WSPITEMIDLIST.FromPath(path)) is None else _WShUtil._set_factory(cls.SHCreateItemFromIDList(pidl, cls), factory)
   @property
   def Name(self):
     return self.GetDisplayName('NormalDisplay')
@@ -6507,8 +6523,8 @@ class IShellItemArray(IUnknown):
 class HBITMAP(wintypes.HBITMAP):
   def __del__(self):
     gdi32.DeleteObject(self)
-  def Save(self, path):
-    if (fact := IWICImagingFactory()) is None or (bm := fact.CreateBitmapFromHBITMAP(self)) is None or (enc := fact.CreateEncoder(path.rsplit('.', 1)[-1])) is None or (istr := IStream.CreateOnFile(path, 'write')) is None or not enc.Initialize(istr) or (nf := enc.CreateNewFrame()) is None or not (fenc := nf[0]).Initialize() or not fenc.WriteSource(bm) or not fenc.Commit() or not enc.Commit():
+  def Save(self, path, format=None, imaging_factory=None):
+    if (fact := (imaging_factory or IWICImagingFactory())) is None or (bm := fact.CreateBitmapFromHBITMAP(self)) is None or (enc := fact.CreateEncoder(format or (p[2] if (p := path.rpartition('.'))[1] == '.' else 'png'))) is None or (istr := IStream.CreateOnFile(path, 'write')) is None or not enc.Initialize(istr) or (nf := enc.CreateNewFrame()) is None or not (fenc := nf[0]).Initialize() or not fenc.WriteSource(bm) or not fenc.Commit() or not enc.Commit():
       return False
     return True
 PHBITMAP = ctypes.POINTER(HBITMAP)
@@ -6518,15 +6534,20 @@ class IShellItemImageFactory(IUnknown):
   _protos['GetImage'] = 3, (SIZE, WSSIIGBF), (PHBITMAP,)
   def __new__(cls, clsid_component=False, factory=None):
     if isinstance(clsid_component, str):
-      if '::' in clsid_component or (clsid_component := WSPITEMIDLIST.ILCreateFromPath(clsid_component)) is None:
-        clsid_component = WSPITEMIDLIST.SHParseDisplayName(clsid_component)
+      clsid_component = WSPITEMIDLIST(clsid_component)
     if isinstance(clsid_component, WSPITEMIDLIST):
-      return _WShUtil._set_factory(IShellItem.SHCreateItemFromIDList(clsid_component, IShellItemImageFactory), factory)
+      return _WShUtil._set_factory(IShellItem.SHCreateItemFromIDList(clsid_component, cls), factory)
     if isinstance(clsid_component, IShellItem):
       return _WShUtil._set_factory(clsid_component.GetImageFactory(), factory)
     return IUnknown.__new__(cls, clsid_component, factory)
   def GetImage(self, size, flags=0):
     return self.__class__._protos['GetImage'](self.pI, size, flags)
+  @classmethod
+  def FromName(cls, name, bind_context=None, factory=None):
+    return _WShUtil._set_factory(IShellItem.SHCreateItemFromParsingName(name, cls, bind_context), factory)
+  @classmethod
+  def FromPath(cls, path, factory=None):
+    return None if (pidl := WSPITEMIDLIST.FromPath(path)) is None else _WShUtil._set_factory(IShellItem.SHCreateItemFromIDList(pidl, cls), factory)
 
 class IFileOperation(IUnknown):
   CLSID = GUID(0x3ad05575, 0x8857, 0x4850, 0x92, 0x77, 0x11, 0xb8, 0x5b, 0xdb, 0x8e, 0x09)
