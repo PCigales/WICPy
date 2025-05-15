@@ -6055,10 +6055,10 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
     getattr(self.__class__.__bases__[0], '__del__', id)(self)
   @classmethod
   def FromName(cls, name, bind_context=None):
-    return cls.SHParseDisplayName(name, bind_context=bind_context)
+    return cls.SHParseDisplayName(name.rstrip('\\'), bind_context=bind_context)
   @classmethod
   def FromPath(cls, path):
-    return cls.ILCreateFromPath(path)
+    return cls.ILCreateFromPath(path.rstrip('\\'))
   @property
   def content(self):
     return None if self is None else self.contents.value
@@ -6129,9 +6129,6 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
   @property
   def Path(self):
     return self.GetPath()
-  @classmethod
-  def FromPath(cls, path):
-    return cls.ILCreateFromPath(path)
   def GetData(self):
     return None if (pr := self.GetParentAndRelativeIDList(IShellFolder)) is None else WSPITEMIDLIST.SHGetDataFromIDList(*pr)
   @property
@@ -6372,7 +6369,7 @@ class IShellItem(IUnknown):
     return interface(self._protos['BindToHandler'](self.pI, bind_context, handler_guid, interface.IID), self.factory)
   @classmethod
   def FromName(cls, name, bind_context=None, factory=None):
-    return _WShUtil._set_factory(cls.SHCreateItemFromParsingName(name, cls, bind_context), factory)
+    return _WShUtil._set_factory(cls.SHCreateItemFromParsingName(name.rstrip('\\'), cls, bind_context), factory)
   @classmethod
   def FromPath(cls, path, factory=None):
     return None if (pidl := WSPITEMIDLIST.FromPath(path)) is None else _WShUtil._set_factory(cls.SHCreateItemFromIDList(pidl, cls), factory)
