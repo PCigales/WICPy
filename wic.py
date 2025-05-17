@@ -5834,12 +5834,23 @@ WSSIGDN = type('WSSIGDN', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for 
 WSSichintf = {'Display': 0, 'AllFields': 0x80000000, 'Canonical': 0x10000000, 'TestFileSyspathIfNotEqual': 0x20000000}
 WSSICHINTF = type('WSSICHINTF', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSSichintf.items()}, '_tab_cn': {c: n for n, c in WSSichintf.items()}, '_def': 0})
 
+WSKeyState = {'LButton': 0x1, 'RButton': 0x2, 'MButton': 0x10, 'Shift': 0x4, 'Ctrl': 0x8, 'Control': 0x8, 'Alt': 0x20}
+WSKEYSTATE = type('WSKEYSTATE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSKeyState.items()}, '_tab_cn': {c: n for n, c in WSKeyState.items()}, '_def': 0})
+
+POINT = _WSMeta('POINT', (_BTStruct, wintypes.POINT), {})
+
+WSDropEffect = {'None': 0, 'Copy': 0x1, 'Move': 0x2, 'Link': 0x4, 'Scroll': 0x80000000}
+WSDROPEFFECT = type('WSDROPEFFECT', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSDropEffect.items()}, '_tab_cn': {c: n for n, c in WSDropEffect.items()}, '_def': 0})
+WSPDROPEFFECT = ctypes.POINTER(WSDROPEFFECT)
+
 WSBhid = {
   'SFObject': GUID(0x3981e224, 0xf559, 0x11d3, 0x8e, 0x3a, 0x00, 0xc0, 0x4f, 0x68, 0x37, 0xd5),
+  'SFUIObject': GUID(0x3981e225, 0xf559, 0x11d3, 0x8e, 0x3a, 0x00, 0xc0, 0x4f, 0x68, 0x37, 0xd5),
   'Stream': GUID(0x1cebb3ab, 0x7c10, 0x499a, 0xa4, 0x17, 0x92, 0xca, 0x16, 0xc4, 0xcb, 0x83),
   'LinkTargetItem': GUID(0x3981e228, 0xf559, 0x11d3, 0x8e, 0x3a, 0x00, 0xc0, 0x4f, 0x68, 0x37, 0xd5),
   'StorageEnum': GUID(0x4621a4e3, 0xf0d6, 0x4773, 0x8a, 0x9c, 0x46, 0xe7, 0x7b, 0x17, 0x48, 0x40),
-  'EnumItems': GUID(0x94f60519, 0x2850, 0x4924, 0xaa, 0x5a, 0xd1, 0x5e, 0x84, 0x86, 0x80, 0x39)
+  'EnumItems': GUID(0x94f60519, 0x2850, 0x4924, 0xaa, 0x5a, 0xd1, 0x5e, 0x84, 0x86, 0x80, 0x39),
+  'DataObject': GUID(0xb8c0bd9f, 0xed24, 0x455c, 0x83, 0xe6, 0xd5, 0x39, 0x0c, 0x4f, 0xe8, 0xc4)
 }
 WSBHID = _GMeta('WSBHID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WSBhid.items()}, '_tab_gn': {g: n for n, g in WSBhid.items()}, '_def': None})
 WSPBHID = type('WSPBHID', (_BPGUID, ctypes.POINTER(WSBHID)), {'_type_': WSBHID})
@@ -6320,6 +6331,26 @@ class IShellFolder(IUnknown):
   SHGetDesktopFolder = classmethod(lambda cls, _shgdf=_WShUtil._wrap('SHGetDesktopFolder', (wintypes.PLPVOID, 2)): cls(_shgdf()))
 IShellFolder2 = IShellFolder
 
+class IDataObject(IUnknown):
+  IID = GUID(0x0000010e, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+
+class IDropTarget(IUnknown):
+  IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+  _protos['DragEnter'] = 3, (wintypes.LPVOID, WSKEYSTATE, POINT, WSPDROPEFFECT), ()
+  _protos['Drop'] = 6, (wintypes.LPVOID, WSKEYSTATE, POINT, WSPDROPEFFECT), ()
+  def DragEnter(self, obj, effect, key_state=1, cursor_coordinates=(0,0)):
+    e = WSDROPEFFECT(effect)
+    return None if self._protos['DragEnter'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
+  def Drop(self, obj, effect, key_state=1, cursor_coordinates=(0,0)):
+    e = WSDROPEFFECT(effect)
+    return None if self._protos['Drop'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
+  def Copy(self, obj):
+    return self.DragEnter(obj, 'Copy') != 0 and self.Drop(obj, 'Copy') is not None
+  def Move(self, obj):
+    return self.DragEnter(obj, 'Move') != 0 and self.Drop(obj, 'Move') is not None
+  def Shortcut(self, obj):
+    return self.DragEnter(obj, 'Link') != 0 and self.Drop(obj, 'Link') is not None
+
 class IShellItem(IUnknown):
   IID = GUID(0x7e9fb0d3, 0x919f, 0x4307, 0xab, 0x2e, 0x9b, 0x18, 0x60, 0x31, 0x0c, 0x93)
   _protos['BindToHandler'] = 3, (wintypes.LPVOID, WSPBHID, PUUID), (wintypes.PLPVOID,)
@@ -6358,18 +6389,23 @@ class IShellItem(IUnknown):
   def BindToHandler(self, handler_guid, interface=None, bind_context=None):
     if interface is None:
       try:
-        handler_guid = WSBHID(handler_guid)
-        if handler_guid == 'SFObject':
+        n = WSBHID(handler_guid).name
+        if n == 'SFObject':
           interface = IShellFolder
-        elif handler_guid == 'Stream':
+        elif n == 'SFUIObject':
+          interface = IDropTarget
+        elif n == 'Stream':
           interface = IStream
-        elif handler_guid == 'LinkTargetItem':
+        elif n == 'LinkTargetItem':
           interface = IShellItem
-        elif handler_guid in ('StorageEnum', 'EnumItems'):
+        elif n in ('StorageEnum', 'EnumItems'):
           interface = IEnumShellItems
+        elif n == 'DataObject':
+          interface = IDataObject
       except:
         pass
     if interface is None:
+      ISetLastError(0x80070057)
       return None
     return interface(self._protos['BindToHandler'](self.pI, bind_context, handler_guid, interface.IID), self.factory)
   @classmethod
@@ -6422,6 +6458,30 @@ class IShellItem(IUnknown):
     return self.QueryInterface(IShellItemImageFactory, self.factory)
   def GetImage(self, size, flags=0):
     return None if (f := self.GetImageFactory()) is None else f.GetImage(size, flags)
+  def CopyTo(self, destination, name=None, confirmation=True):
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.CopyItem(self, destination, name) is None:
+      return None
+    return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
+  def MoveTo(self, destination, name=None, confirmation=True):
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.MoveItem(self, destination, name) is None:
+      return None
+    return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
+  def Delete(self, confirmation=True):
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.DeleteItem(self) is None:
+      return None
+    return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
+  def DragCopyTo(self, destination):
+    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+      return None
+    return d.Copy(s)
+  def DragMoveTo(self, destination):
+    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+      return None
+    return d.Move(s)
+  def DragShortcutTo(self, destination):
+    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+      return None
+    return d.Shortcut(s)
   SHCreateItemFromIDList = classmethod(lambda cls, pidl, interface=None, _shcifidl=_WShUtil._wrap('SHCreateItemFromIDList', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifidl(pidl, (interface or cls).IID)))
   SHCreateItemFromParsingName = classmethod(lambda cls, name, interface=None, bind_context=None, _shcifpn=_WShUtil._wrap('SHCreateItemFromParsingName', (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifpn(name, bind_context, (interface or cls).IID)))
   SHCreateItemFromRelativeName = classmethod(lambda cls, parent, name, interface=None, bind_context=None, _shcifrn=_WShUtil._wrap('SHCreateItemFromRelativeName', (wintypes.LPVOID, 1), (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): _WShUtil._set_factory((interface or cls)(_shcifrn(parent, name, bind_context, (interface or cls).IID)), getattr(parent, 'factory', None)))
@@ -6476,6 +6536,7 @@ class IEnumShellItems(IUnknown):
 
 class IShellItemArray(IUnknown):
   IID = GUID(0xb63ea76d, 0x1f85, 0x456f, 0xa1, 0x9c, 0x48, 0x15, 0x9e, 0xfa, 0x85, 0x8b)
+  _protos['BindToHandler'] = 3, (wintypes.LPVOID, WSPBHID, PUUID), (wintypes.PLPVOID,)
   _protos['GetAttributes'] = 6, (WSSIATTRIBFLAGS, WSSFGAO, WSPSFGAO), (), wintypes.ULONG
   _protos['GetCount'] = 7, (), (wintypes.PDWORD,)
   _protos['GetItemAt'] = 8, (wintypes.DWORD,), (wintypes.PLPVOID,)
@@ -6517,6 +6578,43 @@ class IShellItemArray(IUnknown):
   SHCreateShellItemArray = classmethod(lambda cls, parent, pidls, _shcsia=_WShUtil._wrap('SHCreateShellItemArray', (WSPITEMIDLIST, 1), (wintypes.LPVOID, 1), (wintypes.UINT, 1), (WSPPITEMIDLIST, 1), (wintypes.PLPVOID, 2)): _WShUtil._set_factory(cls(_shcsia(*((None, parent) if isinstance(parent, (IShellFolder, wintypes.LPVOID)) else (parent, None)), (0 if pidls is None else len(pidls)), (pidls if pidls is None or isinstance(pidls, ctypes.Array) else (WSPITEMIDLIST * len(pidls))(*pidls)))), getattr(parent, 'factory', None)))
   SHCreateShellItemArrayFromIDLists = classmethod(lambda cls, pidls, _shcsiafidl=_WShUtil._wrap('SHCreateShellItemArrayFromIDLists', (wintypes.UINT, 1), (WSPPITEMIDLIST, 1), (wintypes.PLPVOID, 2)): cls(_shcsiafidl((0 if pidls is None else len(pidls)), (pidls if pidls is None or isinstance(pidls, ctypes.Array) else (WSPITEMIDLIST * len(pidls))(*pidls)))))
   SHCreateShellItemArrayFromShellItem = classmethod(lambda cls, item, interface=None, _shcsiafsi=_WShUtil._wrap('SHCreateShellItemArrayFromShellItem', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): _WShUtil._set_factory((interface or cls)(_shcsiafsi(item, (interface or cls).IID)), getattr(item, 'factory', None)))
+  def BindToHandler(self, handler_guid, interface=None, bind_context=None):
+    if interface is None:
+      try:
+        n = WSBHID(handler_guid).name
+        if n == 'SFUIObject':
+          interface = IDropTarget
+        elif n == 'DataObject':
+          interface = IDataObject
+      except:
+        pass
+    if interface is None:
+      ISetLastError(0x80070057)
+      return None
+    return interface(self._protos['BindToHandler'](self.pI, bind_context, handler_guid, interface.IID), self.factory)
+  def CopyTo(self, destination, confirmation=True):
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.CopyItems(self, destination) is None:
+      return None
+    return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
+  def MoveTo(self, destination, confirmation=True):
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.MoveItems(self, destination) is None:
+      return None
+    return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
+  def Delete(self, confirmation=True):
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.DeleteItems(self) is None:
+      return None
+    return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
+  def DragCopyTo(self, destination):
+    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+      return None
+    return d.Copy(s) or None
+  def DragMoveTo(self, destination):
+    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+      return None
+    return d.Move(s) or None
+  def DragShortcutTo(self, destination):
+    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+      return None
   def __len__(self):
     if (l := getattr(self, '_len', False)) is False:
       l = self.GetCount()
@@ -6590,14 +6688,13 @@ class IFileOperation(IUnknown):
   def DeleteItem(self, item):
     return self._protos['DeleteItem'](self.pI, item, None)
   def DeleteItems(self, items):
-    return self._protos['DeleteItems'](self.pI, items, None)
+    return self._protos['DeleteItems'](self.pI, items)
   def NewItem(self, destination, name, attributes=128, template=None):
     return self._protos['NewItem'](self.pI, destination, attributes, name, template, None)
   def PerformOperations(self):
     return self._protos['PerformOperations'](self.pI)
   def GetAnyOperationsAborted(self):
     return self._protos['GetAnyOperationsAborted'](self.pI)
-
 
 def Initialize(mode=6):
   if isinstance(mode, str):
