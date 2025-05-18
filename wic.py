@@ -537,7 +537,7 @@ class _BGUID:
     return g
   @classmethod
   def guid_name(cls, g):
-    return cls._tab_gn.get(g, GUID.to_string(g))
+    return g if isinstance(g, str) else cls._tab_gn.get(g, GUID.to_string(g))
   @classmethod
   def to_bytes(cls, obj):
     return obj.raw if isinstance(obj, wintypes.GUID) else (cls.name_guid(obj) or (b'\x00' * 16))
@@ -6295,20 +6295,20 @@ class IShellFolder(IUnknown):
     return self.GetDisplayName('ParentRelativeEditing')
   @property
   def SubFolders(self):
-    return None if (e := self.EnumObjects('Folders')) is None else {(self.GetDisplayNameOf(pidl, 'InFolder') or tuple(pidl.content)): self.BindToObject(pidl) for pidl in e}
+    return None if (e := self.EnumObjects(0x20)) is None else {(self.GetDisplayNameOf(pidl, 0x1) or tuple(pidl.content)): self.BindToObject(pidl) for pidl in e}
   @property
   def Children(self):
-    return None if None in (es := (self.EnumObjects('Folders'), self.EnumObjects('NonFolders'))) else tuple({(self.GetDisplayNameOf(pidl, 'InFolder') or tuple(pidl.content)): self.CreateItemFromRelativeIDList(pidl) for pidl in e} for e in es)
+    return None if None in (es := (self.EnumObjects(0x20), self.EnumObjects(0x40))) else tuple({(self.GetDisplayNameOf(pidl, 0x1) or tuple(pidl.content)): self.CreateItemFromRelativeIDList(pidl) for pidl in e} for e in es)
   def GetSubFolderFromRelativeParsingName(self, name, parsing_name=True):
     return None if (pidl := self.ParseDisplayName(name)) is None else self.BindToObject(pidl)
   def GetSubFolderFromRelativeName(self, name):
     name = name.lower()
-    return None if (e := self.EnumObjects('Folders')) is None else next((self.BindToObject(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 'InFolder') or '').lower() == name), None)
+    return None if (e := self.EnumObjects(0x20)) is None else next((self.BindToObject(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 0x1) or '').lower() == name), None)
   def GetChildFromRelativeParsingName(self, name):
     return self.CreateItemFromRelativeIDList(self.ParseDisplayName(name))
   def GetChildFromRelativeName(self, name):
     name = name.lower()
-    return None if (e := self.EnumObjects('Folders | NonFolders')) is None else next((self.CreateItemFromRelativeIDList(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 'InFolder') or '').lower() == name), None)
+    return None if (e := self.EnumObjects(0x60)) is None else next((self.CreateItemFromRelativeIDList(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 0x1) or '').lower() == name), None)
   def GetPath(self):
     return None if (pidl := WSPITEMIDLIST(self)) is None else pidl.GetPath()
   @property
@@ -6323,8 +6323,10 @@ class IShellFolder(IUnknown):
     return WSPITEMIDLIST.SHGetDataFromIDList(self, pidl)
   def CreateItemFromRelativeIDList(self, pidl, interface=None):
     return IShellItem.SHCreateItemWithParent(self, pidl, interface)
+  def AsDropTarget(self, bind_context=None):
+    return None if (i := IShellItem(self)) is None else i.BindToHandler('SFUIObject', bind_context=bind_context)
   def __iter__(self):
-    return self.EnumObjects()
+    return iter(()) if (e := self.EnumObjects()) is None else e
   SHBindToFolderIDListParentEx = classmethod(lambda cls, root, pidl, interface=None, bind_context=None, _shbtfidlp=_WShUtil._wrap('SHBindToFolderIDListParentEx', (wintypes.LPVOID, 1), (WSPITEMIDLIST, 1), (wintypes.PLPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), (WSPPITEMIDLIST, 2)): None if (p_p := _shbtfidlp(root, pidl, bind_context, (interface or cls).IID)) is None else ((interface or cls)(p_p[0], getattr(root, 'factory', None)), _WShUtil._bind_pidls(p_p[1], pidl)))
   SHBindToObject = classmethod(lambda cls, folder, pidl, interface=None, bind_context=None, _shbto=_WShUtil._wrap('SHBindToObject', (wintypes.LPVOID, 1), (WSPITEMIDLIST, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shbto(folder, pidl, bind_context, (interface or cls).IID), getattr(folder, 'factory', None)))
   SHBindToParent = classmethod(lambda cls, pidl, interface=None, _shbtp=_WShUtil._wrap('SHBindToParent', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2), (WSPPITEMIDLIST, 2)): None if (p_p := _shbtp(pidl, (interface or cls).IID)) is None else ((interface or cls)(p_p[0]), _WShUtil._bind_pidls(p_p[1], pidl)))
@@ -6345,10 +6347,16 @@ class IDropTarget(IUnknown):
     e = WSDROPEFFECT(effect)
     return None if self._protos['Drop'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
   def Copy(self, obj):
+    if isinstance(obj, (IShellItem, IShellItemArray)) and (obj := obj.AsDataObject()) is None:
+      return None
     return self.DragEnter(obj, 'Copy') != 0 and self.Drop(obj, 'Copy') is not None
   def Move(self, obj):
+    if isinstance(obj, (IShellItem, IShellItemArray)) and (obj := obj.AsDataObject()) is None:
+      return None
     return self.DragEnter(obj, 'Move') != 0 and self.Drop(obj, 'Move') is not None
   def Shortcut(self, obj):
+    if isinstance(obj, (IShellItem, IShellItemArray)) and (obj := obj.AsDataObject()) is None:
+      return None
     return self.DragEnter(obj, 'Link') != 0 and self.Drop(obj, 'Link') is not None
 
 class IShellItem(IUnknown):
@@ -6389,7 +6397,7 @@ class IShellItem(IUnknown):
   def BindToHandler(self, handler_guid, interface=None, bind_context=None):
     if interface is None:
       try:
-        n = WSBHID(handler_guid).name
+        n = WSBHID.guid_name(handler_guid)
         if n == 'SFObject':
           interface = IShellFolder
         elif n == 'SFUIObject':
@@ -6445,41 +6453,45 @@ class IShellItem(IUnknown):
   def Data(self):
     return self.GetData()
   def AsFolder(self, bind_context=None):
-    return self.BindToHandler('SFObject', bind_context)
+    return self.BindToHandler('SFObject', bind_context=bind_context)
   def AsStream(self, bind_context=None):
-    return self.BindToHandler('Stream', bind_context)
+    return self.BindToHandler('Stream', bind_context=bind_context)
   def GetLinkTarget(self, bind_context=None):
-    return self.BindToHandler('LinkTargetItem', bind_context)
+    return self.BindToHandler('LinkTargetItem', bind_context=bind_context)
   def GetContent(self, bind_context=None):
-    return self.BindToHandler('EnumItems', bind_context)
+    return self.BindToHandler('EnumItems', bind_context=bind_context)
   def GetStorageContent(self, bind_context=None):
-    return self.BindToHandler('StorageEnum', bind_context)
+    return self.BindToHandler('StorageEnum', bind_context=bind_context)
+  def AsDropTarget(self, bind_context=None):
+    return self.BindToHandler('SFUIObject', bind_context=bind_context)
+  def AsDataObject(self, bind_context=None):
+    return self.BindToHandler('DataObject', bind_context=bind_context)
   def GetImageFactory(self):
     return self.QueryInterface(IShellItemImageFactory, self.factory)
   def GetImage(self, size, flags=0):
     return None if (f := self.GetImageFactory()) is None else f.GetImage(size, flags)
   def CopyTo(self, destination, name=None, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.CopyItem(self, destination, name) is None:
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.CopyItem(self, d, name) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def MoveTo(self, destination, name=None, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.MoveItem(self, destination, name) is None:
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.MoveItem(self, d, name) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def Delete(self, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.DeleteItem(self) is None:
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or f.DeleteItem(self) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def DragCopyTo(self, destination):
-    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+    if (d := (destination if isinstance(destination, IDropTarget) else destination.AsDropTarget())) is None or (s := self.AsDataObject()) is None:
       return None
     return d.Copy(s)
   def DragMoveTo(self, destination):
-    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+    if (d := (destination if isinstance(destination, IDropTarget) else destination.AsDropTarget())) is None or (s := self.AsDataObject()) is None:
       return None
     return d.Move(s)
   def DragShortcutTo(self, destination):
-    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+    if (d := (destination if isinstance(destination, IDropTarget) else destination.AsDropTarget())) is None or (s := self.AsDataObject()) is None:
       return None
     return d.Shortcut(s)
   SHCreateItemFromIDList = classmethod(lambda cls, pidl, interface=None, _shcifidl=_WShUtil._wrap('SHCreateItemFromIDList', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifidl(pidl, (interface or cls).IID)))
@@ -6552,7 +6564,7 @@ class IShellItemArray(IUnknown):
     if isinstance(clsid_component, WSPITEMIDLIST):
       clsid_component = IShellFolder(clsid_component)
     if isinstance(clsid_component, IShellFolder):
-      return _WShUtil._set_factory(None if (e := clsid_component.EnumObjects('Folders | NonFolders')) is None else cls.SHCreateShellItemArray(clsid_component, tuple(e)), factory)
+      return _WShUtil._set_factory(None if (e := clsid_component.EnumObjects(0x60)) is None else cls.SHCreateShellItemArray(clsid_component, tuple(e)), factory)
     if isinstance(clsid_component, IEnumShellItems):
       if factory is False:
         factory = None
@@ -6581,7 +6593,7 @@ class IShellItemArray(IUnknown):
   def BindToHandler(self, handler_guid, interface=None, bind_context=None):
     if interface is None:
       try:
-        n = WSBHID(handler_guid).name
+        n = WSBHID.guid_name(handler_guid)
         if n == 'SFUIObject':
           interface = IDropTarget
         elif n == 'DataObject':
@@ -6592,28 +6604,30 @@ class IShellItemArray(IUnknown):
       ISetLastError(0x80070057)
       return None
     return interface(self._protos['BindToHandler'](self.pI, bind_context, handler_guid, interface.IID), self.factory)
+  def AsDataObject(self, bind_context=None):
+    return self.BindToHandler('DataObject', bind_context=bind_context)
   def CopyTo(self, destination, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.CopyItems(self, destination) is None:
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.CopyItems(self, d) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def MoveTo(self, destination, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.MoveItems(self, destination) is None:
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.MoveItems(self, d) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def Delete(self, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags('AllowUndo | NoConfirmMkDir | NoConfirmation') is None) or f.DeleteItems(self) is None:
+    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or f.DeleteItems(self) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def DragCopyTo(self, destination):
-    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+    if (d := (destination if isinstance(destination, IDropTarget) else destination.AsDropTarget())) is None or (s := self.AsDataObject()) is None:
       return None
     return d.Copy(s) or None
   def DragMoveTo(self, destination):
-    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+    if (d := (destination if isinstance(destination, IDropTarget) else destination.AsDropTarget())) is None or (s := self.AsDataObject()) is None:
       return None
     return d.Move(s) or None
   def DragShortcutTo(self, destination):
-    if (d := destination.BindToHandler('SFUIObject')) is None or (s := self.BindToHandler('DataObject')) is None:
+    if (d := (destination if isinstance(destination, IDropTarget) else destination.AsDropTarget())) is None or (s := self.AsDataObject()) is None:
       return None
   def __len__(self):
     if (l := getattr(self, '_len', False)) is False:
