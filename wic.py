@@ -6347,15 +6347,15 @@ class IDropTarget(IUnknown):
     e = WSDROPEFFECT(effect)
     return None if self._protos['Drop'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
   def Copy(self, obj):
-    if isinstance(obj, (IShellItem, IShellItemArray)) and (obj := obj.AsDataObject()) is None:
+    if not isinstance(obj, IDataObject) and (obj := obj.AsDataObject()) is None:
       return None
     return self.DragEnter(obj, 'Copy') != 0 and self.Drop(obj, 'Copy') is not None
   def Move(self, obj):
-    if isinstance(obj, (IShellItem, IShellItemArray)) and (obj := obj.AsDataObject()) is None:
+    if not isinstance(obj, IDataObject) and (obj := obj.AsDataObject()) is None:
       return None
     return self.DragEnter(obj, 'Move') != 0 and self.Drop(obj, 'Move') is not None
   def Shortcut(self, obj):
-    if isinstance(obj, (IShellItem, IShellItemArray)) and (obj := obj.AsDataObject()) is None:
+    if not isinstance(obj, IDataObject) and (obj := obj.AsDataObject()) is None:
       return None
     return self.DragEnter(obj, 'Link') != 0 and self.Drop(obj, 'Link') is not None
 
