@@ -6325,6 +6325,8 @@ class IShellFolder(IUnknown):
     return IShellItem.SHCreateItemWithParent(self, pidl, interface)
   def AsDropTarget(self, bind_context=None):
     return None if (i := IShellItem(self)) is None else i.BindToHandler('SFUIObject', bind_context=bind_context)
+  def AsDataObject(self, bind_context=None):
+    return None if (i := IShellItem(self)) is None else i.BindToHandler('DataObject', bind_context=bind_context)
   def __iter__(self):
     return iter(()) if (e := self.EnumObjects()) is None else e
   SHBindToFolderIDListParentEx = classmethod(lambda cls, root, pidl, interface=None, bind_context=None, _shbtfidlp=_WShUtil._wrap('SHBindToFolderIDListParentEx', (wintypes.LPVOID, 1), (WSPITEMIDLIST, 1), (wintypes.PLPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), (WSPPITEMIDLIST, 2)): None if (p_p := _shbtfidlp(root, pidl, bind_context, (interface or cls).IID)) is None else ((interface or cls)(p_p[0], getattr(root, 'factory', None)), _WShUtil._bind_pidls(p_p[1], pidl)))
