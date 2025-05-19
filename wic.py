@@ -5800,7 +5800,7 @@ class WSFINDDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('dwFileAttributes', WSFILEATTRIBUTES), ('ftCreationTime', FILETIME), ('ftLastAccessTime', FILETIME), ('ftLastWriteTime', FILETIME), ('nFileSizeHigh', wintypes.DWORD), ('nFileSizeLow', wintypes.DWORD), ('dwReserved0', wintypes.DWORD), ('dwReserved1', wintypes.DWORD), ('cFileName', wintypes.WCHAR * 260), ('cAlternateFileName', wintypes.WCHAR * 14)]
   def to_tuple(self):
     return tuple(getattr(self, n) for n, t in self.__class__._fields_)
-WSPFINDDATA = type('WSPFINDDATA', (_BPStruct, ctypes.POINTER(WSFINDDATA)),  {'_type_': WSFINDDATA})
+WSPFINDDATA = type('WSPFINDDATA', (_BPStruct, ctypes.POINTER(WSFINDDATA)), {'_type_': WSFINDDATA})
 
 class WSBINDOPTS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbStruct', wintypes.DWORD), ('grfFlags', WSBINDFLAGS), ('grfMode', WSSTGM), ('dwTickCountDeadline', wintypes.DWORD), ('dwTrackFlags', wintypes.DWORD), ('dwClassContext', wintypes.DWORD), ('locale', wintypes.LCID), ('pServerInfo', wintypes.LPVOID), ('hwnd', wintypes.HWND)]
@@ -5818,9 +5818,28 @@ class WSBINDOPTS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
     return {k[0]: getattr(self, k[0]) for k in self.__class__._fields_ if k[0] != 'cbStruct'}
 WSPBINDOPTS = type('WSPBINDOPTS', (_BPStruct, ctypes.POINTER(WSBINDOPTS)),  {'_type_': WSBINDOPTS})
 
+class WSCMINVOKECOMMANDINFO(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cbSize', wintypes.DWORD), ('fMask', wintypes.DWORD), ('hwnd', wintypes.HWND), ('lpVerb', wintypes.LPCSTR), ('lpParameters', wintypes.LPCSTR), ('lpDirectory', wintypes.LPCSTR), ('nShow', wintypes.UINT), ('dwHotKey', wintypes.DWORD), ('hIcon', wintypes.HANDLE)]
+  def __init__(self, *args, **kwargs):
+    super().__init__(ctypes.sizeof(self.__class__), *args, **kwargs)
+  @classmethod
+  def from_param(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, dict):
+      return cls(*(obj.get(k[0], 0) for k in cls._fields_ if k[0] != 'cbSize'))
+    else:
+      return cls(*(obj[i] for i in range(min(len(cls._fields_) - 1, len(obj)))))
+  def to_dict(self):
+    return {k[0]: getattr(self, k[0]) for k in self.__class__._fields_ if k[0] != 'cbSize'}
+WSPCMINVOKECOMMANDINFO = type('WSPCMINVOKECOMMANDINFO', (_BPStruct, ctypes.POINTER(WSCMINVOKECOMMANDINFO)), {'_type_': WSCMINVOKECOMMANDINFO})
+
 WSSfgao = {'CanCopy': 0x1, 'CanMove': 0x2, 'CanLink': 0x4, 'Storage': 0x8, 'CanRename': 0x10, 'CanDelete': 0x20, 'HasPropSheet': 0x40, 'Droptarget': 0x100, 'System': 0x1000, 'Encrypted': 0x2000, 'IsSlow': 0x4000, 'Ghosted': 0x8000, 'Link': 0x10000, 'Share': 0x20000, 'ReadOnly': 0x40000, 'Hidden': 0x80000, 'NonEnumerated': 0x100000, 'NewContent': 0x200000, 'Stream': 0x400000, 'StorageAncestor': 0x800000, 'Validate': 0x1000000, 'Removable': 0x2000000, 'Compressed': 0x4000000, 'Browsable': 0x8000000, 'FileSysAncestor': 0x10000000, 'Folder': 0x20000000, 'FileSystem': 0x40000000, 'HasSubFolder': 0x80000000}
 WSSFGAO = type('WSSFGAO', (_BCodeOr, wintypes.ULONG), {'_tab_nc': {n.lower(): c for n, c in WSSfgao.items()}, '_tab_cn': {c: n for n, c in WSSfgao.items()}, '_def': 0})
 WSPSFGAO = ctypes.POINTER(WSSFGAO)
+
+WSShcids = {'AllFields': 0x80000000, 'CanonicalOnly': 0x10000000}
+WSSHCIDS = type('WSSHCIDS', (_BCodeOr, wintypes.LPARAM), {'_tab_nc': {n.lower(): c for n, c in WSShcids.items()}, '_tab_cn': {c: n for n, c in WSShcids.items()}, '_def': 0})
 
 WSShgdnf = {'Normal': 0, 'InFolder': 0x1, 'ForEditing': 0x1000, 'ForAddressBar': 0x4000, 'ForParsing': 0x8000}
 WSSHGDNF = type('WSSHGDNF', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSShgdnf.items()}, '_tab_cn': {c: n for n, c in WSShgdnf.items()}, '_def': 0})
@@ -6230,14 +6249,33 @@ class IEnumIDList(IUnknown):
       raise StopIteration
     return n[0]
 
+class IContextMenu(IUnknown):
+  IID = GUID(0x000214e4, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+  _protos['QueryContextMenu'] = 3, (wintypes.HMENU, wintypes.UINT, wintypes.UINT, wintypes.UINT, wintypes.UINT), (), wintypes.ULONG
+  _protos['InvokeCommand'] = 4, (WSPCMINVOKECOMMANDINFO,), ()
+  _protos['GetCommandString'] = 5, (wintypes.WPARAM, wintypes.UINT, wintypes.PUINT, wintypes.LPWSTR, wintypes.UINT), ()
+  def __new__(cls, clsid_component=False, factory=None):
+    if (self := super().__new__(cls, clsid_component, factory)) is not None:
+      self.QueryContextMenu()
+    return self
+  def QueryContextMenu(self):
+    return None if (n := self._protos['QueryContextMenu'](self.pI, None, 0, 0, 0, 0)) & (1 << 31) else n
+  def GetCommandString(self, identifier, information_flags=0):
+    s = ctypes.create_unicode_buffer(256)
+    return None if self._protos['GetCommandString'](self.pI, identifier, information_flags | 0x4, None, s, 255) is None else s.value
+  def InvokeCommand(self, command_verb, confirmation=True, shift_down=False, control_down=False):
+    return self._protos['InvokeCommand'](self.pI, WSCMINVOKECOMMANDINFO.from_param({'lpVerb': command_verb.encode(), 'fMask': ((0 if confirmation else 0x400) | (0x10000000 if shift_down else 0) | (0x40000000 if control_down else 0))}))
+
 class IShellFolder(IUnknown):
   IID = GUID(0x93f2f68c, 0x1d1b, 0x11d3, 0xa3, 0x0e, 0x00, 0xc0, 0x4f, 0x79, 0xab, 0xd1)
   _protos['ParseDisplayName'] = _WShUtil._wrap('ParseDisplayName', (wintypes.HWND, 1), (wintypes.LPVOID, 1), (wintypes.LPCWSTR, 1), (wintypes.PULONG, 1), (WSPPITEMIDLIST, 2), (WSPSFGAO, 1), p=3)
   _protos['EnumObjects'] = 4, (wintypes.HWND, WSSHCONTF), (wintypes.PLPVOID,)
   _protos['BindToObject'] = 5, (WSPITEMIDLIST, wintypes.LPVOID, PUUID), (wintypes.PLPVOID,)
   _protos['BindToStorage'] = 6, (WSPITEMIDLIST, wintypes.LPVOID, PUUID), (wintypes.PLPVOID,)
-  _protos['CompareID'] = 6, (wintypes.LPARAM, WSPITEMIDLIST, WSPITEMIDLIST), (wintypes.PLPVOID,)
+  _protos['CompareIDs'] = 7, (wintypes.LPARAM, WSPITEMIDLIST, WSPITEMIDLIST), (), wintypes.ULONG
+  _protos['CreateViewObject'] = 8, (wintypes.HWND, PUUID), (wintypes.PLPVOID,)
   _protos['GetAttributesOf'] = 9, (wintypes.UINT, WSPPITEMIDLIST, WSPSFGAO), ()
+  _protos['GetUIObjectOf'] = 10, (wintypes.HWND, wintypes.UINT, WSPPITEMIDLIST, PUUID, wintypes.PUINT), (wintypes.PLPVOID,)
   _protos['GetDisplayNameOf'] = 11, (WSPITEMIDLIST, WSSHGDNF), (WSPSTRRET,)
   _protos['SetNameOf'] = 12, (wintypes.HWND, WSPITEMIDLIST, wintypes.LPCWSTR, WSSHGDNF), (WSPPITEMIDLIST,)
   def __new__(cls, clsid_component=False, factory=None):
@@ -6270,6 +6308,12 @@ class IShellFolder(IUnknown):
     return (interface or self.__class__)(self._protos['BindToObject'](self.pI, pidl, bind_context, (interface or self.__class__).IID), self.factory)
   def BindToStorage(self, pidl, interface=None, bind_context=None):
     return (interface or IStream)(self._protos['BindToStorage'](self.pI, pidl, bind_context, (interface or IStream).IID), self.factory)
+  def CreateViewObject(self, interface):
+    return interface(self._protos['CreateViewObject'](self.pI, None, interface.IID), self.factory)
+  def CompareIDs(self, pidl1, pidl2, comparison_flags=0, comparison_rule=0):
+    return ((self._protos['CompareIDs'](self.pI, WSSHCIDS.name_code(comparison_flags) | comparison_rule, pidl1, pidl2) & 0xffff) ^ 0x8000) - 0x8000
+  def GetUIObjectOf(self, pidls, interface):
+    return interface(self._protos['GetUIObjectOf'](self.pI, None, (1 if (pidls is None or isinstance(pidls, WSPITEMIDLIST)) else len(pidls)), (pidls if pidls is None or isinstance(pidls, WSPITEMIDLIST) or (isinstance(pidls, ctypes.Array) and issubclass(pidls._type_, WSPITEMIDLIST)) else (WSPITEMIDLIST * len(pidls))(*pidls)), interface.IID, None), self.factory)
   @classmethod
   def FromName(cls, name='', bind_context=None, factory=None):
     return None if (pidl := WSPITEMIDLIST.FromName(name, bind_context)) is None else _WShUtil._set_factory(cls.SHBindToObject(None, pidl), factory)
@@ -6298,17 +6342,17 @@ class IShellFolder(IUnknown):
     return None if (e := self.EnumObjects(0x20)) is None else {(self.GetDisplayNameOf(pidl, 0x1) or tuple(pidl.content)): self.BindToObject(pidl) for pidl in e}
   @property
   def Children(self):
-    return None if None in (es := (self.EnumObjects(0x20), self.EnumObjects(0x40))) else tuple({(self.GetDisplayNameOf(pidl, 0x1) or tuple(pidl.content)): self.CreateItemFromRelativeIDList(pidl) for pidl in e} for e in es)
-  def GetSubFolderFromRelativeParsingName(self, name, parsing_name=True):
+    return None if None in (es := (self.EnumObjects(0x20), self.EnumObjects(0x40))) else tuple({(self.GetDisplayNameOf(pidl, 0x1) or tuple(pidl.content)): self.GetItemOf(pidl) for pidl in e} for e in es)
+  def GetSubFolderFromRelativeParsingName(self, name):
     return None if (pidl := self.ParseDisplayName(name)) is None else self.BindToObject(pidl)
   def GetSubFolderFromRelativeName(self, name):
     name = name.lower()
     return None if (e := self.EnumObjects(0x20)) is None else next((self.BindToObject(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 0x1) or '').lower() == name), None)
   def GetChildFromRelativeParsingName(self, name):
-    return self.CreateItemFromRelativeIDList(self.ParseDisplayName(name))
+    return None if (pidl := self.ParseDisplayName(name)) is None else self.GetItemOf(pidl)
   def GetChildFromRelativeName(self, name):
     name = name.lower()
-    return None if (e := self.EnumObjects(0x60)) is None else next((self.CreateItemFromRelativeIDList(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 0x1) or '').lower() == name), None)
+    return None if (e := self.EnumObjects(0x60)) is None else next((self.GetItemOf(pidl) for pidl in e if (self.GetDisplayNameOf(pidl, 0x1) or '').lower() == name), None)
   def GetPath(self):
     return None if (pidl := WSPITEMIDLIST(self)) is None else pidl.GetPath()
   @property
@@ -6319,14 +6363,24 @@ class IShellFolder(IUnknown):
   @property
   def Data(self):
     return self.GetData()
-  def GetDataFromRelativeIDList(self, pidl):
+  def GetDataOf(self, pidl):
     return WSPITEMIDLIST.SHGetDataFromIDList(self, pidl)
-  def CreateItemFromRelativeIDList(self, pidl, interface=None):
+  def GetItemOf(self, pidl, interface=None):
     return IShellItem.SHCreateItemWithParent(self, pidl, interface)
-  def AsDropTarget(self, bind_context=None):
-    return None if (i := IShellItem(self)) is None else i.BindToHandler('SFUIObject', bind_context=bind_context)
-  def AsDataObject(self, bind_context=None):
-    return None if (i := IShellItem(self)) is None else i.BindToHandler('DataObject', bind_context=bind_context)
+  def AsDropTarget(self):
+    return self.CreateViewObject(IDropTarget)
+  def AsDataObject(self):
+    return None if (i := IShellItem(self)) is None else i.BindToHandler('DataObject')
+  def GetContextMenu(self):
+    return self.CreateViewObject(IContextMenu)
+  def GetDropTargetOf(self, pidl):
+    return self.GetUIObjectOf(pidl, IDropTarget)
+  def GetContextMenuOf(self, pidl):
+    return self.GetUIObjectOf(pidl, IContextMenu)
+  def ContextMenuNewFolder(self, name):
+    if (e1 := tuple(self.EnumObjects(0x20))) is None or (c := self.GetContextMenu()) is None or c.InvokeCommand('NewFolder') is None or (e2 := self.EnumObjects(0x20)) is None or len(n := tuple(p for p in e2 if not any(map(p.IsEqualTo,e1)))) != 1:
+      return None
+    return self.SetNameOf(n[0], name)
   def __iter__(self):
     return iter(()) if (e := self.EnumObjects()) is None else e
   SHBindToFolderIDListParentEx = classmethod(lambda cls, root, pidl, interface=None, bind_context=None, _shbtfidlp=_WShUtil._wrap('SHBindToFolderIDListParentEx', (wintypes.LPVOID, 1), (WSPITEMIDLIST, 1), (wintypes.PLPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), (WSPPITEMIDLIST, 2)): None if (p_p := _shbtfidlp(root, pidl, bind_context, (interface or cls).IID)) is None else ((interface or cls)(p_p[0], getattr(root, 'factory', None)), _WShUtil._bind_pidls(p_p[1], pidl)))
@@ -6468,6 +6522,8 @@ class IShellItem(IUnknown):
     return self.BindToHandler('SFUIObject', bind_context=bind_context)
   def AsDataObject(self, bind_context=None):
     return self.BindToHandler('DataObject', bind_context=bind_context)
+  def GetContextMenu(self, bind_context=None):
+    return self.BindToHandler('SFUIObject', IContextMenu, bind_context=bind_context)
   def GetImageFactory(self):
     return self.QueryInterface(IShellItemImageFactory, self.factory)
   def GetImage(self, size, flags=0):
@@ -6496,6 +6552,10 @@ class IShellItem(IUnknown):
     if (d := (destination if isinstance(destination, IDropTarget) else destination.AsDropTarget())) is None or (s := self.AsDataObject()) is None:
       return None
     return d.Shortcut(s)
+  def ContextMenuDelete(self, confirmation=True, permanent=False):
+    if (c := self.GetContextMenu()) is None:
+      return None
+    return c.InvokeCommand('Delete', confirmation=confirmation, shift_down=permanent)
   SHCreateItemFromIDList = classmethod(lambda cls, pidl, interface=None, _shcifidl=_WShUtil._wrap('SHCreateItemFromIDList', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifidl(pidl, (interface or cls).IID)))
   SHCreateItemFromParsingName = classmethod(lambda cls, name, interface=None, bind_context=None, _shcifpn=_WShUtil._wrap('SHCreateItemFromParsingName', (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifpn(name, bind_context, (interface or cls).IID)))
   SHCreateItemFromRelativeName = classmethod(lambda cls, parent, name, interface=None, bind_context=None, _shcifrn=_WShUtil._wrap('SHCreateItemFromRelativeName', (wintypes.LPVOID, 1), (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): _WShUtil._set_factory((interface or cls)(_shcifrn(parent, name, bind_context, (interface or cls).IID)), getattr(parent, 'factory', None)))
