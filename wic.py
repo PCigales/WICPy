@@ -6052,6 +6052,7 @@ class WSITEMIDLIST(ctypes.Structure):
         return l
       l += 1
       o += i.cb
+
 class _WSPIIDLUtil:
   @staticmethod
   def _ainit(arr, *args, needsfree=False, **kwargs):
@@ -6064,12 +6065,14 @@ class _WSPIIDLUtil:
         if bool(s):
           ole32.CoTaskMemFree(s)
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
+
 class _WSPIIDLMeta(ctypes.POINTER(WSITEMIDLIST).__class__):
   _mul_cache = {}
   def __mul__(bcls, size):
     if bcls == PIDL:
       bcls = PIDL.__bases__[0]
     return bcls.__class__._mul_cache.get((bcls, size)) or bcls.__class__._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.POINTER(WSITEMIDLIST).__class__.__mul__(bcls, size),), {'__init__': _WSPIIDLUtil._ainit, '__del__': _WSPIIDLUtil._adel}))
+
 class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
   _type_ = WSITEMIDLIST
   def __new__(cls, *args, _needsfree=False):
@@ -6271,6 +6274,32 @@ class IEnumIDList(IUnknown):
       raise StopIteration
     return n[0]
 
+class IDataObject(IUnknown):
+  IID = GUID(0x0000010e, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+
+class IDropTarget(IUnknown):
+  IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+  _protos['DragEnter'] = 3, (wintypes.LPVOID, WSKEYSTATE, POINT, WSPDROPEFFECT), ()
+  _protos['Drop'] = 6, (wintypes.LPVOID, WSKEYSTATE, POINT, WSPDROPEFFECT), ()
+  def DragEnter(self, obj, effect, key_state=1, cursor_coordinates=(0,0)):
+    e = WSDROPEFFECT(effect)
+    return None if self._protos['DragEnter'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
+  def Drop(self, obj, effect, key_state=1, cursor_coordinates=(0,0)):
+    e = WSDROPEFFECT(effect)
+    return None if self._protos['Drop'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
+  def DropCopy(self, obj):
+    if not isinstance(obj, IDataObject) and (obj := obj.GetDataObject()) is None:
+      return None
+    return self.DragEnter(obj, 'Copy') != 0 and self.Drop(obj, 'Copy') is not None
+  def DropMove(self, obj):
+    if not isinstance(obj, IDataObject) and (obj := obj.GetDataObject()) is None:
+      return None
+    return self.DragEnter(obj, 'Move') != 0 and self.Drop(obj, 'Move') is not None
+  def DropShortcut(self, obj):
+    if not isinstance(obj, IDataObject) and (obj := obj.GetDataObject()) is None:
+      return None
+    return self.DragEnter(obj, 'Link') != 0 and self.Drop(obj, 'Link') is not None
+
 class IContextMenu(IUnknown):
   IID = GUID(0x000214e4, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
   _protos['QueryContextMenu'] = 3, (wintypes.HMENU, wintypes.UINT, wintypes.UINT, wintypes.UINT, wintypes.UINT), (), wintypes.ULONG
@@ -6419,32 +6448,6 @@ class IShellFolder(IUnknown):
   SHBindToParent = classmethod(lambda cls, pidl, interface=None, _shbtp=_WShUtil._wrap('SHBindToParent', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2), (WSPPITEMIDLIST, 2)): None if (p_p := _shbtp(pidl, (interface or cls).IID)) is None else ((interface or cls)(p_p[0]), _WShUtil._bind_pidls(p_p[1], pidl)))
   SHGetDesktopFolder = classmethod(lambda cls, _shgdf=_WShUtil._wrap('SHGetDesktopFolder', (wintypes.PLPVOID, 2)): cls(_shgdf()))
 IShellFolder2 = IShellFolder
-
-class IDataObject(IUnknown):
-  IID = GUID(0x0000010e, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
-
-class IDropTarget(IUnknown):
-  IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
-  _protos['DragEnter'] = 3, (wintypes.LPVOID, WSKEYSTATE, POINT, WSPDROPEFFECT), ()
-  _protos['Drop'] = 6, (wintypes.LPVOID, WSKEYSTATE, POINT, WSPDROPEFFECT), ()
-  def DragEnter(self, obj, effect, key_state=1, cursor_coordinates=(0,0)):
-    e = WSDROPEFFECT(effect)
-    return None if self._protos['DragEnter'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
-  def Drop(self, obj, effect, key_state=1, cursor_coordinates=(0,0)):
-    e = WSDROPEFFECT(effect)
-    return None if self._protos['Drop'](self.pI, obj, key_state, cursor_coordinates, e) is None else e
-  def DropCopy(self, obj):
-    if not isinstance(obj, IDataObject) and (obj := obj.GetDataObject()) is None:
-      return None
-    return self.DragEnter(obj, 'Copy') != 0 and self.Drop(obj, 'Copy') is not None
-  def DropMove(self, obj):
-    if not isinstance(obj, IDataObject) and (obj := obj.GetDataObject()) is None:
-      return None
-    return self.DragEnter(obj, 'Move') != 0 and self.Drop(obj, 'Move') is not None
-  def DropShortcut(self, obj):
-    if not isinstance(obj, IDataObject) and (obj := obj.GetDataObject()) is None:
-      return None
-    return self.DragEnter(obj, 'Link') != 0 and self.Drop(obj, 'Link') is not None
 
 class IShellItem(IUnknown):
   IID = GUID(0x7e9fb0d3, 0x919f, 0x4307, 0xab, 0x2e, 0x9b, 0x18, 0x60, 0x31, 0x0c, 0x93)
