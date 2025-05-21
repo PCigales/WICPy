@@ -5842,7 +5842,7 @@ class WSCMINVOKECOMMANDINFO(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbSize', wintypes.DWORD), ('fMask', wintypes.DWORD), ('hwnd', wintypes.HWND), ('lpVerb', wintypes.LPCSTR), ('lpParameters', wintypes.LPCSTR), ('lpDirectory', wintypes.LPCSTR), ('nShow', WSWINDOWSHOW), ('dwHotKey', wintypes.DWORD), ('hIcon', wintypes.HANDLE)]
 WSPCMINVOKECOMMANDINFO = type('WSPCMINVOKECOMMANDINFO', (_BPStruct, ctypes.POINTER(WSCMINVOKECOMMANDINFO)), {'_type_': WSCMINVOKECOMMANDINFO})
 
-WSSfgao = {'CanCopy': 0x1, 'CanMove': 0x2, 'CanLink': 0x4, 'Storage': 0x8, 'CanRename': 0x10, 'CanDelete': 0x20, 'HasPropSheet': 0x40, 'Droptarget': 0x100, 'System': 0x1000, 'Encrypted': 0x2000, 'IsSlow': 0x4000, 'Ghosted': 0x8000, 'Link': 0x10000, 'Share': 0x20000, 'ReadOnly': 0x40000, 'Hidden': 0x80000, 'NonEnumerated': 0x100000, 'NewContent': 0x200000, 'Stream': 0x400000, 'StorageAncestor': 0x800000, 'Validate': 0x1000000, 'Removable': 0x2000000, 'Compressed': 0x4000000, 'Browsable': 0x8000000, 'FileSysAncestor': 0x10000000, 'Folder': 0x20000000, 'FileSystem': 0x40000000, 'HasSubFolder': 0x80000000}
+WSSfgao = {'CanCopy': 0x1, 'CanMove': 0x2, 'CanLink': 0x4, 'Storage': 0x8, 'CanRename': 0x10, 'CanDelete': 0x20, 'HasPropSheet': 0x40, 'DropTarget': 0x100, 'System': 0x1000, 'Encrypted': 0x2000, 'IsSlow': 0x4000, 'Ghosted': 0x8000, 'Link': 0x10000, 'Share': 0x20000, 'ReadOnly': 0x40000, 'Hidden': 0x80000, 'NonEnumerated': 0x100000, 'NewContent': 0x200000, 'Stream': 0x400000, 'StorageAncestor': 0x800000, 'Validate': 0x1000000, 'Removable': 0x2000000, 'Compressed': 0x4000000, 'Browsable': 0x8000000, 'FileSysAncestor': 0x10000000, 'Folder': 0x20000000, 'FileSystem': 0x40000000, 'HasSubFolder': 0x80000000}
 WSSFGAO = type('WSSFGAO', (_BCodeOr, wintypes.ULONG), {'_tab_nc': {n.lower(): c for n, c in WSSfgao.items()}, '_tab_cn': {c: n for n, c in WSSfgao.items()}, '_def': 0})
 WSPSFGAO = ctypes.POINTER(WSSFGAO)
 
@@ -6584,6 +6584,18 @@ class IShellItem(IUnknown):
     if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
       return None
     return d.DropShortcut(s)
+  def ContextMenuCopyTo(self, destination):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+      return None
+    return cd.InvokeCommand('Paste')
+  def ContextMenuMoveTo(self, destination):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Cut') is None or (cd := destination.GetContextMenu()) is None:
+      return None
+    return cd.InvokeCommand('Paste')
+  def ContextMenuShortcutTo(self, destination):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+      return None
+    return cd.InvokeCommand('PasteLink')
   def ContextMenuDelete(self, confirmation=True, permanent=False):
     if (c := self.GetContextMenu()) is None:
       return None
@@ -6659,14 +6671,16 @@ class IShellItemArray(IUnknown):
       clsid_component = IShellFolder(clsid_component)
     if isinstance(clsid_component, IShellFolder):
       return _WShUtil._set_factory(None if (e := clsid_component.EnumObjects(0x60)) is None else cls.SHCreateShellItemArray(clsid_component, tuple(e)), factory)
+    if isinstance(clsid_component, ctypes.Array):
+      return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(clsid_component), factory)
     if isinstance(clsid_component, IEnumShellItems):
       if factory is False:
         factory = None
       elif factory is None:
         factory = clsid_component.factory
       clsid_component = tuple(map(PIDL, clsid_component))
-    if isinstance(clsid_component, (tuple, list, ctypes.Array)):
-      return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(clsid_component), factory)
+    if isinstance(clsid_component, (tuple, list)):
+      return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(tuple(p if isinstance(p, WSPITEMIDLIST) else WSPITEMIDLIST(p) for p in clsid_component)), factory)
     return IUnknown.__new__(cls, clsid_component, factory)
   def GetAttributes(self, combine_flags, query_attributes):
     a = WSSFGAO()
@@ -6717,6 +6731,22 @@ class IShellItemArray(IUnknown):
     if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
       return None
     return d.DropShortcut(s) or None
+  def ContextMenuCopyTo(self, destination):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+      return None
+    return cd.InvokeCommand('Paste')
+  def ContextMenuMoveTo(self, destination):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Cut') is None or (cd := destination.GetContextMenu()) is None:
+      return None
+    return cd.InvokeCommand('Paste')
+  def ContextMenuShortcutTo(self, destination):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+      return None
+    return cd.InvokeCommand('PasteLink')
+  def ContextMenuDelete(self, confirmation=True, permanent=False):
+    if (c := self.GetContextMenu()) is None:
+      return None
+    return c.InvokeCommand('Delete', confirmation=confirmation, shift_down=permanent)
   def __len__(self):
     if (l := getattr(self, '_len', False)) is False:
       l = self.GetCount()
@@ -6802,21 +6832,22 @@ class IFileOperation(IUnknown):
     return self._protos['GetAnyOperationsAborted'](self.pI)
 
 
-def Initialize(mode=6):
-  if isinstance(mode, str):
-    mode = 4 if mode.lower() in ('mt', 'mta') else 6
-  if ISetLastError(ole32.CoInitializeEx(None, wintypes.DWORD(2))) in (0, 1):
+def Initialize(mode=6, ole=False):
+  if ISetLastError(ole32.OleInitialize(None) if ole else ole32.CoInitializeEx(None, wintypes.DWORD((mode := (4 if mode.lower() in ('mt', 'mta') else 6)) if isinstance(mode, str) else mode))) in (0, 1):
     if not hasattr(_IUtil._local, 'initialized'):
-      _IUtil._local.initialized = 0
-      _IUtil._local.multithreaded = not bool(mode & 2)
-    _IUtil._local.initialized += 1
+      _IUtil._local.initialized = [0, 0]
+      _IUtil._local.multithreaded = not (ole or bool(mode & 2))
+    _IUtil._local.initialized[1 if ole else 0] += 1
     return True
   return None
 def Uninitialize():
   if hasattr(_IUtil._local, 'initialized'):
-    while _IUtil._local.initialized > 0:
+    while _IUtil._local.initialized[1] > 0:
+      ISetLastError(ole32.OleUninitialize())
+      _IUtil._local.initialized[1] -= 1
+    while _IUtil._local.initialized[0] > 0:
       ISetLastError(ole32.CoUninitialize())
-      _IUtil._local.initialized -= 1
+      _IUtil._local.initialized[0] -= 1
     del _IUtil._local.initialized
     return True
   return None
