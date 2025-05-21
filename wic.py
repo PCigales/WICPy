@@ -6310,7 +6310,7 @@ class IContextMenu(IUnknown):
       self.QueryContextMenu()
     return self
   def QueryContextMenu(self):
-    return None if (n := self._protos['QueryContextMenu'](self.pI, None, 0, 0, 0, 0)) & (1 << 31) else n
+    return None if (n := self._protos['QueryContextMenu'](self.pI, None, 0, 0, -1, 0)) & (1 << 31) else n
   def GetCommandString(self, identifier, information_flags=0):
     s = ctypes.create_unicode_buffer(256)
     return None if self._protos['GetCommandString'](self.pI, identifier, information_flags | 0x4, None, s, 255) is None else s.value
@@ -6671,7 +6671,7 @@ class IShellItemArray(IUnknown):
       clsid_component = IShellFolder(clsid_component)
     if isinstance(clsid_component, IShellFolder):
       return _WShUtil._set_factory(None if (e := clsid_component.EnumObjects(0x60)) is None else cls.SHCreateShellItemArray(clsid_component, tuple(e)), factory)
-    if isinstance(clsid_component, ctypes.Array):
+    if isinstance(clsid_component, ctypes.Array) and issubclass(clsid_component._type_, WSPITEMIDLIST):
       return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(clsid_component), factory)
     if isinstance(clsid_component, IEnumShellItems):
       if factory is False:
@@ -6679,7 +6679,7 @@ class IShellItemArray(IUnknown):
       elif factory is None:
         factory = clsid_component.factory
       clsid_component = tuple(map(PIDL, clsid_component))
-    if isinstance(clsid_component, (tuple, list)):
+    if isinstance(clsid_component, (tuple, list, ctypes.Array)):
       return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(tuple(p if isinstance(p, WSPITEMIDLIST) else WSPITEMIDLIST(p) for p in clsid_component)), factory)
     return IUnknown.__new__(cls, clsid_component, factory)
   def GetAttributes(self, combine_flags, query_attributes):
