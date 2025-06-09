@@ -6541,8 +6541,8 @@ class IShellItem(IUnknown):
   @property
   def StorageContent(self):
     return self.GetStorageContent()
-  def GetDropTarget(self, bind_context=None):
-    return self.BindToHandler('SFUIObject', IDropTarget, bind_context)
+  def GetDropTarget(self, hwnd=None):
+    return None if (f := IShellFolder(self)) is None else f.GetDropTarget(hwnd)
   @property
   def AsDropTarget(self):
     return self.GetDropTarget()
@@ -6573,15 +6573,15 @@ class IShellItem(IUnknown):
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def DropCopyTo(self, destination, hwnd=None):
-    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget(hwnd))) is None:
       return None
     return d.DropCopy(s)
   def DropMoveTo(self, destination, hwnd=None):
-    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget(hwnd))) is None:
       return None
     return d.DropMove(s)
   def DropShortcutTo(self, destination, hwnd=None):
-    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget(hwnd))) is None:
       return None
     return d.DropShortcut(s)
   def ContextMenuCopyTo(self, destination, hwnd=None):
@@ -6720,15 +6720,15 @@ class IShellItemArray(IUnknown):
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
   def DropCopyTo(self, destination, hwnd=None):
-    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget(hwnd))) is None:
       return None
     return d.DropCopy(s) or None
   def DropMoveTo(self, destination, hwnd=None):
-    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget(hwnd))) is None:
       return None
     return d.DropMove(s) or None
   def DropShortcutTo(self, destination, hwnd=None):
-    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget(hwnd))) is None:
       return None
     return d.DropShortcut(s) or None
   def ContextMenuCopyTo(self, destination, hwnd=None):
