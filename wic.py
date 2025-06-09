@@ -5976,18 +5976,18 @@ IFileSystemBindData2 = IFileSystemBindData
 
 class _IBCMeta(_IMeta):
   @property
-  def AllowNonExistingFile(self):
-    if (ibc := getattr(self, '_AllowNonExistingFile', None)) is None:
-      ibc = IBindCtx()
-      ibc.SetAllowNonExistingFile()
-      self._AllowNonExistingFile = ibc
+  def AllowNonExistingFile(cls):
+    if (ibc := getattr(cls, '_AllowNonExistingFile', None)) is None:
+      if (ibc := cls()) is not None:
+        ibc.SetAllowNonExistingFile()
+        cls._AllowNonExistingFile = ibc
     return ibc
   @property
-  def AllowNonExistingFolder(self):
-    if (ibc := getattr(self, '_AllowNonExistingFolder', None)) is None:
-      ibc = IBindCtx()
-      ibc.SetAllowNonExistingFolder()
-      self._AllowNonExistingFolder = ibc
+  def AllowNonExistingFolder(cls):
+    if (ibc := getattr(cls, '_AllowNonExistingFolder', None)) is None:
+      if (ibc := cls()) is not None:
+        ibc.SetAllowNonExistingFolder()
+        cls._AllowNonExistingFolder = ibc
     return ibc
 
 class IBindCtx(IUnknown, metaclass=_IBCMeta):
@@ -6185,8 +6185,8 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
   @property
   def ParentAndRelative(self):
     return self.GetParentAndRelativeIDList()
-  def GetDropTarget(self, bind_context=None):
-    return None if (i := IShellItem(self)) is None else i.GetDropTarget(bind_context)
+  def GetDropTarget(self, hwnd=None):
+    return None if (f := IShellFolder(self)) is None else f.GetDropTarget(hwnd)
   @property
   def AsDropTarget(self):
     return self.GetDropTarget()
@@ -6314,8 +6314,8 @@ class IContextMenu(IUnknown):
   def GetCommandString(self, identifier, information_flags=0):
     s = ctypes.create_unicode_buffer(256)
     return None if self._protos['GetCommandString'](self.pI, identifier, information_flags | 0x4, None, s, 255) is None else s.value
-  def InvokeCommand(self, command_verb, confirmation=True, shift_down=False, control_down=False, show_window=1):
-    return self._protos['InvokeCommand'](self.pI, WSCMINVOKECOMMANDINFO.from_param({'lpVerb': command_verb.encode(), 'fMask': ((0 if confirmation else 0x400) | (0x10000000 if shift_down else 0) | (0x40000000 if control_down else 0)), 'nShow': show_window}))
+  def InvokeCommand(self, command_verb, confirmation=True, shift_down=False, control_down=False, show_window=1, hwnd=None):
+    return self._protos['InvokeCommand'](self.pI, WSCMINVOKECOMMANDINFO.from_param({'lpVerb': command_verb.encode(), 'fMask': ((0 if confirmation else 0x400) | (0x10000000 if shift_down else 0) | (0x40000000 if control_down else 0)), 'nShow': show_window, 'hwnd': hwnd}))
 
 class IShellFolder(IUnknown):
   IID = GUID(0x93f2f68c, 0x1d1b, 0x11d3, 0xa3, 0x0e, 0x00, 0xc0, 0x4f, 0x79, 0xab, 0xd1)
@@ -6343,28 +6343,28 @@ class IShellFolder(IUnknown):
     if isinstance(clsid_component, WSPITEMIDLIST):
       return _WShUtil._set_factory(cls.SHBindToObject(None, clsid_component), factory)
     return IUnknown.__new__(cls, clsid_component, factory)
-  def ParseDisplayName(self, display_name='', query_attributes=0, bind_context=None):
+  def ParseDisplayName(self, display_name='', query_attributes=0, bind_context=None, hwnd=None):
     a = WSSFGAO(query_attributes)
-    return None if (pidl := self._protos['ParseDisplayName'](self.pI, None, bind_context, display_name, None, a)) is None else ((pidl, a) if query_attributes else pidl)
+    return None if (pidl := self._protos['ParseDisplayName'](self.pI, hwnd, bind_context, display_name, None, a)) is None else ((pidl, a) if query_attributes else pidl)
   def GetDisplayNameOf(self, pidl, name_flags=0):
     return None if (n := self._protos['GetDisplayNameOf'](self.pI, pidl, name_flags)) is None else n.to_str(pidl)
   def GetAttributesOf(self, pidls, query_attributes=0):
     a = WSSFGAO(query_attributes)
     return a if self._protos['GetAttributesOf'](self.pI, (1 if (pidls is None or isinstance(pidls, WSPITEMIDLIST)) else len(pidls)), (pidls if pidls is None or isinstance(pidls, WSPITEMIDLIST) or (isinstance(pidls, ctypes.Array) and issubclass(pidls._type_, WSPITEMIDLIST)) else (WSPITEMIDLIST * len(pidls))(*pidls)), ctypes.byref(a)) else None
-  def SetNameOf(self, pidl, name, name_flags=0):
-    return self._protos['SetNameOf'](self.pI, None, pidl, name, name_flags)
-  def EnumObjects(self, include_flags=0x60):
-    return IEnumIDList(self._protos['EnumObjects'](self.pI, None, include_flags), self.factory)
+  def SetNameOf(self, pidl, name, name_flags=0, hwnd=None):
+    return self._protos['SetNameOf'](self.pI, hwnd, pidl, name, name_flags)
+  def EnumObjects(self, include_flags=0x60, hwnd=None):
+    return IEnumIDList(self._protos['EnumObjects'](self.pI, hwnd, include_flags), self.factory)
   def BindToObject(self, pidl, interface=None, bind_context=None):
     return (interface or self.__class__)(self._protos['BindToObject'](self.pI, pidl, bind_context, (interface or self.__class__).IID), self.factory)
   def BindToStorage(self, pidl, interface=None, bind_context=None):
     return (interface or IStream)(self._protos['BindToStorage'](self.pI, pidl, bind_context, (interface or IStream).IID), self.factory)
-  def CreateViewObject(self, interface):
-    return interface(self._protos['CreateViewObject'](self.pI, None, interface.IID), self.factory)
+  def CreateViewObject(self, interface, hwnd=None):
+    return interface(self._protos['CreateViewObject'](self.pI, hwnd, interface.IID), self.factory)
   def CompareIDs(self, pidl1, pidl2, comparison_flags=0, comparison_rule=0):
     return ((self._protos['CompareIDs'](self.pI, WSSHCIDS.name_code(comparison_flags) | comparison_rule, pidl1, pidl2) & 0xffff) ^ 0x8000) - 0x8000
-  def GetUIObjectOf(self, pidls, interface):
-    return interface(self._protos['GetUIObjectOf'](self.pI, None, (1 if (pidls is None or isinstance(pidls, WSPITEMIDLIST)) else len(pidls)), (pidls if pidls is None or isinstance(pidls, WSPITEMIDLIST) or (isinstance(pidls, ctypes.Array) and issubclass(pidls._type_, WSPITEMIDLIST)) else (WSPITEMIDLIST * len(pidls))(*pidls)), interface.IID, None), self.factory)
+  def GetUIObjectOf(self, pidls, interface, hwnd=None):
+    return interface(self._protos['GetUIObjectOf'](self.pI, hwnd, (1 if (pidls is None or isinstance(pidls, WSPITEMIDLIST)) else len(pidls)), (pidls if pidls is None or isinstance(pidls, WSPITEMIDLIST) or (isinstance(pidls, ctypes.Array) and issubclass(pidls._type_, WSPITEMIDLIST)) else (WSPITEMIDLIST * len(pidls))(*pidls)), interface.IID, None), self.factory)
   @classmethod
   def FromName(cls, name='', bind_context=None, factory=None):
     return None if (pidl := WSPITEMIDLIST.FromName(name, bind_context)) is None else _WShUtil._set_factory(cls.SHBindToObject(None, pidl), factory)
@@ -6418,8 +6418,8 @@ class IShellFolder(IUnknown):
     return WSPITEMIDLIST.SHGetDataFromIDList(self, pidl)
   def GetItemOf(self, pidl, interface=None):
     return IShellItem.SHCreateItemWithParent(self, pidl, interface)
-  def GetDropTarget(self):
-    return self.CreateViewObject(IDropTarget)
+  def GetDropTarget(self, hwnd=None):
+    return self.CreateViewObject(IDropTarget, hwnd)
   @property
   def AsDropTarget(self):
     return self.GetDropTarget()
@@ -6428,17 +6428,17 @@ class IShellFolder(IUnknown):
   @property
   def AsDataObject(self):
     return self.GetDataObject()
-  def GetContextMenu(self):
-    return self.CreateViewObject(IContextMenu)
+  def GetContextMenu(self, hwnd=None):
+    return self.CreateViewObject(IContextMenu, hwnd)
   @property
   def ContextMenu(self):
     return self.GetContextMenu()
-  def GetDropTargetOf(self, pidl):
-    return self.GetUIObjectOf(pidl, IDropTarget)
-  def GetContextMenuOf(self, pidl):
-    return self.GetUIObjectOf(pidl, IContextMenu)
-  def ContextMenuNewFolder(self, name):
-    if (e1 := tuple(self.EnumObjects(0x20))) is None or (c := self.GetContextMenu()) is None or c.InvokeCommand('NewFolder') is None or (e2 := self.EnumObjects(0x20)) is None or len(n := tuple(p for p in e2 if not any(map(p.IsEqualTo, e1)))) != 1 or (pidl := self.SetNameOf(n[0], name)) is None:
+  def GetDropTargetOf(self, pidl, hwnd=None):
+    return self.GetUIObjectOf(pidl, IDropTarget, hwnd)
+  def GetContextMenuOf(self, pidl, hwnd=None):
+    return self.GetUIObjectOf(pidl, IContextMenu, hwnd)
+  def ContextMenuNewFolder(self, name, hwnd=None):
+    if (e1 := tuple(self.EnumObjects(0x20, hwnd))) is None or (c := self.GetContextMenu(hwnd)) is None or c.InvokeCommand('NewFolder', hwnd=hwnd) is None or (e2 := self.EnumObjects(0x20, hwnd)) is None or len(n := tuple(p for p in e2 if not any(map(p.IsEqualTo, e1)))) != 1 or (pidl := self.SetNameOf(n[0], name, hwnd=hwnd)) is None:
       return None
     return self.BindToObject(pidl)
   def __iter__(self):
@@ -6560,46 +6560,46 @@ class IShellItem(IUnknown):
     return self.QueryInterface(IShellItemImageFactory, self.factory)
   def GetImage(self, size, flags=0):
     return None if (f := self.GetImageFactory()) is None else f.GetImage(size, flags)
-  def CopyTo(self, destination, name=None, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.CopyItem(self, d, name) is None:
+  def CopyTo(self, destination, name=None, confirmation=True, hwnd=None):
+    if (f := IFileOperation.Create(confirmation, hwnd)) is None or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.CopyItem(self, d, name) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
-  def MoveTo(self, destination, name=None, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.MoveItem(self, d, name) is None:
+  def MoveTo(self, destination, name=None, confirmation=True, hwnd=None):
+    if (f := IFileOperation.Create(confirmation, hwnd)) is None or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.MoveItem(self, d, name) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
-  def Delete(self, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or f.DeleteItem(self) is None:
+  def Delete(self, confirmation=True, hwnd=None):
+    if (f := IFileOperation.Create(confirmation, hwnd)) is None or f.DeleteItem(self) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
-  def DropCopyTo(self, destination):
-    if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
+  def DropCopyTo(self, destination, hwnd=None):
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
       return None
     return d.DropCopy(s)
-  def DropMoveTo(self, destination):
-    if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
+  def DropMoveTo(self, destination, hwnd=None):
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
       return None
     return d.DropMove(s)
-  def DropShortcutTo(self, destination):
-    if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
+  def DropShortcutTo(self, destination, hwnd=None):
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
       return None
     return d.DropShortcut(s)
-  def ContextMenuCopyTo(self, destination):
-    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+  def ContextMenuCopyTo(self, destination, hwnd=None):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy', hwnd=hwnd) is None or (cd := destination.GetContextMenu()) is None:
       return None
-    return cd.InvokeCommand('Paste')
-  def ContextMenuMoveTo(self, destination):
-    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Cut') is None or (cd := destination.GetContextMenu()) is None:
+    return cd.InvokeCommand('Paste', hwnd=hwnd)
+  def ContextMenuMoveTo(self, destination, hwnd=None):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Cut', hwnd=hwnd) is None or (cd := destination.GetContextMenu()) is None:
       return None
-    return cd.InvokeCommand('Paste')
-  def ContextMenuShortcutTo(self, destination):
-    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+    return cd.InvokeCommand('Paste', hwnd=hwnd)
+  def ContextMenuShortcutTo(self, destination, hwnd=None):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy', hwnd=hwnd) is None or (cd := destination.GetContextMenu()) is None:
       return None
-    return cd.InvokeCommand('PasteLink')
-  def ContextMenuDelete(self, confirmation=True, permanent=False):
+    return cd.InvokeCommand('PasteLink', hwnd=hwnd)
+  def ContextMenuDelete(self, confirmation=True, permanent=False, hwnd=None):
     if (c := self.GetContextMenu()) is None:
       return None
-    return c.InvokeCommand('Delete', confirmation=confirmation, shift_down=permanent)
+    return c.InvokeCommand('Delete', confirmation=confirmation, shift_down=permanent, hwnd=hwnd)
   SHCreateItemFromIDList = classmethod(lambda cls, pidl, interface=None, _shcifidl=_WShUtil._wrap('SHCreateItemFromIDList', (WSPITEMIDLIST, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifidl(pidl, (interface or cls).IID)))
   SHCreateItemFromParsingName = classmethod(lambda cls, name, interface=None, bind_context=None, _shcifpn=_WShUtil._wrap('SHCreateItemFromParsingName', (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): (interface or cls)(_shcifpn(name, bind_context, (interface or cls).IID)))
   SHCreateItemFromRelativeName = classmethod(lambda cls, parent, name, interface=None, bind_context=None, _shcifrn=_WShUtil._wrap('SHCreateItemFromRelativeName', (wintypes.LPVOID, 1), (wintypes.LPCWSTR, 1), (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2)): _WShUtil._set_factory((interface or cls)(_shcifrn(parent, name, bind_context, (interface or cls).IID)), getattr(parent, 'factory', None)))
@@ -6707,46 +6707,46 @@ class IShellItemArray(IUnknown):
   @property
   def ContextMenu(self):
     return self.GetContextMenu()
-  def CopyTo(self, destination, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.CopyItems(self, d) is None:
+  def CopyTo(self, destination, confirmation=True, hwnd=None):
+    if (f := IFileOperation.Create(confirmation, hwnd)) is None or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.CopyItems(self, d) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
-  def MoveTo(self, destination, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.MoveItems(self, d) is None:
+  def MoveTo(self, destination, confirmation=True, hwnd=None):
+    if (f := IFileOperation.Create(confirmation, hwnd)) is None or (d := (destination if isinstance(destination, IShellItem) else IShellItem(destination))) is None or f.MoveItems(self, d) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
-  def Delete(self, confirmation=True):
-    if (f := IFileOperation()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or f.DeleteItems(self) is None:
+  def Delete(self, confirmation=True, hwnd=None):
+    if (f := IFileOperation.Create(confirmation, hwnd)) is None or f.DeleteItems(self) is None:
       return None
     return f.PerformOperations() is not None and not f.GetAnyOperationsAborted()
-  def DropCopyTo(self, destination):
-    if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
+  def DropCopyTo(self, destination, hwnd=None):
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
       return None
     return d.DropCopy(s) or None
-  def DropMoveTo(self, destination):
-    if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
+  def DropMoveTo(self, destination, hwnd=None):
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
       return None
     return d.DropMove(s) or None
-  def DropShortcutTo(self, destination):
-    if (d := (destination if isinstance(destination, IDropTarget) else destination.GetDropTarget())) is None or (s := self.GetDataObject()) is None:
+  def DropShortcutTo(self, destination, hwnd=None):
+    if (s := self.GetDataObject()) is None or (d := (destination if isinstance(destination, IDropTarget) else (None if (d := (destination if isinstance(destination, IShellFolder) else IShellFolder(destination))) is None else d.GetDropTarget(hwnd)))) is None:
       return None
     return d.DropShortcut(s) or None
-  def ContextMenuCopyTo(self, destination):
-    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+  def ContextMenuCopyTo(self, destination, hwnd=None):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy', hwnd=hwnd) is None or (cd := destination.GetContextMenu()) is None:
       return None
-    return cd.InvokeCommand('Paste')
-  def ContextMenuMoveTo(self, destination):
-    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Cut') is None or (cd := destination.GetContextMenu()) is None:
+    return cd.InvokeCommand('Paste', hwnd=hwnd)
+  def ContextMenuMoveTo(self, destination, hwnd=None):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Cut', hwnd=hwnd) is None or (cd := destination.GetContextMenu()) is None:
       return None
-    return cd.InvokeCommand('Paste')
-  def ContextMenuShortcutTo(self, destination):
-    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy') is None or (cd := destination.GetContextMenu()) is None:
+    return cd.InvokeCommand('Paste', hwnd=hwnd)
+  def ContextMenuShortcutTo(self, destination, hwnd=None):
+    if (cs := self.GetContextMenu()) is None or cs.InvokeCommand('Copy', hwnd=hwnd) is None or (cd := destination.GetContextMenu()) is None:
       return None
-    return cd.InvokeCommand('PasteLink')
-  def ContextMenuDelete(self, confirmation=True, permanent=False):
+    return cd.InvokeCommand('PasteLink', hwnd=hwnd)
+  def ContextMenuDelete(self, confirmation=True, permanent=False, hwnd=None):
     if (c := self.GetContextMenu()) is None:
       return None
-    return c.InvokeCommand('Delete', confirmation=confirmation, shift_down=permanent)
+    return c.InvokeCommand('Delete', confirmation=confirmation, shift_down=permanent, hwnd=hwnd)
   def __len__(self):
     if (l := getattr(self, '_len', False)) is False:
       l = self.GetCount()
@@ -6795,6 +6795,7 @@ class IFileOperation(IUnknown):
   CLSID = GUID(0x3ad05575, 0x8857, 0x4850, 0x92, 0x77, 0x11, 0xb8, 0x5b, 0xdb, 0x8e, 0x09)
   IID = GUID(0x947aab5f, 0x0a5c, 0x4c13, 0xb4, 0xd6, 0x4b, 0xf7, 0x83, 0x6f, 0xc9, 0xf8)
   _protos['SetOperationFlags'] = 5, (WSOPERATIONFLAGS,), ()
+  _protos['SetOwnerWindow'] = 9, (wintypes.HWND,), ()
   _protos['RenameItem'] = 12, (wintypes.LPVOID, wintypes.LPCWSTR, wintypes.LPVOID), ()
   _protos['RenameItems'] = 13, (wintypes.LPVOID, wintypes.LPCWSTR), ()
   _protos['MoveItem'] = 14, (wintypes.LPVOID, wintypes.LPVOID, wintypes.LPCWSTR, wintypes.LPVOID), ()
@@ -6808,6 +6809,8 @@ class IFileOperation(IUnknown):
   _protos['GetAnyOperationsAborted'] = 22, (), (wintypes.PBOOLE,)
   def SetOperationFlags(self, operation_flags=0x240):
     return self._protos['SetOperationFlags'](self.pI, operation_flags)
+  def SetOwnerWindow(self, hwnd=None):
+    return self._protos['SetOwnerWindow'](self.pI, hwnd)
   def RenameItem(self, item, name):
     return self._protos['RenameItem'](self.pI, item, name, None)
   def RenameItems(self, items, name):
@@ -6830,6 +6833,9 @@ class IFileOperation(IUnknown):
     return self._protos['PerformOperations'](self.pI)
   def GetAnyOperationsAborted(self):
     return self._protos['GetAnyOperationsAborted'](self.pI)
+  @classmethod
+  def Create(cls, confirmation=True, hwnd=None):
+    return None if (f := cls()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (hwnd is not None and f.SetOwnerWindow(hwnd) is None) else f
 
 
 def Initialize(mode=6, ole=False):
