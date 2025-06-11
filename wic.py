@@ -6272,18 +6272,6 @@ class IEnumIDList(IUnknown):
 class IDataObject(IUnknown):
   IID = GUID(0x0000010e, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
 
-class IDataObjectAsyncCapability(IUnknown):
-  IID = GUID(0x3d8b0590, 0xf691, 0x11d2, 0x8e, 0xa9, 0x00, 0x60, 0x97, 0xdf, 0x5b, 0xd4)
-  _protos['SetAsyncMode'] = 3, (wintypes.BOOLE,), ()
-  _protos['GetAsyncMode'] = 4, (), (wintypes.PBOOLE,)
-  _protos['InOperation'] = 6, (), (wintypes.PBOOLE,)
-  def GetAsyncMode(self):
-    return self._protos['GetAsyncMode'](self.pI)
-  def SetAsyncMode(self, async_op=False):
-    return self._protos['SetAsyncMode'](self.pI, async_op)
-  def InOperation(self):
-    return self._protos['InOperation'](self.pI)
-
 class IDropTarget(IUnknown):
   IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
   _protos['DragEnter'] = 3, (wintypes.LPVOID, WSKEYSTATE, POINT, WSPDROPEFFECT), ()
