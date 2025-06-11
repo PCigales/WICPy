@@ -3,10 +3,9 @@
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
 import ctypes, ctypes.wintypes as wintypes
-ctypes.CArgObject = ctypes.byref(ctypes.c_byte()).__class__
-if not hasattr(ctypes, '_Pointer'):
-  ctypes._Pointer = ctypes.POINTER(ctypes.c_byte).__mro__[1]
-ctypes._CData = ctypes.c_byte.__mro__[-2]
+vars(ctypes).setdefault('CArgObject', ctypes.byref(ctypes.c_byte()).__class__)
+vars(ctypes).setdefault('_Pointer', ctypes.POINTER(ctypes.c_byte).__mro__[1])
+vars(ctypes).setdefault('_CData', ctypes.c_byte.__mro__[-2])
 wintypes.PLPVOID = ctypes.POINTER(wintypes.LPVOID)
 wintypes.PDOUBLE = ctypes.POINTER(wintypes.DOUBLE)
 wintypes.BOOLE = type('BOOLE', (wintypes.BOOL,), {'value': property(lambda s: bool(wintypes.BOOL.value.__get__(s)), wintypes.BOOL.value.__set__), '__ctypes_from_outparam__': lambda s: s.value})
@@ -18,6 +17,8 @@ wintypes.GUID = ctypes.c_char * 16
 wintypes.PGUID = ctypes.POINTER(wintypes.GUID)
 wintypes.BYTES16 = wintypes.BYTE * 16
 wintypes.PBYTES16 = ctypes.POINTER(wintypes.BYTES16)
+vars(wintypes).setdefault('HCURSOR', wintypes.HANDLE)
+vars(wintypes).setdefault('LRESULT', wintypes.LPARAM)
 import struct
 import threading
 import math
@@ -25,6 +26,7 @@ from fractions import Fraction
 import datetime
 
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+user32 = ctypes.WinDLL('user32', use_errno=True, use_last_error=True)
 ole32 = ctypes.WinDLL('ole32', use_last_error=True)
 oleauto32 = ctypes.WinDLL('oleaut32', use_last_error=True)
 shl = ctypes.WinDLL('shlwapi', use_last_error=True)
@@ -79,17 +81,10 @@ class _IUtil:
     return None if ISetLastError(r) else a
   @staticmethod
   def _errcheck_r(r, f, a):
-    if (c := getattr(r, '__ctypes_from_outparam__', None)) is None:
-      return getattr(r, 'value', r)
-    else:
-      return c()
+    return getattr(r, 'value', r) if (c := getattr(r, '__ctypes_from_outparam__', None)) is None else c()
   @staticmethod
   def CLSIDFromProgID(pid):
-    clsid = wintypes.GUID()
-    if ole32.CLSIDFromString(wintypes.LPCOLESTR(pid), ctypes.byref(clsid)):
-      return None
-    else:
-      return GUID(clsid)
+    return None if ole32.CLSIDFromString(wintypes.LPCOLESTR(pid), ctypes.byref(clsid := wintypes.GUID())) else GUID(clsid)
   @staticmethod
   def QueryInterface(interface, icls, factory=None):
     return None if interface is None else interface.QueryInterface(icls, factory)
@@ -107,7 +102,7 @@ class _IMeta(type):
         cls._protos[n].errcheck = _IUtil._errcheck_o if o else _IUtil._errcheck_no
       elif len(pro) == 4:
         p, i, o, r = pro
-        cls._protos[n] = ctypes.WINFUNCTYPE(r, *i, *o)(p, n, (((1,),) * len(i)) + (((2,),) * len(o)))
+        cls._protos[n] = ctypes.WINFUNCTYPE(r, *i, *o, use_last_error=True)(p, n, (((1,),) * len(i)) + (((2,),) * len(o)))
         if not o:
           cls._protos[n].errcheck = _IUtil._errcheck_r
   def __mul__(bcls, size):
@@ -1770,7 +1765,7 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
       self._needsclear = True
     return self
 PPSAFEARRAY = ctypes.POINTER(PSAFEARRAY)
-PSAFEARRAY.duplicate = lambda s, _d=ctypes.WINFUNCTYPE(wintypes.ULONG, PSAFEARRAY, PPSAFEARRAY)(('SafeArrayCopy', oleauto32), ((1,), (2,))): _d(s)
+PSAFEARRAY.duplicate = lambda s, _d=ctypes.WINFUNCTYPE(wintypes.ULONG, PSAFEARRAY, PPSAFEARRAY, use_last_error=True)(('SafeArrayCopy', oleauto32), ((1,), (2,))): _d(s)
 
 class _BVType(int):
   @classmethod
@@ -5458,14 +5453,14 @@ class ID2D1Factory(IUnknown):
   def GetDesktopDpi(self):
     return self.__class__._protos['GetDesktopDpi'](self.pI)
   MakeIdentityMatrix = staticmethod(D2D1MATRIX3X2F)
-  MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F)(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
-  MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
+  MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F, use_last_error=True)(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
+  MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F, use_last_error=True)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
   MakeTranslationMatrix = staticmethod(lambda x, y: D2D1MATRIX3X2F(1, 0, 0, 1, x, y))
   MakeScaleMatrix = staticmethod(lambda x, y, center: D2D1MATRIX3X2F(x, 0, 0, y, (1 - x) * getattr(center, 'value', center)[0], (1 - y) * getattr(center, 'value', center)[1]))
-  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, D2D1PMATRIX3X2F)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix).value)
-  InvertMatrix = staticmethod(lambda matrix, _im=ctypes.WINFUNCTYPE(wintypes.BOOLE, D2D1PMATRIX3X2F)(('D2D1InvertMatrix', d2d1), ((1,),)): _im(matrix).value)
+  IsMatrixInvertible = staticmethod(lambda matrix, _imi=ctypes.WINFUNCTYPE(wintypes.BOOLE, D2D1PMATRIX3X2F, use_last_error=True)(('D2D1IsMatrixInvertible', d2d1), ((1,),)): _imi(matrix).value)
+  InvertMatrix = staticmethod(lambda matrix, _im=ctypes.WINFUNCTYPE(wintypes.BOOLE, D2D1PMATRIX3X2F, use_last_error=True)(('D2D1InvertMatrix', d2d1), ((1,),)): _im(matrix).value)
   MultiplyMatrix = staticmethod(lambda a, b: a @ b)
-  ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1PCOLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
+  ConvertColorSpace = staticmethod(lambda source, destination, color, _ccs=ctypes.WINFUNCTYPE(D2D1PCOLORF, D2D1COLORSPACE, D2D1COLORSPACE, D2D1PCOLORF, use_last_error=True)(('D2D1ConvertColorSpace', d2d1), ((1,), (1,), (1,))): _ccs(source, destination, color).value)
   MakeIdentityMatrix4x4 = staticmethod(D2D1MATRIX4X4F)
   MakeRotationXMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), D2D1MATRIX4X4F(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1))[2])
   MakeRotationYMatrix4x4 = staticmethod(lambda angle: (c := math.cos(math.radians(angle)), s := math.sin(math.radians(angle)), D2D1MATRIX4X4F(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1))[2])
@@ -5726,7 +5721,7 @@ class _WShUtil:
       f = ctypes.WINFUNCTYPE(wintypes.ULONG, *(t[0] for t in a))(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((t[1],) for t in a))
       f.errcheck = _IUtil._errcheck_o if 2 in (t[1] for t in a) else _IUtil._errcheck_no
     else:
-      f = ctypes.WINFUNCTYPE(*(t[0] for t in r_a))(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((t[1],) for t in a))
+      f = ctypes.WINFUNCTYPE(*(t[0] for t in r_a), use_last_error=True)(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((t[1],) for t in a))
       if 2 not in (t[1] for t in a):
         f.errcheck = _IUtil._errcheck_r
     return f
@@ -6276,6 +6271,18 @@ class IEnumIDList(IUnknown):
 
 class IDataObject(IUnknown):
   IID = GUID(0x0000010e, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+
+class IDataObjectAsyncCapability(IUnknown):
+  IID = GUID(0x3d8b0590, 0xf691, 0x11d2, 0x8e, 0xa9, 0x00, 0x60, 0x97, 0xdf, 0x5b, 0xd4)
+  _protos['SetAsyncMode'] = 3, (wintypes.BOOLE,), ()
+  _protos['GetAsyncMode'] = 4, (), (wintypes.PBOOLE,)
+  _protos['InOperation'] = 6, (), (wintypes.PBOOLE,)
+  def GetAsyncMode(self):
+    return self._protos['GetAsyncMode'](self.pI)
+  def SetAsyncMode(self, async_op=False):
+    return self._protos['SetAsyncMode'](self.pI, async_op)
+  def InOperation(self):
+    return self._protos['InOperation'](self.pI)
 
 class IDropTarget(IUnknown):
   IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
@@ -6836,6 +6843,287 @@ class IFileOperation(IUnknown):
   @classmethod
   def Create(cls, confirmation=True, hwnd=None):
     return None if (f := cls()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (hwnd is not None and f.SetOwnerWindow(hwnd) is None) else f
+
+
+class _WndUtil:
+  @staticmethod
+  def _errcheck(r, f, a):
+    return getattr(r, 'value', r) if (c := getattr(r, '__ctypes_from_outparam__', None)) is None else c()
+  @staticmethod
+  def _wrap(n, *r_a, p=user32):
+    r, *a = r_a
+    f = ctypes.WINFUNCTYPE(*r_a, use_last_error=True)((n, p), ((1,),) * len(a))
+    f.errcheck = _WndUtil._errcheck
+    return f
+
+WNDPROC = ctypes.WINFUNCTYPE(wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM, use_last_error=True)
+
+WNDClassStyle = {'ByteAlignClient': 0x1000, 'ByteAlignWindow': 0x2000, 'ClassDC': 0x40, 'DblClks': 0x8, 'DropShadow': 0x20000, 'GlobalClass': 0x4000, 'HRedraw': 0x2, 'NoClose': 0x200, 'OwnDC': 0x20, 'ParentDC': 0x80, 'SaveBits': 0x800, 'VRedraw': 0x1}
+WNDCLASSSTYLE = type('WNDCLASSSTYLE', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDClassStyle.items()}, '_tab_cn': {c: n for n, c in WNDClassStyle.items()}, '_def': 0})
+
+class WNDCLASS(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cbSize', wintypes.UINT), ('style', WNDCLASSSTYLE), ('lpfnWndProc', WNDPROC), ('cbClsExtra', wintypes.INT),  ('cbWndExtra', wintypes.INT), ('hInstance', wintypes.HINSTANCE),  ('hIcon', wintypes.HICON), ('hCursor', wintypes.HCURSOR), ('hBrush', wintypes.HBRUSH), ('lpszMenuName', wintypes.LPCWSTR), ('lpszClassName', wintypes.LPCWSTR), ('hIconSm', wintypes.HICON)]
+WNDPCLASS = type('WNDPCLASS', (_BPStruct, ctypes.POINTER(WNDCLASS)),  {'_type_': WNDCLASS})
+
+WNDWindowStyle = {'Border': 0x800000, 'Caption': 0xC00000, 'Child': 0x40000000, 'ClipChildren': 0x2000000, 'ClipSiblings': 0x4000000, 'Disabled': 0x8000000, 'DlgFrame': 0x400000, 'Group': 0x20000, 'HScroll': 0x100000, 'Maximize': 0x1000000, 'MaximizeBox': 0x10000, 'Minimize': 0x20000000, 'MinimizeBox': 0x20000, 'Overlapped': 0, 'Popup': 0x80000000, 'SizeBox': 0x40000, 'SysMenu': 0x80000, 'Visible': 0x10000000, 'VScroll': 0x200000}
+WNDWINDOWSTYLE = type('WNDWINDOWSTYLE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WNDWindowStyle.items()}, '_tab_cn': {c: n for n, c in WNDWindowStyle.items()}, '_def': 0})
+
+WNDCmdRelationship = {'Child': 5, 'EnabledPopup': 6, 'First': 0, 'Last': 1, 'Next': 2, 'Prev': 3, 'Owner': 4}
+WNDCMDRELATIONSHIP = type('WNDCMDRELATIONSHIP', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDCmdRelationship.items()}, '_tab_cn': {c: n for n, c in WNDCmdRelationship.items()}, '_def': 5})
+
+WNDAncestorFlag = {'Parent': 1, 'Root': 2, 'RootOwner': 3}
+WNDANCESTORFLAG = type('WNDANCESTORFLAG', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDAncestorFlag.items()}, '_tab_cn': {c: n for n, c in WNDAncestorFlag.items()}, '_def': 1})
+
+WNDCmdShow = {'Hide': 0, 'ShowNormal': 1, 'ShowMinimized': 2, 'ShowMaximized': 3, 'ShowNoActivate': 4, 'Show': 5, 'Minimize': 6, 'ShowMinNoActive': 7, 'ShowNA': 8, 'Restore': 9, 'ShowDefault': 10, 'ForceMinimize': 11}
+WNDCMDSHOW = type('WNDCMDSHOW', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WNDCmdShow.items()}, '_tab_cn': {c: n for n, c in WNDCmdShow.items()}, '_def': 5})
+
+WNDPosHwnd = {'Bottom': 1, 'NoTopMost': -2, 'Top': 0, 'TopMost': -1}
+WNDPOSHWND = type('WNDPOSHWND', (_BCode, wintypes.LPARAM), {'_tab_nc': {n.lower(): c for n, c in WNDPosHwnd.items()}, '_tab_cn': {c: n for n, c in WNDPosHwnd.items()}, '_def': 0})
+
+WNDPosFlags = {'AsyncWindowPos': 0x4000, 'DeferErase': 0x2000, 'DrawFrame': 0x20, 'FrameChanged': 0x20, 'HideWindow': 0x80, 'NoActivate': 0x10, 'NoCopyBits': 0x100, 'NoMove': 0x2, 'NoOwnerZOrder': 0x200, 'NoReposition': 0x200, 'NoSendChanging': 0x400, 'NoSize': 0x1, 'NoZOrder': 0x4, 'ShowWindow': 0x40}
+WNDPOSFLAGS = type('WNDPOSFLAGS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDPosFlags.items()}, '_tab_cn': {c: n for n, c in WNDPosFlags.items()}, '_def': 0})
+
+WNDIndex = {'ExStyle': -20, 'HInstance': -6, 'HwndParent': -8, 'ID': -12, 'Style': -16, 'UserData': -21, 'WndProc': -4}
+WNDINDEX = type('WNDINDEX', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WNDIndex.items()}, '_tab_cn': {c: n for n, c in WNDIndex.items()}, '_def': -16})
+
+WNDRemoveMsg = {'NoRemove': 0, 'Remove': 1, 'NoYield': 2, 'Input': 0x1c070000, 'PostMessage': 0x980000, 'Paint': 0x200000, 'SendMessage': 0x400000}
+WNDREMOVEMSG = type('WNDREMOVEMSG', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDRemoveMsg.items()}, '_tab_cn': {c: n for n, c in WNDRemoveMsg.items()}, '_def': 0})
+
+class HWND(wintypes.HWND):
+  def __new__(cls, hwnd, ml=None):
+    return None if hwnd is None else wintypes.HWND.__new__(cls, hwnd)
+  def __init__(self, hwnd, ml=None):
+    wintypes.HWND.__init__(self, hwnd)
+    self._ml = ml
+  @property
+  def hwnd(self):
+    return self.value
+  def __eq__(self, other):
+    return self.value == getattr(other, 'value', other)
+  def Shut(self):
+    return Window.ShutWindow(self)
+  def WaitShutdown(self, timeout=None):
+    if self._ml:
+      self._ml.join(timeout)
+  def GetWindow(self, cmd=5):
+    return HWND(Window.GetWindow(self, cmd))
+  def FindChildWindow(self, previous_hwnd=None, class_name=None, window_name=None):
+    return HWND(Window.FindWindowEx(self, previous_hwnd, class_name, window_name))
+  def GetAncestor(self, flag=1):
+    return HWND(Window.GetAncestor(self, flag))
+  @property
+  def Parent(self):
+    return HWND(Window.GetAncestor(self, 1))
+  @property
+  def Owner(self):
+    return HWND(Window.GetWindow(self, 4))
+  @property
+  def ParentOrOwner(self):
+    return HWND(Window.GetParent(self))
+  @Parent.setter
+  def Parent(self, value):
+    Window.SetParent(self, value)
+  def IsChildOf(self, hwnd):
+    return Window.IsChild(hwnd, self)
+  def HasForChild(self, hwnd):
+    return Window.IsChild(self, hwnd)
+  @property
+  def IsVisible(self):
+    return Window.IsWindowVisible(self)
+  @property
+  def IsZoomed(self):
+    return Window.IsZoomed(self)
+  def Show(self, cmd=5):
+    return Window.ShowWindow(self, cmd)
+  def ShowOwnedPopups(self, show=True):
+    return Window.ShowOwnedPopups(self, show)
+  def Close(self):
+    return Window.CloseWindow(self)
+  def Destroy(self):
+    return Window.DestroyWindow(self)
+  @property
+  def TopWindow(self):
+    return HWND(Window.GetTopWindow(self))
+  def BringToTop(self):
+    return Window.BringWindowToTop(self)
+  @property
+  def Rect(self):
+    r = RECT()
+    return r if Window.GetWindowRect(self, r) else None
+  @property
+  def ClientRect(self):
+    r = RECT()
+    return r if Window.GetClientRect(self, r) else None
+  def Move(self, ltwh, repaint=True):
+    return Window.MoveWindow(self, *ltwh, repaint)
+  def SetPos(self, insert_after, ltwh, flags=0):
+    return Window.SetWindowPos(self, getattr(insert_after, 'value', insert_after) or 0, *ltwh, flags)
+  @property
+  def ClassName(self):
+    cn = ctypes.create_unicode_buffer(257)
+    ctypes.set_last_error(0)
+    return None if not Window.GetClassName(self, cn, 257) and ctypes.get_last_error() else cn.value
+  @property
+  def Name(self):
+    return Window.GetWindowName(self)
+  @Name.setter
+  def Name(self, value):
+    Window.SetWindowName(self, value)
+  @property
+  def ThreadProcessId(self):
+    pid = wintypes.DWORD()
+    ctypes.set_last_error(0)
+    return None if not (tid := Window.GetWindowThreadProcessId(self, pid)) and ctypes.get_last_error() else (tid, pid.value)
+  @property
+  def ExStyle(self):
+    ctypes.set_last_error(0)
+    return None if not (r := Window.GetWindowLongPtr(self, 'ExStyle')) and ctypes.get_last_error() else r
+  @ExStyle.setter
+  def ExStyle(self, value):
+    Window.SetWindowLongPtr(self, 'ExStyle', value)
+  @property
+  def HInstance(self):
+    ctypes.set_last_error(0)
+    return None if not (r := Window.GetWindowLongPtr(self, 'HInstance')) and ctypes.get_last_error() else r
+  @HInstance.setter
+  def HInstance(self, value):
+    Window.SetWindowLongPtr(self, 'HInstance', getattr(value, 'value', value) or 0)
+  @property
+  def HwndParent(self):
+    ctypes.set_last_error(0)
+    return None if not (r := Window.GetWindowLongPtr(self, 'HwndParent')) and ctypes.get_last_error() else r
+  @HwndParent.setter
+  def HwndParent(self, value):
+    Window.SetWindowLongPtr(self, 'HwndParent', getattr(value, 'value', value) or 0)
+  @property
+  def ID(self):
+    ctypes.set_last_error(0)
+    return None if not (r := Window.GetWindowLongPtr(self, 'ID')) and ctypes.get_last_error() else r
+  @property
+  def Style(self):
+    ctypes.set_last_error(0)
+    return None if not (r := Window.GetWindowLongPtr(self, 'Style')) and ctypes.get_last_error() else WNDWINDOWSTYLE(r)
+  @Style.setter
+  def Style(self, value):
+    Window.SetWindowLongPtr(self, 'Style', WNDWINDOWSTYLE.from_param(value))
+  @property
+  def WndProc(self):
+    ctypes.set_last_error(0)
+    return None if not (r := Window.GetWindowLongPtr(self, 'WndProc')) and ctypes.get_last_error() else r
+  @WndProc.setter
+  def WndProc(self, value):
+    Window.SetWindowLongPtr(self, 'WndProc', getattr(value, 'value', value) or 0)
+  def PeekMessage(self, filter=(0, 0), flag=0, lpMsg=None):
+    if lpMsg is None:
+      lpMsg = ctypes.pointer(wintypes.MSG())
+    return lpMsg.contents if Window.PeekMessage(lpMsg, self, *filter, flag) else None
+  def GetMessage(self, filter=(0, 0), lpMsg=None):
+    if lpMsg is None:
+      lpMsg = ctypes.pointer(wintypes.MSG())
+    return None if Window.GetMessage(lpMsg, self, *filter) < 0 else lpMsg.contents
+  def PostMessage(self, Msg, wParam, lParam):
+    return Window.PostMessage(self, Msg, wParam, lParam)
+  def SendMessage(self, Msg, wParam, lParam):
+    ctypes.set_last_error(0)
+    return None if not (r := Window.SendMessage(self, Msg, wParam, lParam)) and ctypes.get_last_error() else r
+  def SendNotifyMessage(self, Msg, wParam, lParam):
+    return Window.SendNotifyMessage(self, Msg, wParam, lParam)
+
+class _WndMeta(type):
+  @property
+  def DesktopWindow(cls):
+    return HWND(cls.GetDesktopWindow())
+  @property
+  def ForegroundWindow(cls):
+    return HWND(cls.GetForegroundWindow())
+  @ForegroundWindow.setter
+  def ForegroundWindow(cls, value):
+    cls.SetForegroundWindow(value)
+
+class Window(metaclass=_WndMeta):
+  WindowProc = WNDPROC
+  @classmethod
+  def RegisterWindowClass(cls, class_name, window_proc=None, class_style=0):
+    return cls.RegisterClassEx((class_style, window_proc or cls.DefWindowProc, 0,  0, cls.GetModuleHandle(None), 0, 0, 0, 0, class_name, 0))
+  @classmethod
+  def UnregisterWindowClass(cls, class_name):
+    return cls.UnregisterClass((wintypes.LPCWSTR(class_name) if isinstance(class_name, (int, wintypes.ATOM)) else class_name), cls.GetModuleHandle(None))
+  def __new__(cls, class_name, window_name='', window_style=0, window_ex_style=0, window_position=(0, 0), window_size=(0, 0), window_parent=None, window_menu=None):
+    hwnd = None
+    b = threading.Barrier(2)
+    def _new():
+      nonlocal hwnd
+      try:
+        hwnd = cls.CreateWindowEx(window_ex_style, (wintypes.LPCWSTR(class_name) if isinstance(class_name, (int, wintypes.ATOM)) else class_name), window_name, window_style, *window_position, *window_size, window_parent, window_menu, cls.GetModuleHandle(None), None)
+      except:
+        pass
+      b.wait()
+      if hwnd:
+        lpMsg = ctypes.byref(msg := wintypes.MSG())
+        while cls.GetMessage(lpMsg, hwnd, 0, 0) > 0:
+          cls.TranslateMessage(lpMsg)
+          cls.DispatchMessage(lpMsg)
+    th = threading.Thread(target=_new, daemon=True)
+    th.start()
+    b.wait()
+    return HWND(hwnd, th)
+  @classmethod
+  def ShutWindow(cls, hwnd):
+    return cls.PostMessage(hwnd, 0x10, 0, 0)
+  @classmethod
+  def GetWindowName(cls, hwnd):
+    ctypes.set_last_error(0)
+    if not (l := cls.GetWindowTextLength(hwnd)) and ctypes.get_last_error():
+      return None
+    n = ctypes.create_unicode_buffer(l + 1)
+    ctypes.set_last_error(0)
+    return None if not cls.GetWindowText(hwnd, n, l + 1) and ctypes.get_last_error() else n.value
+  @classmethod
+  def SetWindowName(cls, hwnd, name=''):
+    return cls.SetWindowText(hwnd, name)
+  GetModuleHandle = _WndUtil._wrap('GetModuleHandleW', wintypes.HMODULE, wintypes.LPCWSTR, p=kernel32)
+  RegisterClassEx = _WndUtil._wrap('RegisterClassExW', wintypes.ATOM, WNDPCLASS)
+  UnregisterClass = _WndUtil._wrap('UnregisterClassW', wintypes.BOOLE, wintypes.LPCWSTR, wintypes.HINSTANCE)
+  CreateWindowEx = _WndUtil._wrap('CreateWindowExW', wintypes.HWND, wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, WNDWINDOWSTYLE, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID)
+  IsWindow = _WndUtil._wrap('IsWindow', wintypes.BOOLE, wintypes.HWND)
+  GetWindow = _WndUtil._wrap('GetWindow', wintypes.HWND, wintypes.HWND, WNDCMDRELATIONSHIP)
+  FindWindowEx = _WndUtil._wrap('FindWindowExW', wintypes.HWND, wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR)
+  GetAncestor = _WndUtil._wrap('GetAncestor', wintypes.HWND, wintypes.HWND, WNDANCESTORFLAG)
+  GetParent = _WndUtil._wrap('GetParent', wintypes.HWND, wintypes.HWND)
+  SetParent = _WndUtil._wrap('SetParent', wintypes.HWND, wintypes.HWND, wintypes.HWND)
+  IsChild = _WndUtil._wrap('IsChild', wintypes.BOOLE, wintypes.HWND, wintypes.HWND)
+  IsWindowVisible = _WndUtil._wrap('IsWindowVisible', wintypes.BOOLE, wintypes.HWND)
+  IsZoomed = _WndUtil._wrap('IsZoomed', wintypes.BOOLE, wintypes.HWND)
+  ShowWindow = _WndUtil._wrap('ShowWindow', wintypes.BOOLE, wintypes.HWND, WNDCMDSHOW)
+  ShowOwnedPopups = _WndUtil._wrap('ShowOwnedPopups', wintypes.BOOLE, wintypes.HWND, wintypes.BOOL)
+  CloseWindow = _WndUtil._wrap('CloseWindow', wintypes.BOOLE, wintypes.HWND)
+  DestroyWindow = _WndUtil._wrap('DestroyWindow', wintypes.BOOLE, wintypes.HWND)
+  GetDesktopWindow = _WndUtil._wrap('GetDesktopWindow', wintypes.HWND)
+  GetForegroundWindow = _WndUtil._wrap('GetForegroundWindow', wintypes.HWND)
+  SetForegroundWindow = _WndUtil._wrap('SetForegroundWindow', wintypes.BOOLE, wintypes.HWND)
+  GetTopWindow = _WndUtil._wrap('GetTopWindow', wintypes.HWND, wintypes.HWND)
+  BringWindowToTop = _WndUtil._wrap('BringWindowToTop', wintypes.BOOLE, wintypes.HWND)
+  GetWindowRect = _WndUtil._wrap('GetWindowRect', wintypes.BOOLE, wintypes.HWND, wintypes.LPRECT)
+  GetClientRect = _WndUtil._wrap('GetClientRect', wintypes.BOOLE, wintypes.HWND, wintypes.LPRECT)
+  AdjustWindowRectEx = _WndUtil._wrap('AdjustWindowRectEx', wintypes.BOOLE, wintypes.LPRECT, WNDWINDOWSTYLE, wintypes.BOOL, wintypes.DWORD)
+  MoveWindow = _WndUtil._wrap('MoveWindow', wintypes.BOOLE, wintypes.HWND, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.BOOL)
+  SetWindowPos = _WndUtil._wrap('SetWindowPos', wintypes.BOOLE, wintypes.HWND, WNDPOSHWND, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, WNDPOSFLAGS)
+  GetClassName = _WndUtil._wrap('GetClassNameW', wintypes.INT, wintypes.HWND, wintypes.LPWSTR, wintypes.INT)
+  GetWindowTextLength = _WndUtil._wrap('GetWindowTextLengthW', wintypes.INT, wintypes.HWND)
+  GetWindowText = _WndUtil._wrap('GetWindowTextW', wintypes.INT, wintypes.HWND, wintypes.LPWSTR, wintypes.INT)
+  SetWindowText = _WndUtil._wrap('SetWindowTextW', wintypes.BOOLE, wintypes.HWND, wintypes.LPCWSTR)
+  GetWindowThreadProcessId = _WndUtil._wrap('GetWindowThreadProcessId', wintypes.DWORD, wintypes.HWND, wintypes.PDWORD)
+  GetWindowLongPtr = _WndUtil._wrap('GetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX)
+  SetWindowLongPtr = _WndUtil._wrap('SetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX, wintypes.LPARAM)
+  PeekMessage = _WndUtil._wrap('PeekMessageW', wintypes.BOOLE, wintypes.LPMSG, wintypes.HWND, wintypes.UINT, wintypes.UINT, WNDREMOVEMSG)
+  GetMessage = _WndUtil._wrap('GetMessageW', wintypes.LONG, wintypes.LPMSG, wintypes.HWND, wintypes.UINT, wintypes.UINT)
+  TranslateMessage = _WndUtil._wrap('TranslateMessage', wintypes.BOOLE, wintypes.LPMSG)
+  DispatchMessage = _WndUtil._wrap('DispatchMessageW', wintypes.LRESULT, wintypes.LPMSG)
+  PostMessage = _WndUtil._wrap('PostMessageW', wintypes.BOOLE, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  SendMessage = _WndUtil._wrap('SendMessageW', wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  SendNotifyMessage = _WndUtil._wrap('SendNotifyMessageW', wintypes.BOOLE, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  DefWindowProc = _WndUtil._wrap('DefWindowProcW', wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  CallWindowProc = _WndUtil._wrap('CallWindowProcW', wintypes.LRESULT, WNDPROC, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 
 def Initialize(mode=6, ole=False):

@@ -1322,16 +1322,8 @@ D2D1RenderTarget.EndDraw()
 tuple(map(IUnknown.Release, (D2D1Bitmap4, D2D1Bitmap3, IFormatConverter, IBitmapFrame, IDecoder, D2D1RenderTarget)))
 
 #Creating a window
-user32 = ctypes.WinDLL('user32',  use_last_error=True)
-WNDPROC = ctypes.WINFUNCTYPE(wintypes.INT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
-class WNDCLASSEXW(ctypes.Structure):
-  _fields_ = [('cbSize', wintypes.UINT), ('style', wintypes.UINT), ('lpfnWndProc', WNDPROC), ('cbClsExtra', wintypes.INT),  ('cbWndExtra', wintypes.INT), ('hInstance', wintypes.HANDLE),  ('hIcon', wintypes.HANDLE), ('hCursor', wintypes.HANDLE), ('hBrush', wintypes.HANDLE), ('lpszMenuName', wintypes.LPCWSTR), ('lpszClassName', wintypes.LPCWSTR), ('hIconSm', wintypes.HANDLE)]
-hInst = kernel32.GetModuleHandleW(wintypes.LPCWSTR(0))
-wclassName = 'WICPytest'
-wname = 'WICPy test'
-wndClass = WNDCLASSEXW(ctypes.sizeof(WNDCLASSEXW), 0, WNDPROC(('DefWindowProcW', user32)), 0,  0, hInst, 0, 0, 0, 0, wintypes.LPCWSTR(wclassName), 0)
-regRes = user32.RegisterClassExW(ctypes.byref(wndClass))
-hwnd = user32.CreateWindowExW(wintypes.DWORD(0), wintypes.LPCWSTR(wclassName), wintypes.LPCWSTR(wname), wintypes.DWORD(0x10C80000), wintypes.INT(100), wintypes.INT(100), wintypes.INT(800), wintypes.INT(450), wintypes.HWND(0), wintypes.HANDLE(0), hInst, wintypes.LPVOID(0))
+Window.RegisterWindowClass('WICPytest')
+hwnd = Window('WICPytest', 'WICPy test', 'Border | Caption | DlgFrame | SysMenu | Visible', 0, (100, 100), (800, 450))
 #Creating a D2D1 render target to this window
 D2D1RenderTarget = D2D1Factory.CreateHwndRenderTarget({'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied')}, (hwnd, (1920, 1080), 'Immediately | RetainContents'))
 #Other way to do the same
@@ -1348,15 +1340,12 @@ D2D1RenderTarget.EndDraw()
 D2D1Bitmap4.Release()
 #Managing the message queue until the window is closed
 print('Waiting for the closure of the pop-up window...')
-msg = wintypes.MSG()
-lpMsg = ctypes.pointer(msg)
-while user32.GetMessageW(lpMsg, hwnd, 0, 0) > 0:
-  user32.TranslateMessage(lpMsg)
-  user32.DispatchMessageW(lpMsg)
+hwnd.WaitShutdown()
 D2D1RenderTarget.Release()
 
 #Creating a window
-def PyWndProcedure(hWnd, Msg, wParam, lParam):
+@WNDPROC
+def WndResize(hWnd, Msg, wParam, lParam):
   if Msg == 5 and 'DXGISwapChain' in globals():
     h, l = divmod(lParam, 65536)
     print(l, h, DXGISwapChain.ResizeBuffers(), DXGISwapChain.GetDesc())
@@ -1370,18 +1359,12 @@ def PyWndProcedure(hWnd, Msg, wParam, lParam):
     D2D1DeviceContext.SetTarget()
     D2D1Bitmap3.Release()
     DXGISwapChain.Present()
-  elif Msg == 16:
-    user32.PostMessageW(hWnd, Msg, wParam, lParam)
-    return 0
-  return user32.DefWindowProcW(wintypes.HWND(hWnd), wintypes.UINT(Msg), wintypes.WPARAM(wParam), wintypes.LPARAM(lParam))
-wname = 'WICPy test resizable'
-wclassName = 'WICPytest2'
-wndClass2 = WNDCLASSEXW(ctypes.sizeof(WNDCLASSEXW), 0, WNDPROC(PyWndProcedure), 0,  0, hInst, 0, 0, 0, 0, wintypes.LPCWSTR(wclassName), 0)
-regRes = user32.RegisterClassExW(ctypes.byref(wndClass2))
+  return Window.DefWindowProc(hWnd, Msg, wParam, lParam)
+Window.RegisterWindowClass('WICPytestresizable', WndResize)
 r = wintypes.RECT(0, 0, 800, 450)
-user32.AdjustWindowRect(ctypes.byref(r), wintypes.DWORD(0x10C80000),wintypes.BOOL(False))
-hwnd = user32.CreateWindowExW(wintypes.DWORD(0), wintypes.LPCWSTR(wclassName), wintypes.LPCWSTR(wname), wintypes.DWORD(0x10CC0000), wintypes.INT(100), wintypes.INT(100), wintypes.INT(r.right - r.left), wintypes.INT(r.bottom - r.top), wintypes.HWND(0), wintypes.HANDLE(0), hInst, wintypes.LPVOID(0))
-user32.GetClientRect(hwnd,ctypes.byref(r))
+Window.AdjustWindowRectEx(r, 'Border | Caption | DlgFrame | SysMenu | Visible', 0, False)
+hwnd = Window('WICPytestresizable', 'WICPy test resizable', 'Border | Caption | DlgFrame | SizeBox | SysMenu | Visible', 0, (100, 100), (r.right - r.left, r.bottom - r.top))
+Window.GetClientRect(hwnd, r)
 print(r.left, r.top, r.right, r.bottom)
 #Creating a DXGI swap chain associated with the window
 DXGIFactory = DXGIDevice.GetFactory()
@@ -1409,14 +1392,7 @@ DXGISurface2.Release()
 DXGISwapChain.Present()
 #Managing the message queue until the window is closed
 print('Waiting for the closure of the resizable pop-up window...')
-msg = wintypes.MSG()
-lpMsg = ctypes.pointer(msg)
-while user32.GetMessageW(lpMsg, hwnd, 0, 0) > 0:
-  if msg.message == 16:
-    break
-  user32.TranslateMessage(lpMsg)
-  user32.DispatchMessageW(lpMsg)
-user32.DestroyWindow(hwnd)
+hwnd.WaitShutdown()
 tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
 
 Uninitialize()
