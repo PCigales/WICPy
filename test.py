@@ -1344,7 +1344,7 @@ hwnd.WaitShutdown()
 D2D1RenderTarget.Release()
 
 #Creating a window
-@WNDPROC
+@Window.WindowProc
 def WndResize(hWnd, Msg, wParam, lParam):
   if Msg == 5 and 'DXGISwapChain' in globals():
     h, l = divmod(lParam, 65536)
@@ -1359,11 +1359,11 @@ def WndResize(hWnd, Msg, wParam, lParam):
     D2D1DeviceContext.SetTarget()
     D2D1Bitmap3.Release()
     DXGISwapChain.Present()
-  return Window.DefWindowProc(hWnd, Msg, wParam, lParam)
+  return Window.DefWindowProcQuit(hWnd, Msg, wParam, lParam)
 Window.RegisterWindowClass('WICPytestresizable', WndResize)
 r = wintypes.RECT(0, 0, 800, 450)
 Window.AdjustWindowRectEx(r, 'Border | Caption | DlgFrame | SysMenu | Visible', 0, False)
-hwnd = Window('WICPytestresizable', 'WICPy test resizable', 'Border | Caption | DlgFrame | SizeBox | SysMenu | Visible', 0, (100, 100), (r.right - r.left, r.bottom - r.top))
+hwnd = Window('WICPytestresizable', 'WICPy test resizable', 'Border | Caption | DlgFrame | SizeBox | SysMenu | Visible', 0, (100, 100), (r.right - r.left, r.bottom - r.top), message_loop=Window.DefMessageLoopQuit)
 Window.GetClientRect(hwnd, r)
 print(r.left, r.top, r.right, r.bottom)
 #Creating a DXGI swap chain associated with the window

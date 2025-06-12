@@ -6888,6 +6888,9 @@ class HWND(wintypes.HWND):
     return self.value
   def __eq__(self, other):
     return self.value == getattr(other, 'value', other)
+  @property
+  def IsExisting(self):
+    return Window.IsWindow(self)
   def Shut(self):
     return Window.ShutWindow(self)
   def WaitShutdown(self, timeout=None):
@@ -7019,6 +7022,9 @@ class HWND(wintypes.HWND):
 
 class _WndMeta(type):
   @property
+  def ModuleHandle(cls):
+    return cls.GetModuleHandle(None)
+  @property
   def DesktopWindow(cls):
     return HWND(cls.GetDesktopWindow())
   @property
@@ -7027,6 +7033,16 @@ class _WndMeta(type):
   @ForegroundWindow.setter
   def ForegroundWindow(cls, value):
     cls.SetForegroundWindow(value)
+  def DefMessageLoop(cls, hwnd):
+    lpMsg = ctypes.byref(wintypes.MSG())
+    while cls.GetMessage(lpMsg, hwnd, 0, 0) > 0:
+      cls.TranslateMessage(lpMsg)
+      cls.DispatchMessage(lpMsg)
+  def DefMessageLoopQuit(cls, hwnd):
+    lpMsg = ctypes.byref(wintypes.MSG())
+    while cls.GetMessage(lpMsg, None, 0, 0) > 0:
+      cls.TranslateMessage(lpMsg)
+      cls.DispatchMessage(lpMsg)
 
 class Window(metaclass=_WndMeta):
   WindowProc = WNDPROC
@@ -7036,21 +7052,18 @@ class Window(metaclass=_WndMeta):
   @classmethod
   def UnregisterWindowClass(cls, class_name):
     return cls.UnregisterClass((wintypes.LPCWSTR(class_name) if isinstance(class_name, (int, wintypes.ATOM)) else class_name), cls.GetModuleHandle(None))
-  def __new__(cls, class_name, window_name='', window_style=0, window_ex_style=0, window_position=(0, 0), window_size=(0, 0), window_parent=None, window_menu=None):
+  def __new__(cls, class_name, window_name='', window_style=0, window_ex_style=0, window_position=(0, 0), window_size=(0, 0), window_parent=None, window_menu=None, message_loop=None):
     hwnd = None
     b = threading.Barrier(2)
     def _new():
-      nonlocal hwnd
+      nonlocal message_loop, hwnd
       try:
         hwnd = cls.CreateWindowEx(window_ex_style, (wintypes.LPCWSTR(class_name) if isinstance(class_name, (int, wintypes.ATOM)) else class_name), window_name, window_style, *window_position, *window_size, window_parent, window_menu, cls.GetModuleHandle(None), None)
       except:
         pass
       b.wait()
       if hwnd:
-        lpMsg = ctypes.byref(msg := wintypes.MSG())
-        while cls.GetMessage(lpMsg, hwnd, 0, 0) > 0:
-          cls.TranslateMessage(lpMsg)
-          cls.DispatchMessage(lpMsg)
+        (message_loop or cls.DefMessageLoop)(hwnd)
     th = threading.Thread(target=_new, daemon=True)
     th.start()
     b.wait()
@@ -7110,7 +7123,13 @@ class Window(metaclass=_WndMeta):
   PostMessage = _WndUtil._wrap('PostMessageW', wintypes.BOOLE, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
   SendMessage = _WndUtil._wrap('SendMessageW', wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
   SendNotifyMessage = _WndUtil._wrap('SendNotifyMessageW', wintypes.BOOLE, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  PostQuitMessage = _WndUtil._wrap('PostQuitMessage', None, wintypes.INT)
   DefWindowProc = _WndUtil._wrap('DefWindowProcW', wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  @WindowProc
+  def DefWindowProcQuit(hWnd, Msg, wParam, lParam):
+    if Msg == 0x2:
+      Window.PostQuitMessage(0)
+    return Window.DefWindowProc(hWnd, Msg, wParam, lParam)
   CallWindowProc = _WndUtil._wrap('CallWindowProcW', wintypes.LRESULT, WNDPROC, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 
