@@ -6433,7 +6433,7 @@ class IShellFolder(IUnknown):
   def GetContextMenuOf(self, pidl, hwnd=None):
     return self.GetUIObjectOf(pidl, IContextMenu, hwnd)
   def ContextMenuNewFolder(self, name, hwnd=None):
-    if (e1 := tuple(self.EnumObjects(0x20, hwnd))) is None or (c := self.GetContextMenu(hwnd)) is None or c.InvokeCommand('NewFolder', hwnd=hwnd) is None or (e2 := self.EnumObjects(0x20, hwnd)) is None or len(n := tuple(p for p in e2 if not any(map(p.IsEqualTo, e1)))) != 1 or (pidl := self.SetNameOf(n[0], name, hwnd=hwnd)) is None:
+    if ((e1 := self.EnumObjects(0x20, hwnd)) and (e1 := tuple(e1))) is None or (c := self.GetContextMenu(hwnd)) is None or c.InvokeCommand('NewFolder', hwnd=hwnd) is None or ((e2 := self.EnumObjects(0x20, hwnd)) and (e2 := tuple(e2))) is None or len(n := tuple(p for p in e2 if not any(map(p.IsEqualTo, e1)))) != 1 or (pidl := self.SetNameOf(n[0], name, hwnd=hwnd)) is None:
       return None
     return self.BindToObject(pidl)
   def __iter__(self):
