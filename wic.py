@@ -313,7 +313,7 @@ class IClassFactory(IUnknown):
     return self
   def CreateInstance(self, icls):
     if self.pI is None:
-      return None 
+      return None
     return icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), self)
 
 class IEnumString(IUnknown):
@@ -5932,7 +5932,7 @@ class WSSTGMEDIUM(ctypes.Structure, metaclass=_WSMeta):
         return None
       stg_medium = {'tymed': stg_medium[0], 'data': stg_medium[1]}
     return stg_medium.get('data') if stg_medium.get('tymed') == tymed else None
-WSPSTGMEDIUM = type('WSPSTGMEDIUM', (_BPStruct, ctypes.POINTER(WSSTGMEDIUM)),  {'_type_': WSSTGMEDIUM})   
+WSPSTGMEDIUM = type('WSPSTGMEDIUM', (_BPStruct, ctypes.POINTER(WSSTGMEDIUM)),  {'_type_': WSSTGMEDIUM})
 
 WSDataDir = {'Get': 1, 'Set': 2}
 WSDATADIR = type('WSDATADIR', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSDataDir.items()}, '_tab_cn': {c: n for n, c in WSDataDir.items()}, '_def': 1})
