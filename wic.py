@@ -6453,9 +6453,9 @@ class IDataObject(IUnknown):
       return None
     fa = []
     for i in range(sh32.DragQueryFileW(g, 0xffffffff, None, 0)):
-      fl = sh32.DragQueryFileW(g, i, None, 0) + 1
+      fl = sh32.DragQueryFileW(g, wintypes.UINT(i), None, wintypes.UINT(0)) + 1
       f = ctypes.create_unicode_buffer(fl)
-      sh32.DragQueryFileW(g, i, f, fl)
+      sh32.DragQueryFileW(g, wintypes.UINT(i), ctypes.byref(f), wintypes.UINT(fl))
       fa.append(f)
     return tuple(f.value for f in fa)
   def GetFiles(self):
