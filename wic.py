@@ -1,4 +1,4 @@
-# WICPy v1.2.1 (https://github.com/PCigales/WICPy)
+# WICPy v1.3.0 (https://github.com/PCigales/WICPy)
 # Copyright © 2024 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -313,7 +313,7 @@ class IClassFactory(IUnknown):
     return self
   def CreateInstance(self, icls):
     if self.pI is None:
-      return None
+      return None 
     return icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), self)
 
 class IEnumString(IUnknown):
@@ -1624,7 +1624,7 @@ class VERSIONEDSTREAM(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
         i.Release()
   def __ctypes_from_outparam__(self):
     self._needsclear = True
-    return self.content
+    return self.value
 PVERSIONEDSTREAM = ctypes.POINTER(VERSIONEDSTREAM)
 
 class CA(ctypes.Structure):
@@ -5856,6 +5856,128 @@ WSSIGDN = type('WSSIGDN', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for 
 WSSichintf = {'Display': 0, 'AllFields': 0x80000000, 'Canonical': 0x10000000, 'TestFileSyspathIfNotEqual': 0x20000000}
 WSSICHINTF = type('WSSICHINTF', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSSichintf.items()}, '_tab_cn': {c: n for n, c in WSSichintf.items()}, '_def': 0})
 
+class WSDVTARGETDEVICE(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('tdSize', wintypes.DWORD), ('tdDriverNameOffset', wintypes.WORD), ('tdDeviceNameOffset', wintypes.WORD), ('tdPortNameOffset', wintypes.WORD), ('tdExtDevmodeOffset', wintypes.WORD), ('tdData', wintypes.BYTE * 0)]
+WSPDVTARGETDEVICE = type('WSPDVTARGETDEVICE', (_BPStruct, ctypes.POINTER(WSDVTARGETDEVICE)),  {'_type_': WSDVTARGETDEVICE})
+
+WSTymed = {'Null': 0, 'HGlobal': 1, 'File': 2, 'IStream': 4, 'IStorage': 8, 'GDI': 16, 'MFPict': 32, 'EnhMF': 64}
+WSTYMED = type('WSTYMED', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSTymed.items()}, '_tab_cn': {c: n for n, c in WSTymed.items()}, '_def': 0})
+
+WSCfFormat = {'Bitmap': 2, 'Dib': 8, 'EnhMetaFile': 14, 'HDrop': 15, 'MetaFilePict': 3, 'Text': 1, 'Tiff': 6, 'UnicodeText': 13}
+WSCfFormatEq = {'shidlistarray': 'Shell IDList Array', 'preferreddropeffect': 'Preferred DropEffect', 'performeddropeffect': 'Performed DropEffect', 'pastesucceeded': 'Paste Succeeded'}
+class WSCFFORMAT(_BCode, wintypes.WORD):
+  _tab_nc = {n.lower(): c for n, c in WSCfFormat.items()}
+  _tab_cn = {c: n for n, c in WSCfFormat.items()}
+  _def = 1
+  user32.RegisterClipboardFormatW.restype = wintypes.UINT
+  user32.GetClipboardFormatNameW.restype = wintypes.INT
+  @staticmethod
+  def wname_code(n):
+    return user32.RegisterClipboardFormatW(wintypes.LPCWSTR(WSCfFormatEq.get(n.lower(), n))) or None
+  @staticmethod
+  def code_wname(c):
+    b = ctypes.create_unicode_buffer(1024)
+    return b.value if user32.GetClipboardFormatNameW(wintypes.UINT(c), ctypes.byref(b), 1024) else None
+  @classmethod
+  def name_code(cls, n):
+    return cls._tab_nc.get(n.lower(), (cls.wname_code(n) or cls._def)) if isinstance(n, str) else n
+  @classmethod
+  def code_name(cls, c):
+    return cls._tab_cn.get(c, ((cls.code_wname(c) or str(c)) if isinstance(c, int) and c >= 0xc000 and c <= 0xffff else str(c)))
+
+WSDvAspect = {'Content': 1, 'Thumbnail': 2, 'Icon': 4, 'DocPrint': 8}
+WSDVASPECT = type('WSDVASPECT', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSDvAspect.items()}, '_tab_cn': {c: n for n, c in WSDvAspect.items()}, '_def': 1})
+
+class WSFORMATETC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cfFormat', WSCFFORMAT), ('ptd', WSPDVTARGETDEVICE), ('dwAspect', WSDVASPECT), ('lindex', wintypes.LONG), ('tymed', WSTYMED)]
+WSPFORMATETC = type('WSPFORMATETC', (_BPStruct, ctypes.POINTER(WSFORMATETC)),  {'_type_': WSFORMATETC})
+
+class WSSTGMEDIUM(ctypes.Structure, metaclass=_WSMeta):
+  _anonymous_ = ('un',)
+  _fields_ = [('tymed', WSTYMED), ('un', ctypes.Union.__class__('WSSTGMEDIUM_UN', (ctypes.Union,), {'_fields_': [('hBitmap', wintypes.HBITMAP), ('hMetaFilePict', wintypes.HANDLE), ('hEnhMetaFile', wintypes.HANDLE), ('hGlobal', wintypes.HGLOBAL), ('lpszFileName', wintypes.LPOLESTR), ('pstm', PCOMSTREAM), ('pstg', PCOM)]})), ('pUnkForRelease', PCOM)]
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self._needsclear = bool(self._pUnkForRelease)
+  @classmethod
+  def from_param(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, dict):
+      return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, ctypes.Structure) else ((ctypes.cast(obj.get('data'), wintypes.LPVOID),) if issubclass(t, ctypes.Union) else obj.get(n, 0))) for n, t in cls._fields_))
+    else:
+      return cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else ((ctypes.cast(o, wintypes.LPVOID),) if issubclass(t, ctypes.Union) else o)) for (n, t), o in zip(cls._fields_, obj)))
+  def to_dict(self):
+    if isinstance((d := getattr(self, {1: 'hGlobal', 2: 'lpszFileName', 4: 'pstm', 8: 'pstg', 16: 'hBitmap', 32: 'hMetaFilePict', 64: 'hEnhMetaFile'}.get(self.tymed.code, ''), None)), int):
+      d = wintypes.LPVOID(d)
+      d._stgm = self
+    else:
+      d = getattr(d, 'content', d)
+    return {'tymed': self.tymed, 'data': d}
+  def __del__(self):
+    if getattr(self, '_needsclear', False):
+      ole32.ReleaseStgMedium(ctypes.byref(self))
+    getattr(self.__class__.__bases__[0], '__del__', id)(self)
+  @property
+  def value(self):
+    return self.to_dict()
+  def __ctypes_from_outparam__(self):
+    self._needsclear = not bool(self._pUnkForRelease)
+    return self.value
+  @classmethod
+  def _get_data(cls, stg_medium, tymed):
+    if isinstance(stg_medium, ctypes.Structure):
+      stg_medium = cls.to_dict(stg_medium)
+    elif not isinstance(stg_medium, dict):
+      if len(stg_medium) < 2:
+        return None
+      stg_medium = {'tymed': stg_medium[0], 'data': stg_medium[1]}
+    return stg_medium.get('data') if stg_medium.get('tymed') == tymed else None
+WSPSTGMEDIUM = type('WSPSTGMEDIUM', (_BPStruct, ctypes.POINTER(WSSTGMEDIUM)),  {'_type_': WSSTGMEDIUM})   
+
+WSDataDir = {'Get': 1, 'Set': 2}
+WSDATADIR = type('WSDATADIR', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSDataDir.items()}, '_tab_cn': {c: n for n, c in WSDataDir.items()}, '_def': 1})
+
+SIZE = _WSMeta('SIZE', (_BTStruct, wintypes.SIZE), {})
+
+WSFDFlags = {'None': 0, 'Clsid': 0x1, 'SizePoint': 0x2, 'Attributes': 0x4, 'CreateTime': 0x8, 'AccessTime': 0x10, 'WritesTime': 0x20, 'FileSize': 0x40, 'ProgressUI': 0x4000, 'LinkUI': 0x8000, 'Unicode': 0x80000000}
+WSFDFLAGS = type('WSFDFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSFDFlags.items()}, '_tab_cn': {c: n for n, c in WSFDFlags.items()}, '_def': 0})
+
+class WSFILEDESCRIPTOR(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('dwFlags', WSFDFLAGS), ('clsid', wintypes.GUID), ('sizel', SIZE), ('pointl', POINT), ('dwFileAttributes', WSFILEATTRIBUTES), ('ftCreationTime', FILETIME), ('ftLastAccessTime', FILETIME), ('ftLastWriteTime', FILETIME), ('nFileSizeHigh', wintypes.DWORD), ('nFileSizeLow', wintypes.DWORD), ('cFileName', wintypes.WCHAR * 260)]
+  @classmethod
+  def from_param(cls, obj):
+    if isinstance(obj, dict):
+      if (fs := obj.get('nFileSize')) is not None:
+        obj['nFileSizeHigh'] = fs >> 32
+        obj['nFileSizeLow'] = fs & 0xffffffff
+      obj.setdefault('cFileName', '')
+    return super().from_param(obj)
+  def to_dict(self):
+    d = super().to_dict()
+    d['nFileSize'] = (d['nFileSizeHigh'] << 32) + d['nFileSizeLow']
+    return d
+WSPFILEDESCRIPTOR = type('WSPFILEDESCRIPTOR', (_BPStruct, ctypes.POINTER(WSFILEDESCRIPTOR)), {'_type_': WSFILEDESCRIPTOR})
+
+class WSFILEGROUPDESCRIPTOR(ctypes.Structure):
+  _fields_ = [('cItems', wintypes.UINT), ('fgd', WSFILEDESCRIPTOR * 0)]
+  def to_tuple(self):
+    return tuple(fd.value for fd in (WSFILEDESCRIPTOR * self.cItems).from_address(ctypes.addressof(self.fgd)))
+  @property
+  def value(self):
+    return self.to_tuple()
+WSPFILEGROUPDESCRIPTOR = type('WSPFILEGROUPDESCRIPTOR', (_BPStruct, ctypes.POINTER(WSFILEGROUPDESCRIPTOR)),  {'_type_': WSFILEGROUPDESCRIPTOR})
+
+class WSCIDA(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cidl', wintypes.UINT), ('aoffset', wintypes.UINT * 0)]
+  def to_tuple(self):
+    a = ctypes.addressof(self)
+    ofs =  iter((wintypes.UINT * (self.cidl + 1)).from_address(a + self.__class__.aoffset.offset))
+    return (ctypes.cast(a + next(ofs), WSPITEMIDLIST).Clone(), tuple(ctypes.cast(a + o, WSPITEMIDLIST).Clone() for o in ofs))
+  @property
+  def value(self):
+    return self.to_tuple()
+WSPCIDA = type('WSPCIDA', (_BPStruct, ctypes.POINTER(WSCIDA)),  {'_type_': WSCIDA})
+
 WSKeyState = {'LButton': 0x1, 'RButton': 0x2, 'MButton': 0x10, 'Shift': 0x4, 'Ctrl': 0x8, 'Control': 0x8, 'Alt': 0x20}
 WSKEYSTATE = type('WSKEYSTATE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSKeyState.items()}, '_tab_cn': {c: n for n, c in WSKeyState.items()}, '_def': 0})
 
@@ -5879,8 +6001,6 @@ WSPBHID = type('WSPBHID', (_BPGUID, ctypes.POINTER(WSBHID)), {'_type_': WSBHID})
 
 WSSiattribflags = {'And': 0x1, 'Or': 0x2, 'AppCompat': 0x3, 'AllItems': 0x4000}
 WSSIATTRIBFLAGS = type('WSSIATTRIBFLAGS', (_BCodeOr, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSSiattribflags.items()}, '_tab_cn': {c: n for n, c in WSSiattribflags.items()}, '_def': 0})
-
-SIZE = _WSMeta('SIZE', (_BTStruct, wintypes.SIZE), {})
 
 WSSiigbf = {'ResizeToFit': 0, 'BiggerSizeOK': 0x1, 'MemoryOnly': 0x2, 'IconOnly': 0x4, 'ThumbnailOnly': 0x8, 'InCacheOnly': 0x10, 'CropToSquare': 0x20, 'WideThumbnails': 0x40, 'IconBackground': 0x80, 'ScaleUp': 0x100}
 WSSIIGBF = type('WSSIIGBF', (_BCodeOr, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSSiigbf.items()}, '_tab_cn': {c: n for n, c in WSSiigbf.items()}, '_def': 0})
@@ -6018,7 +6138,7 @@ class IBindCtx(IUnknown, metaclass=_IBCMeta):
 class WSSHITEMID(ctypes.Structure):
   _fields_ = [('cb', wintypes.USHORT), ('abID', wintypes.BYTE * 0)]
   def to_bytes(self):
-    return (wintypes.CHAR * self.cb).from_address(ctypes.addressof(self.abID)).raw
+    return (wintypes.CHAR * max(self.cb - WSSHITEMID.cb.size, 0)).from_address(ctypes.addressof(self.abID)).raw
   @property
   def value(self):
     return self.to_bytes()
@@ -6269,8 +6389,107 @@ class IEnumIDList(IUnknown):
       raise StopIteration
     return n[0]
 
+class IEnumFORMATETC(IUnknown):
+  IID = GUID(0x00000103, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+  _protos['Next'] = 3, (wintypes.ULONG, WSPFORMATETC, wintypes.PULONG), (), wintypes.ULONG
+  _protos['Skip'] = 4, (wintypes.ULONG,), (), wintypes.ULONG
+  _protos['Reset'] = 5, (), ()
+  _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
+  def Reset(self):
+    return self.__class__._protos['Reset'](self.pI)
+  def Next(self, number):
+    r = wintypes.ULONG()
+    a = (WSFORMATETC * number)()
+    if (c := self.__class__._protos['Next'](self.pI, number, a, r)) > 1:
+      ISetLastError(c)
+      return None
+    ISetLastError(0)
+    return tuple(a[p].value for p in range(r.value))
+  def Skip(self, number):
+    try:
+      if (c := self.__class__._protos['Skip'](self.pI, number)) > 1:
+        ISetLastError(c)
+        return None
+    except:
+      ISetLastError(0x80070057)
+      return None
+    ISetLastError(0)
+    return True
+  def Clone(self):
+    return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
+  def __iter__(self):
+    return self
+  def __next__(self):
+    if not (n := self.Next(1)):
+      raise StopIteration
+    return n[0]
+
 class IDataObject(IUnknown):
   IID = GUID(0x0000010e, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+  _protos['GetData'] = 3, (WSPFORMATETC,), (WSPSTGMEDIUM,)
+  _protos['QueryGetData'] = 5, (WSPFORMATETC,), ()
+  _protos['SetData'] = 7, (WSPFORMATETC, WSPSTGMEDIUM, wintypes.BOOLE), ()
+  _protos['EnumFormatEtc'] = 8, (WSDATADIR,), (wintypes.PLPVOID,)
+  def EnumFormatEtc(self, direction=1):
+    return IEnumFORMATETC(self._protos['EnumFormatEtc'](self.pI, direction), self.factory)
+  def GetData(self, format_etc):
+    return self._protos['GetData'](self.pI, format_etc)
+  def QueryGetData(self, format_etc):
+    return self._protos['QueryGetData'](self.pI, format_etc) is not None
+  def SetData(self, format_etc, stg_medium, release):
+    return self._protos['SetData'](self.pI, format_etc, stg_medium, release)
+  @property
+  def SupportedGetFormatEtc(self):
+    return None if (ief := self.EnumFormatEtc(1)) is None else tuple(ief)
+  @property
+  def SupportedSetFormatEtc(self):
+    return None if (ief := self.EnumFormatEtc(2)) is None else tuple(ief)
+  kernel32.GlobalLock.restype = wintypes.LPVOID
+  kernel32.GlobalUnlock.restype = wintypes.BOOLE
+  sh32.DragQueryFileW.restype = wintypes.UINT
+  @staticmethod
+  def QueryFiles(stg_medium):
+    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None:
+      return None
+    fa = []
+    for i in range(sh32.DragQueryFileW(g, 0xffffffff, None, 0)):
+      fl = sh32.DragQueryFileW(g, i, None, 0) + 1
+      f = ctypes.create_unicode_buffer(fl)
+      sh32.DragQueryFileW(g, i, f, fl)
+      fa.append(f)
+    return tuple(f.value for f in fa)
+  def GetFiles(self):
+    return None if (d := self.GetData((15, None, 1, -1, 1))) is None else self.QueryFiles(d)
+  @staticmethod
+  def QueryFileDescriptors(stg_medium):
+    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
+      return None
+    fds = ctypes.cast(h, WSPFILEGROUPDESCRIPTOR).contents.value
+    kernel32.GlobalUnlock(g)
+    return fds
+  def GetFileDescriptors(self):
+    return None if (d := self.GetData(('FileGroupDescriptorW', None, 1, -1, 1))) is None else self.QueryFileDescriptors(d)
+  def GetFileContent(self, index=0):
+    return None if (fds := self.GetFileDescriptors()) is None or index >= len(fds) or (d := self.GetData(('FileContents', None, 1, index, 4))) is None else WSSTGMEDIUM._get_data(d, 4)
+  @staticmethod
+  def QueryShIDLists(stg_medium):
+    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
+      return None
+    idls = ctypes.cast(h, WSPCIDA).contents.value
+    kernel32.GlobalUnlock(g)
+    return idls
+  def GetShIDLists(self):
+    return None if (d := self.GetData(('ShIDListArray', None, 1, -1, 1))) is None else self.QueryShIDLists(d)
+  GetPIDLs = GetShIDLists
+  @staticmethod
+  def QueryURL(stg_medium):
+    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
+      return None
+    url = ctypes.cast(h, wintypes.LPSTR).value
+    kernel32.GlobalUnlock(g)
+    return url
+  def GetURL(self):
+    return None if (d := self.GetData(('UniformResourceLocator', None, 1, -1, 1))) is None else self.QueryURL(d).decode()
 
 class IDropTarget(IUnknown):
   IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
@@ -6675,7 +6894,7 @@ class IShellItemArray(IUnknown):
         factory = clsid_component.factory
       clsid_component = tuple(map(PIDL, clsid_component))
     if isinstance(clsid_component, (tuple, list, ctypes.Array)):
-      return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(tuple(p if isinstance(p, WSPITEMIDLIST) else WSPITEMIDLIST(p) for p in clsid_component)), factory)
+      return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(tuple(p if p is None or isinstance(p, WSPITEMIDLIST) else WSPITEMIDLIST(p) for p in clsid_component)), factory)
     return IUnknown.__new__(cls, clsid_component, factory)
   def GetAttributes(self, combine_flags, query_attributes):
     a = WSSFGAO()
@@ -6692,6 +6911,12 @@ class IShellItemArray(IUnknown):
     return IEnumShellItems(self.__class__._protos['EnumItems'](self.pI), self.factory)
   def BindToHandler(self, handler_guid, interface, bind_context=None):
     return interface(self._protos['BindToHandler'](self.pI, bind_context, handler_guid, interface.IID), self.factory)
+  @classmethod
+  def FromNames(cls, names, bind_context=None, factory=None):
+    return cls(tuple(WSPITEMIDLIST.FromName(name, bind_context) for name in names), factory)
+  @classmethod
+  def FromPathes(cls, pathes, factory=None):
+    return cls(tuple(map(WSPITEMIDLIST.FromPath, pathes)), factory)
   def GetDataObject(self, bind_context=None):
     return self.BindToHandler('DataObject', IDataObject, bind_context)
   @property
