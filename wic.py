@@ -109,30 +109,28 @@ class _IMeta(type):
     return _IUtil._mul_cache.get((bcls, size)) or _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
 
 class _ICOMMeta(ctypes.Structure.__class__):
+  _refs = {}
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
-    return {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new}
+    return {'_iids': {**bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': {}, '_vtbl': {}, '_vars': {}, '__new__': mcls._new}
   def __new__(mcls, name, bases, namespace, **kwds):
-    namespace['_fields_'] = [('pvtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), ('vtbl', wintypes.LPVOID * len(namespace['_vtbl'])), *namespace['_vars'].items()]
+    namespace['_fields_'] = [('pvtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), *namespace['_vars'].items()]
     return super().__new__(mcls, name, (ctypes.Structure,), namespace, **kwds)
   @staticmethod
   def _new(cls):
-    self = ctypes.Structure.__new__(cls)
-    pI = ctypes.addressof(self)
-    cls._refs[pI] = self
-    self.pvtbl = pI + cls.vtbl.offset
+    cls._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
+    self.pvtbl = ctypes.addressof(cls.vtbl)
     self.refs = 1
-    for i, n in enumerate(cls._vtbl):
-      self.vtbl[i] = ctypes.cast(getattr(cls, n), wintypes.LPVOID)
     return pI
   def __init__(cls, *args, **kwargs):
     super().__init__(*args, **kwargs)
-    cls._refs = {}
-    for n, a in cls._vtbl.items():
-      setattr(cls, n, ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n)))
+    cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
+    for i, (n, a) in enumerate(cls._vtbl.items()):
+      setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
+      v[i] = ctypes.cast(f, wintypes.LPVOID)
 
 class _COM_IUnknown(metaclass=_ICOMMeta):
-  _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
+  _iids[GUID('00000000-0000-0000-c000-000000000046')] = True
   _vtbl['QueryInterface'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PBYTES16, wintypes.PLPVOID)
   _vtbl['AddRef'] = (wintypes.ULONG, wintypes.LPVOID)
   _vtbl['Release'] = (wintypes.ULONG, wintypes.LPVOID)
@@ -140,9 +138,12 @@ class _COM_IUnknown(metaclass=_ICOMMeta):
   def _QueryInterface(cls, pI, riid, pObj):
     if not (self := cls._refs.get(pI)):
       return 0x80004003
-    if GUID(riid.contents) in cls._iids:
-      self.refs += 1
-      pObj.contents.value = ctypes.addressof(self)
+    if (c := cls._iids.get(GUID(riid.contents))):
+      if c is True:
+        self.refs += 1
+        pObj.contents.value = pI
+      else:
+        pObj.contents.value = c(self)
       return 0
     return 0x80004002
   @classmethod
@@ -157,7 +158,7 @@ class _COM_IUnknown(metaclass=_ICOMMeta):
       return 0
     self.refs = max(self.refs - 1, 0)
     if not self.refs:
-      cls._refs.pop(ctypes.addressof(self), None)
+      cls._refs.pop(pI, None)
     return self.refs
 
 class IUnknown(metaclass=_IMeta):
@@ -5912,7 +5913,7 @@ class WSSTGMEDIUM(ctypes.Structure, metaclass=_WSMeta):
       d._stgm = self
     else:
       d = getattr(d, 'content', d)
-    return {'tymed': self.tymed, 'data': d}
+    return {'tymed': self.tymed, 'data': d, 'pUnkForRelease': self.pUnkForRelease}
   def __del__(self):
     if getattr(self, '_needsclear', False):
       ole32.ReleaseStgMedium(ctypes.byref(self))
@@ -5928,7 +5929,7 @@ class WSSTGMEDIUM(ctypes.Structure, metaclass=_WSMeta):
     if isinstance(stg_medium, ctypes.Structure):
       stg_medium = cls.to_dict(stg_medium)
     elif not isinstance(stg_medium, dict):
-      if len(stg_medium) < 2:
+      if stg_medium is None or len(stg_medium) < 2:
         return None
       stg_medium = {'tymed': stg_medium[0], 'data': stg_medium[1]}
     return stg_medium.get('data') if stg_medium.get('tymed') == tymed else None
@@ -6009,8 +6010,8 @@ WSOperationFlags = {'AllowUndo': 0x40, 'FilesOnly': 0x80, 'NoConfirmation': 0x10
 WSOPERATIONFLAGS = type('WSOPERATIONFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSOperationFlags.items()}, '_tab_cn': {c: n for n, c in WSOperationFlags.items()}, '_def': 0x240})
 
 class _COM_IFileSystemBindData(_COM_IUnknown):
-  _iids.add(GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8))
-  _iids.add(GUID(0x01e18d10, 0x4d8b, 0x11d2, 0x85, 0x5d, 0x00, 0x60, 0x08, 0x05, 0x93, 0x67))
+  _iids[GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8)] = True
+  _iids[GUID(0x01e18d10, 0x4d8b, 0x11d2, 0x85, 0x5d, 0x00, 0x60, 0x08, 0x05, 0x93, 0x67)] = True
   _vtbl['SetFindData'] = (wintypes.ULONG, wintypes.LPVOID, WSPFINDDATA)
   _vtbl['GetFindData'] = (wintypes.ULONG, wintypes.LPVOID, WSPFINDDATA)
   _vtbl['SetFileID'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.LARGE_INTEGER)
@@ -6448,7 +6449,7 @@ class IDataObject(IUnknown):
   kernel32.GlobalUnlock.restype = wintypes.BOOLE
   sh32.DragQueryFileW.restype = wintypes.UINT
   @staticmethod
-  def QueryFiles(stg_medium):
+  def RetrieveFileNames(stg_medium):
     if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None:
       return None
     fa = []
@@ -6458,38 +6459,41 @@ class IDataObject(IUnknown):
       sh32.DragQueryFileW(g, wintypes.UINT(i), ctypes.byref(f), wintypes.UINT(fl))
       fa.append(f)
     return tuple(f.value for f in fa)
-  def GetFiles(self):
-    return None if (d := self.GetData((15, None, 1, -1, 1))) is None else self.QueryFiles(d)
+  def GetFileNames(self):
+    return self.RetrieveFileNames(self.GetData((15, None, 1, -1, 1)))
   @staticmethod
-  def QueryFileDescriptors(stg_medium):
+  def RetrieveFileDescriptors(stg_medium):
     if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
       return None
     fds = ctypes.cast(h, WSPFILEGROUPDESCRIPTOR).contents.value
     kernel32.GlobalUnlock(g)
     return fds
   def GetFileDescriptors(self):
-    return None if (d := self.GetData(('FileGroupDescriptorW', None, 1, -1, 1))) is None else self.QueryFileDescriptors(d)
-  def GetFileContent(self, index=0):
-    return None if (fds := self.GetFileDescriptors()) is None or index >= len(fds) or (d := self.GetData(('FileContents', None, 1, index, 4))) is None else WSSTGMEDIUM._get_data(d, 4)
+    return self.RetrieveFileDescriptors(self.GetData(('FileGroupDescriptorW', None, 1, -1, 1)))
   @staticmethod
-  def QueryShIDLists(stg_medium):
+  def RetrieveFileContent(stg_medium):
+    return WSSTGMEDIUM._get_data(stg_medium, 4)
+  def GetFileContent(self, index=0):
+    return None if (fds := self.GetFileDescriptors()) is None or index >= len(fds) else self.RetrieveFileContent(self.GetData(('FileContents', None, 1, index, 4)))
+  @staticmethod
+  def RetrieveShIDLists(stg_medium):
     if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
       return None
     idls = ctypes.cast(h, WSPCIDA).contents.value
     kernel32.GlobalUnlock(g)
     return idls
   def GetShIDLists(self):
-    return None if (d := self.GetData(('ShIDListArray', None, 1, -1, 1))) is None else self.QueryShIDLists(d)
+    return self.RetrieveShIDLists(self.GetData(('ShIDListArray', None, 1, -1, 1)))
   GetPIDLs = GetShIDLists
   @staticmethod
-  def QueryURL(stg_medium):
+  def RetrieveURL(stg_medium):
     if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
       return None
     url = ctypes.cast(h, wintypes.LPSTR).value
     kernel32.GlobalUnlock(g)
-    return url
+    return url.decode()
   def GetURL(self):
-    return None if (d := self.GetData(('UniformResourceLocator', None, 1, -1, 1))) is None else self.QueryURL(d).decode()
+    return self.RetrieveURL(self.GetData(('UniformResourceLocator', None, 1, -1, 1)))
 
 class IDropTarget(IUnknown):
   IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
