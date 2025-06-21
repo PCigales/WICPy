@@ -112,22 +112,52 @@ class _ICOMMeta(ctypes.Structure.__class__):
   _refs = {}
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
-    return {'_iids': {**bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': {}, '_vtbl': {}, '_vars': {}, '__new__': mcls._new}
+    if (interfaces := kwds.get('interfaces')):
+      return {} if bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new_m}
+    else:
+      return {} if len(bases) > 1 else ({'_iids': {**bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': {}, '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
   def __new__(mcls, name, bases, namespace, **kwds):
-    namespace['_fields_'] = [('pvtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), *namespace['_vars'].items()]
-    return super().__new__(mcls, name, (ctypes.Structure,), namespace, **kwds)
+    if (interfaces := kwds.get('interfaces')):
+      if bases:
+        return None
+      fs = {}
+      for interface in interfaces:
+        for n, t in interface._vars.items():
+          if fs.setdefault(n, t) != t:
+            return None
+      namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
+      return super().__new__(mcls, name, (ctypes.Structure,), namespace, **{k: v for k, v in kwds.items() if k != 'interfaces'})
+    else:
+      if len(bases) > 1:
+        return None
+      namespace['_fields_'] = [('pvtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), *namespace['_vars'].items()]
+      return super().__new__(mcls, name, (ctypes.Structure,), namespace, **kwds)
   @staticmethod
-  def _new(cls):
+  def _new_s(cls):
     cls._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
     self.pvtbl = ctypes.addressof(cls.vtbl)
     self.refs = 1
     return pI
+  @staticmethod
+  def _new_m(cls, iid=0):
+    if (ind := iid if isinstance(iid, int) else cls._iids.get(GUID(iid))) is None:
+      return None
+    pI = ctypes.addressof(self := ctypes.Structure.__new__(cls))
+    sp = ctypes.sizeof(wintypes.LPVOID)
+    for i, vtbl in enumerate(cls.vtbls):
+      cls._refs[pI + i * sp] = self
+      self.pvtbls[i] = ctypes.addressof(vtbl)
+    self.refs = 1
+    return pI + ind * sp
   def __init__(cls, *args, **kwargs):
     super().__init__(*args, **kwargs)
-    cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
-    for i, (n, a) in enumerate(cls._vtbl.items()):
-      setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
-      v[i] = ctypes.cast(f, wintypes.LPVOID)
+    if (interfaces := kwargs.get('interfaces')):
+      cls.vtbls = tuple(interface.vtbl for interface in interfaces)
+    else:
+      cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
+      for i, (n, a) in enumerate(cls._vtbl.items()):
+        setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
+        v[i] = ctypes.cast(f, wintypes.LPVOID)
 
 class _COM_IUnknown(metaclass=_ICOMMeta):
   _iids[GUID('00000000-0000-0000-c000-000000000046')] = True
@@ -138,7 +168,12 @@ class _COM_IUnknown(metaclass=_ICOMMeta):
   def _QueryInterface(cls, pI, riid, pObj):
     if not (self := cls._refs.get(pI)):
       return 0x80004003
-    if (c := cls._iids.get(GUID(riid.contents))):
+    riid = GUID(riid.contents)
+    if (self.__class__ != cls) and (ind := self.__class__._iids.get(riid)) is not None:
+      self.refs += 1
+      pObj.contents.value = ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
+      return 0
+    elif (c := cls._iids.get(riid)):
       if c is True:
         self.refs += 1
         pObj.contents.value = pI
@@ -159,6 +194,13 @@ class _COM_IUnknown(metaclass=_ICOMMeta):
     self.refs = max(self.refs - 1, 0)
     if not self.refs:
       cls._refs.pop(pI, None)
+      if self.__class__ != cls:
+        sp = ctypes.sizeof(wintypes.LPVOID)
+        for s in (-1, 1):
+          i = s
+          while cls._refs.get(pI + i * sp) == self:
+            cls._refs.pop(pI + i * sp, None)
+            i += s
     return self.refs
 
 class IUnknown(metaclass=_IMeta):
@@ -172,11 +214,15 @@ class IUnknown(metaclass=_IMeta):
       if clsid_component is not False:
         return None
       if (clsid_component := getattr(cls, 'CLSID', None)) is None:
-        if (c := globals().get('_COM_' + cls.__name__)):
-          clsid_component = c()
-          lw = True
+        if (c := getattr(cls, 'CLSOBJ', None)) is None:
+          if (c := globals().get('_COM_' + cls.__name__)):
+            clsid_component = c()
+            lw = True
+          else:
+            raise TypeError('%s does not have an implicit constructor' % cls.__name__)
         else:
-          raise TypeError('%s does not have an implicit constructor' % cls.__name__)
+          clsid_component = c(cls.IID)
+          lw = True
     if isinstance(clsid_component, int):
       pI = wintypes.LPVOID(clsid_component)
     elif isinstance(clsid_component, wintypes.LPVOID):
@@ -6494,6 +6540,18 @@ class IDataObject(IUnknown):
     return url.decode()
   def GetURL(self):
     return self.RetrieveURL(self.GetData(('UniformResourceLocator', None, 1, -1, 1)))
+
+class IDataObjectAsyncCapability(IUnknown):
+  IID = GUID(0x3d8b0590, 0xf691, 0x11d2, 0x8e, 0xa9, 0x00, 0x60, 0x97, 0xdf, 0x5b, 0xd4)
+  _protos['SetAsyncMode'] = 3, (wintypes.BOOL,), ()
+  _protos['GetAsyncMode'] = 4, (), (wintypes.PBOOLE,)
+  _protos['InOperation'] = 6, (), (wintypes.PBOOLE,)
+  def GetAsyncMode(self):
+    return self._protos['GetAsyncMode'](self.pI)
+  def SetAsyncMode(self, async_op=False):
+    return self._protos['SetAsyncMode'](self.pI, (0xffff if async_op else 0))
+  def InOperation(self):
+    return self._protos['InOperation'](self.pI)
 
 class IDropTarget(IUnknown):
   IID = GUID(0x00000122, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
