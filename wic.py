@@ -170,16 +170,11 @@ class _COM_IUnknown(metaclass=_COMMeta):
   def _QueryInterface(cls, pI, riid, pObj):
     if not (self := cls._refs.get(pI)):
       return 0x80004003
-    if (self.__class__ != cls):
-      if (ind := self.__class__._iids.get(GUID(riid.contents))) is not None:
-        pObj.contents.value = ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
-        self.refs += 1
-        return 0
-    else:
-      if GUID(riid.contents) in cls._iids:
-        pObj.contents.value = pI
-        self.refs += 1
-        return 0
+    ind = None
+    if ((ind := self.__class__._iids.get(GUID(riid.contents))) is not None) if self.__class__ != cls else (GUID(riid.contents) in cls._iids):
+      pObj.contents.value = pI if ind is None else ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
+      self.refs += 1
+      return 0
     return 0x80004002
   @classmethod
   def _AddRef(cls, pI):
