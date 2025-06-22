@@ -142,7 +142,7 @@ class _COMMeta(ctypes.Structure.__class__):
     return pI
   @staticmethod
   def _new_m(cls, iid=0):
-    if (((ind := iid) >= len(cls.vtbls)) if isinstance(iid, int) else cls._iids.get(GUID(iid))) is None:
+    if ((ind := iid) >= len(cls.vtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
       return None
     pI = ctypes.addressof(self := ctypes.Structure.__new__(cls))
     sp = ctypes.sizeof(wintypes.LPVOID)
@@ -170,9 +170,8 @@ class _COM_IUnknown(metaclass=_COMMeta):
   def _QueryInterface(cls, pI, riid, pObj):
     if not (self := cls._refs.get(pI)):
       return 0x80004003
-    ind = None
-    if ((ind := self.__class__._iids.get(GUID(riid.contents))) is not None) if self.__class__ != cls else (GUID(riid.contents) in cls._iids):
-      pObj.contents.value = pI if ind is None else ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
+    if ((ind := self.__class__._iids.get(GUID(riid.contents))) is not None) if self.__class__ != cls else (ind := GUID(riid.contents) in cls._iids):
+      pObj.contents.value = pI if ind is True else ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
       self.refs += 1
       return 0
     return 0x80004002
