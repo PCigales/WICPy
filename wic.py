@@ -108,14 +108,14 @@ class _IMeta(type):
   def __mul__(bcls, size):
     return _IUtil._mul_cache.get((bcls, size)) or _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
 
-class _ICOMMeta(ctypes.Structure.__class__):
+class _COMMeta(ctypes.Structure.__class__):
   _refs = {}
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
     if (interfaces := kwds.get('interfaces')):
       return {} if bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new_m}
     else:
-      return {} if len(bases) > 1 else ({'_iids': {**bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': {}, '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
+      return {} if len(bases) > 1 else ({'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
   def __new__(mcls, name, bases, namespace, **kwds):
     if (interfaces := kwds.get('interfaces')):
       if bases:
@@ -133,14 +133,16 @@ class _ICOMMeta(ctypes.Structure.__class__):
       namespace['_fields_'] = [('pvtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), *namespace['_vars'].items()]
       return super().__new__(mcls, name, (ctypes.Structure,), namespace, **kwds)
   @staticmethod
-  def _new_s(cls):
+  def _new_s(cls, iid=0):
+    if (iid if isinstance(iid, int) else (GUID(iid) not in cls._iids)):
+      return None
     cls._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
     self.pvtbl = ctypes.addressof(cls.vtbl)
     self.refs = 1
     return pI
   @staticmethod
   def _new_m(cls, iid=0):
-    if (ind := iid if isinstance(iid, int) else cls._iids.get(GUID(iid))) is None:
+    if (((ind := iid) >= len(cls.vtbls)) if isinstance(iid, int) else cls._iids.get(GUID(iid))) is None:
       return None
     pI = ctypes.addressof(self := ctypes.Structure.__new__(cls))
     sp = ctypes.sizeof(wintypes.LPVOID)
@@ -159,8 +161,8 @@ class _ICOMMeta(ctypes.Structure.__class__):
         setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
         v[i] = ctypes.cast(f, wintypes.LPVOID)
 
-class _COM_IUnknown(metaclass=_ICOMMeta):
-  _iids[GUID('00000000-0000-0000-c000-000000000046')] = True
+class _COM_IUnknown(metaclass=_COMMeta):
+  _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
   _vtbl['QueryInterface'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PBYTES16, wintypes.PLPVOID)
   _vtbl['AddRef'] = (wintypes.ULONG, wintypes.LPVOID)
   _vtbl['Release'] = (wintypes.ULONG, wintypes.LPVOID)
@@ -170,17 +172,13 @@ class _COM_IUnknown(metaclass=_ICOMMeta):
       return 0x80004003
     riid = GUID(riid.contents)
     if (self.__class__ != cls) and (ind := self.__class__._iids.get(riid)) is not None:
-      self.refs += 1
       pObj.contents.value = ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
-      return 0
-    elif (c := cls._iids.get(riid)):
-      if c is True:
-        self.refs += 1
-        pObj.contents.value = pI
-      else:
-        pObj.contents.value = c(self)
-      return 0
-    return 0x80004002
+    elif riid in cls._iids:
+      pObj.contents.value = pI
+    else:
+      return 0x80004002
+    self.refs += 1
+    return 0
   @classmethod
   def _AddRef(cls, pI):
     if not (self := cls._refs.get(pI)):
@@ -213,17 +211,13 @@ class IUnknown(metaclass=_IMeta):
     if not clsid_component:
       if clsid_component is not False:
         return None
-      if (clsid_component := getattr(cls, 'CLSID', None)) is None:
-        if (c := getattr(cls, 'CLSOBJ', None)) is None:
-          if (c := globals().get('_COM_' + cls.__name__)):
-            clsid_component = c()
-            lw = True
-          else:
-            raise TypeError('%s does not have an implicit constructor' % cls.__name__)
-        else:
-          clsid_component = c(cls.IID)
-          lw = True
-    if isinstance(clsid_component, int):
+      if (clsid_component := getattr(cls, 'CLSID', globals().get('_COM_' + cls.__name__))) is None:
+        raise TypeError('%s does not have an implicit constructor' % cls.__name__)
+    if isinstance(clsid_component, _COMMeta):
+      if not (pI := wintypes.LPVOID(clsid_component(cls.IID))):
+        return None
+      lw = True
+    elif isinstance(clsid_component, int):
       pI = wintypes.LPVOID(clsid_component)
     elif isinstance(clsid_component, wintypes.LPVOID):
       pI = clsid_component
@@ -6056,8 +6050,8 @@ WSOperationFlags = {'AllowUndo': 0x40, 'FilesOnly': 0x80, 'NoConfirmation': 0x10
 WSOPERATIONFLAGS = type('WSOPERATIONFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSOperationFlags.items()}, '_tab_cn': {c: n for n, c in WSOperationFlags.items()}, '_def': 0x240})
 
 class _COM_IFileSystemBindData(_COM_IUnknown):
-  _iids[GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8)] = True
-  _iids[GUID(0x01e18d10, 0x4d8b, 0x11d2, 0x85, 0x5d, 0x00, 0x60, 0x08, 0x05, 0x93, 0x67)] = True
+  _iids.add(GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8))
+  _iids.add(GUID(0x01e18d10, 0x4d8b, 0x11d2, 0x85, 0x5d, 0x00, 0x60, 0x08, 0x05, 0x93, 0x67))
   _vtbl['SetFindData'] = (wintypes.ULONG, wintypes.LPVOID, WSPFINDDATA)
   _vtbl['GetFindData'] = (wintypes.ULONG, wintypes.LPVOID, WSPFINDDATA)
   _vtbl['SetFileID'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.LARGE_INTEGER)
