@@ -116,7 +116,7 @@ class _COMMeta(ctypes.Structure.__class__):
     if (interfaces := kwds.get('interfaces')):
       return {} if bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new_m}
     else:
-      return {} if len(bases) > 1 else ({**vars(bases[0]), '_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
+      return {} if len(bases) > 1 else ({'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
   def __new__(mcls, name, bases, namespace, **kwds):
     if (interfaces := kwds.get('interfaces')):
       if bases or ('offset' in kwds):
@@ -133,19 +133,17 @@ class _COMMeta(ctypes.Structure.__class__):
     else:
       if len(bases) > 1:
         return None
-      namespace['_fields_'] = [('pvtbl', wintypes.LPVOID), ('refs', wintypes.ULONG), *namespace['_vars'].items()]
-      return super().__new__(mcls, name, (ctypes.Structure,), namespace, **kwds)
+      return super().__new__(mcls, name, bases, namespace, **kwds)
   @staticmethod
   def _new_s(cls, iid=0):
     if iid if isinstance(iid, int) else (GUID(iid) not in cls._iids):
       return None
-    cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
-    self.pvtbl = ctypes.addressof(cls.vtbl)
-    self.refs = 1
-    return pI
+    if (impl := vars(cls).get('_impl')) is None:
+      cls._impl = impl = _COMMeta((n := cls.__name__ + '_impl'), (), _COMMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
+    return impl()
   @staticmethod
   def _new_m(cls, iid=0):
-    if ((ind := iid) >= len(cls.vtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
+    if ((ind := iid) >= len(cls.interfaces)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
       return None
     cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
     self.pvtbls[:] = tuple(ctypes.addressof(interface.vtbl) for interface in cls.interfaces)
@@ -154,7 +152,7 @@ class _COMMeta(ctypes.Structure.__class__):
   def __init__(cls, *args, **kwargs):
     if (interfaces := kwargs.get('interfaces')):
       super().__init__(*args, **{k: v for k, v in kwargs.items() if k != 'interfaces'})
-      cls.interfaces = tuple(_COMMeta('', (interface,), {}, offset=i) for i, interface in enumerate(interfaces))
+      cls.interfaces = tuple(_COMMeta('', (interface,), {}, offset=i) if i else interface for i, interface in enumerate(interfaces))
       return
     if (offset := kwargs.get('offset')) is not None:
       super().__init__(*args, **{k: v for k, v in kwargs.items() if k != 'offset'})
