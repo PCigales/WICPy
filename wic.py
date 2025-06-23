@@ -178,7 +178,7 @@ class _COM_IUnknown(metaclass=_COMMeta):
     if not (self := cls._get_self(pI)):
       return 0x80004003
     if ((ind := self.__class__._iids.get(GUID(riid.contents))) is not None) if self.__class__ != cls else (ind := GUID(riid.contents) in cls._iids):
-      pObj.contents.value = pI if ind is True else ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
+      pObj.contents.value = pI if ind is True else ctypes.addressof(self) + ind * cls.__class__._psize
       self.refs += 1
       return 0
     return 0x80004002
