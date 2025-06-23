@@ -109,24 +109,27 @@ class _IMeta(type):
     return _IUtil._mul_cache.get((bcls, size)) or _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
 
 class _COMMeta(ctypes.Structure.__class__):
+  _psize = ctypes.sizeof(wintypes.LPVOID)
   _refs = {}
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
     if (interfaces := kwds.get('interfaces')):
       return {} if bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new_m}
     else:
-      return {} if len(bases) > 1 else ({'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, **{'_' + n: object.__getattribute__(bases[0], '_' + n) for n in bases[0]._vtbl}, '__new__': object.__getattribute__(bases[0], '__new__')} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
+      return {} if len(bases) > 1 else ({**vars(bases[0]), '_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
   def __new__(mcls, name, bases, namespace, **kwds):
     if (interfaces := kwds.get('interfaces')):
-      if bases:
+      if bases or ('offset' in kwds):
         return None
       fs = {}
-      for interface in interfaces:
-        for n, t in interface._vars.items():
-          if fs.setdefault(n, t) != t:
-            return None
+      if any(fs.setdefault(n, t) != t for interface in interfaces for n, t in interface._vars.items()):
+        return None
       namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
       return super().__new__(mcls, name, (ctypes.Structure,), namespace, **{k: v for k, v in kwds.items() if k != 'interfaces'})
+    elif (offset := kwds.get('offset')) is not None:
+      if len(bases) > 1:
+        return None
+      return super().__new__(mcls, '%s_offset_%d' % (bases[0].__name__, offset), bases, namespace, **{k: v for k, v in kwds.items() if k != 'offset'})
     else:
       if len(bases) > 1:
         return None
@@ -136,7 +139,7 @@ class _COMMeta(ctypes.Structure.__class__):
   def _new_s(cls, iid=0):
     if iid if isinstance(iid, int) else (GUID(iid) not in cls._iids):
       return None
-    cls._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
+    cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
     self.pvtbl = ctypes.addressof(cls.vtbl)
     self.refs = 1
     return pI
@@ -144,22 +147,26 @@ class _COMMeta(ctypes.Structure.__class__):
   def _new_m(cls, iid=0):
     if ((ind := iid) >= len(cls.vtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
       return None
-    pI = ctypes.addressof(self := ctypes.Structure.__new__(cls))
-    sp = ctypes.sizeof(wintypes.LPVOID)
-    for i, vtbl in enumerate(cls.vtbls):
-      cls._refs[pI + i * sp] = self
-      self.pvtbls[i] = ctypes.addressof(vtbl)
+    cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
+    self.pvtbls[:] = tuple(ctypes.addressof(interface.vtbl) for interface in cls.interfaces)
     self.refs = 1
-    return pI + ind * sp
+    return pI + ind * cls.__class__._psize
   def __init__(cls, *args, **kwargs):
-    super().__init__(*args, **kwargs)
     if (interfaces := kwargs.get('interfaces')):
-      cls.vtbls = tuple(interface.vtbl for interface in interfaces)
+      super().__init__(*args, **{k: v for k, v in kwargs.items() if k != 'interfaces'})
+      cls.interfaces = tuple(_COMMeta('', (interface,), {}, offset=i) for i, interface in enumerate(interfaces))
+      return
+    if (offset := kwargs.get('offset')) is not None:
+      super().__init__(*args, **{k: v for k, v in kwargs.items() if k != 'offset'})
+      cls._ovtbl = offset * cls.__class__._psize
     else:
-      cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
-      for i, (n, a) in enumerate(cls._vtbl.items()):
-        setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
-        v[i] = ctypes.cast(f, wintypes.LPVOID)
+      super().__init__(*args, **kwargs)
+    cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
+    for i, (n, a) in enumerate(cls._vtbl.items()):
+      setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
+      v[i] = ctypes.cast(f, wintypes.LPVOID)
+  def _get_self(cls, pI):
+    return cls.__class__._refs.get(pI - getattr(cls, '_ovtbl', 0))
 
 class _COM_IUnknown(metaclass=_COMMeta):
   _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
@@ -168,7 +175,7 @@ class _COM_IUnknown(metaclass=_COMMeta):
   _vtbl['Release'] = (wintypes.ULONG, wintypes.LPVOID)
   @classmethod
   def _QueryInterface(cls, pI, riid, pObj):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0x80004003
     if ((ind := self.__class__._iids.get(GUID(riid.contents))) is not None) if self.__class__ != cls else (ind := GUID(riid.contents) in cls._iids):
       pObj.contents.value = pI if ind is True else ctypes.addressof(self) + ind * ctypes.sizeof(wintypes.LPVOID)
@@ -177,24 +184,17 @@ class _COM_IUnknown(metaclass=_COMMeta):
     return 0x80004002
   @classmethod
   def _AddRef(cls, pI):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0
     self.refs += 1
     return self.refs
   @classmethod
   def _Release(cls, pI):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0
     self.refs = max(self.refs - 1, 0)
     if not self.refs:
-      cls._refs.pop(pI, None)
-      if self.__class__ != cls:
-        sp = ctypes.sizeof(wintypes.LPVOID)
-        for s in (-1, 1):
-          i = s
-          while cls._refs.get(pI + i * sp) == self:
-            cls._refs.pop(pI + i * sp, None)
-            i += s
+      cls._refs.pop(ctypes.addressof(self), None)
     return self.refs
 
 class IUnknown(metaclass=_IMeta):
@@ -6059,37 +6059,37 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
   _vars['jclsid'] = wintypes.BYTES16
   @classmethod
   def _SetFindData(cls, pI, pfd):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0x80004003
     self.fd.__init__(*pfd.contents.to_tuple())
     return 0
   @classmethod
   def _GetFindData(cls, pI, pfd):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0x80004003
     pfd.contents.__init__(*self.fd.to_tuple())
     return 0
   @classmethod
   def _SetFileID(cls, pI, fid):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0x80004003
     self.fid = fid
     return 0
   @classmethod
   def _GetFileID(cls, pI, pfid):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0x80004003
     pfid.contents.value = self.fid
     return 0
   @classmethod
   def _SetJunctionCLSID(cls, pI, pjclsid):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0x80004003
     self.jclsid[:] = pjclsid.contents
     return 0
   @classmethod
   def _GetJunctionCLSID(cls, pI, pjclsid):
-    if not (self := cls._refs.get(pI)):
+    if not (self := cls._get_self(pI)):
       return 0x80004003
     pjclsid.contents[:] = self.jclsid
     return 0
