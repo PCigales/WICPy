@@ -108,57 +108,65 @@ class _IMeta(type):
   def __mul__(bcls, size):
     return _IUtil._mul_cache.get((bcls, size)) or _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
 
-class _COMMeta(ctypes.Structure.__class__):
-  _psize = ctypes.sizeof(wintypes.LPVOID)
-  _refs = {}
-  @classmethod
-  def __prepare__(mcls, name, bases, **kwds):
-    if (interfaces := kwds.get('interfaces')):
-      return {} if bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new_m}
-    else:
-      return {} if len(bases) > 1 else ({'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new_s})
-  def __new__(mcls, name, bases, namespace, **kwds):
-    if (interfaces := kwds.get('interfaces')):
-      if bases or ('offset' in kwds):
+class _COMMeta(type):
+  class _Offsetted(dict):
+    def __set_name__(self, interface, name):
+      self[0] = interface
+    def __missing__(self, offset):
+      cls = type.__new__((interface := self[0]).__class__, '%s_offset_%d' % (interface.__name__, offset), (interface,), (ns := {}))
+      cls.__class__.__init__(cls, cls.__name__, cls.__bases__, ns)
+      cls._ovtbl = offset * cls.__class__._psize
+      self[offset] = cls
+      return cls
+  class _COMImplMeta(ctypes.Structure.__class__):
+    _psize = ctypes.sizeof(wintypes.LPVOID)
+    _refs = {}
+    @classmethod
+    def __prepare__(mcls, name, bases, interfaces=None):
+      return {} if not interfaces or bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new}
+    def __new__(mcls, name, bases, namespace, interfaces=None):
+      if not interfaces or any(hasattr(interface, '_ovtbl') for interface in interfaces) or bases:
         return None
       fs = {}
       if any(fs.setdefault(n, t) != t for interface in interfaces for n, t in interface._vars.items()):
         return None
       namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
-      return super().__new__(mcls, name, (ctypes.Structure,), namespace, **{k: v for k, v in kwds.items() if k != 'interfaces'})
-    elif (offset := kwds.get('offset')) is not None:
-      if len(bases) > 1:
+      return super().__new__(mcls, name, (ctypes.Structure,), namespace)
+    @staticmethod
+    def _new(cls, iid=0):
+      if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
         return None
-      return super().__new__(mcls, '%s_offset_%d' % (bases[0].__name__, offset), bases, namespace, **{k: v for k, v in kwds.items() if k != 'offset'})
-    else:
-      if len(bases) > 1:
-        return None
-      return super().__new__(mcls, name, bases, namespace, **kwds)
+      cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
+      self.pvtbls[:] = cls._pvtbls
+      self.refs = 1
+      return pI + ind * cls.__class__._psize
+    def __init__(cls, *args, interfaces=None):
+      super().__init__(*args)
+      if interfaces:
+        cls._pvtbls = tuple(ctypes.addressof(interface._offsetted[i].vtbl) for i, interface in enumerate(interfaces))
+  _psize = _COMImplMeta._psize
+  _refs = _COMImplMeta._refs
+  @classmethod
+  def __prepare__(mcls, name, bases, interfaces=None):
+    if interfaces:
+      return mcls._COMImplMeta.__prepare__(name, bases, interfaces=interfaces)
+    return ({} if len(bases) > 1 else {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}}) if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new}
+  def __new__(mcls, name, bases, namespace, interfaces=None):
+    if interfaces:
+      return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
+    if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
+      return None
+    namespace['_offsetted'] = mcls._Offsetted()
+    return super().__new__(mcls, name, bases, namespace)
   @staticmethod
-  def _new_s(cls, iid=0):
-    if iid if isinstance(iid, int) else (GUID(iid) not in cls._iids):
+  def _new(cls, iid=0):
+    if hasattr(cls, '_ovtbl') or (iid if isinstance(iid, int) else (GUID(iid) not in cls._iids)):
       return None
     if (impl := vars(cls).get('_impl')) is None:
-      cls._impl = impl = _COMMeta((n := cls.__name__ + '_impl'), (), _COMMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
+      cls._impl = impl = _COMMeta._COMImplMeta((n := cls.__name__ + '_impl'), (), _COMMeta._COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
     return impl()
-  @staticmethod
-  def _new_m(cls, iid=0):
-    if ((ind := iid) >= len(cls.interfaces)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
-      return None
-    cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
-    self.pvtbls[:] = tuple(ctypes.addressof(interface.vtbl) for interface in cls.interfaces)
-    self.refs = 1
-    return pI + ind * cls.__class__._psize
-  def __init__(cls, *args, **kwargs):
-    if (interfaces := kwargs.get('interfaces')):
-      super().__init__(*args, **{k: v for k, v in kwargs.items() if k != 'interfaces'})
-      cls.interfaces = tuple(_COMMeta('', (interface,), {}, offset=i) if i else interface for i, interface in enumerate(interfaces))
-      return
-    if (offset := kwargs.get('offset')) is not None:
-      super().__init__(*args, **{k: v for k, v in kwargs.items() if k != 'offset'})
-      cls._ovtbl = offset * cls.__class__._psize
-    else:
-      super().__init__(*args, **kwargs)
+  def __init__(cls, *args, interfaces=None):
+    super().__init__(*args)
     cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
     for i, (n, a) in enumerate(cls._vtbl.items()):
       setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
@@ -173,13 +181,12 @@ class _COM_IUnknown(metaclass=_COMMeta):
   _vtbl['Release'] = (wintypes.ULONG, wintypes.LPVOID)
   @classmethod
   def _QueryInterface(cls, pI, riid, pObj):
-    if not (self := cls._get_self(pI)):
-      return 0x80004003
-    if ((ind := self.__class__._iids.get(GUID(riid.contents))) is not None) if self.__class__ != cls else (ind := GUID(riid.contents) in cls._iids):
-      pObj.contents.value = pI if ind is True else ctypes.addressof(self) + ind * cls.__class__._psize
-      self.refs += 1
-      return 0
-    return 0x80004002
+    if not (self := cls._get_self(pI)) or (ind := self.__class__._iids.get(GUID(riid.contents))) is None:
+      pObj.contents.value = 0
+      return 0x80004002 if self else 0x80004003
+    pObj.contents.value = ctypes.addressof(self) + ind * cls.__class__._psize
+    self.refs += 1
+    return 0
   @classmethod
   def _AddRef(cls, pI):
     if not (self := cls._get_self(pI)):
