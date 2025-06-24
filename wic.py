@@ -113,10 +113,7 @@ class _COMMeta(type):
     def __set_name__(self, interface, name):
       self[0] = interface
     def __missing__(self, offset):
-      cls = type.__new__((interface := self[0]).__class__, '%s_offset_%d' % (interface.__name__, offset), (interface,), (ns := {}))
-      cls.__class__.__init__(cls, cls.__name__, cls.__bases__, ns)
-      cls._ovtbl = offset * cls.__class__._psize
-      self[offset] = cls
+      self[offset] = cls = (interface := self[0]).__class__('%s_offset_%d' % (interface.__name__, offset), (interface,), {'_ovtbl': offset * interface.__class__._psize})
       return cls
   class _COMImplMeta(ctypes.Structure.__class__):
     _psize = ctypes.sizeof(wintypes.LPVOID)
@@ -156,7 +153,8 @@ class _COMMeta(type):
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       return None
-    namespace['_offsetted'] = mcls._Offsetted()
+    if '_ovtbl' not in namespace:
+      namespace['_offsetted'] = mcls._Offsetted()
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
   def _new(cls, iid=0):
