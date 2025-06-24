@@ -130,12 +130,13 @@ class _COMMeta(type):
       namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
       return super().__new__(mcls, name, (ctypes.Structure,), namespace)
     @staticmethod
-    def _new(cls, iid=0):
+    def _new(cls, iid=0, **kwargs):
       if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
         return None
       cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
       self.pvtbls[:] = cls._pvtbls
       self.refs = 1
+      self.__init__(**kwargs)
       return pI + ind * cls.__class__._psize
     def __init__(cls, *args, interfaces=None):
       super().__init__(*args)
@@ -147,14 +148,12 @@ class _COMMeta(type):
   def __prepare__(mcls, name, bases, interfaces=None):
     if interfaces:
       return mcls._COMImplMeta.__prepare__(name, bases, interfaces=interfaces)
-    return ({} if len(bases) > 1 else {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}}) if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '__new__': mcls._new}
+    return ({} if len(bases) > 1 else {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, '_offsetted': mcls._Offsetted()}) if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '_offsetted': mcls._Offsetted(), '__new__': mcls._new}
   def __new__(mcls, name, bases, namespace, interfaces=None):
     if interfaces:
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       return None
-    if '_ovtbl' not in namespace:
-      namespace['_offsetted'] = mcls._Offsetted()
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
   def _new(cls, iid=0):
