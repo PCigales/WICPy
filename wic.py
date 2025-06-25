@@ -346,7 +346,7 @@ class _COM_IClassFactory(_COM_IUnknown):
     return 0 if p else 0x80004002
   @classmethod
   def _LockServer(cls, pI, fLock):
-    return 0x8004001 if cls._get_self(pI) else 0x80004003
+    return 0x80004001 if cls._get_self(pI) else 0x80004003
 
 class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory,)):
   def __new__(cls, iid, *, _bnew=__new__, impl):
