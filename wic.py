@@ -60,7 +60,7 @@ def ISetLastError(e):
 
 class GUID(bytes):
   def __new__(cls, *g):
-    return bytes.__new__(cls, (struct.pack('=LHH8B', *((struct.unpack('>LHH8B', bytes.fromhex(g[0].strip('{}').replace('-', ''))) if isinstance(g[0], str) else struct.unpack('=LHH8B', g[0])) if len(g) == 1 else g))))
+    return bytes.__new__(cls, (struct.pack('=LHH8B', *((struct.unpack('>LHH8B', bytes.fromhex(g.strip('{}').replace('-', ''))) if isinstance((g := g[0]), str) else struct.unpack('=LHH8B', (g.contents if isinstance(g, wintypes.PBYTES16) else g))) if len(g) == 1 else g))))
   def to_bytes(self):
     return bytes(self)
   def to_string(self):
@@ -156,12 +156,12 @@ class _COMMeta(type):
       return None
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
-  def _new(cls, iid=0):
-    if hasattr(cls, '_ovtbl') or (iid if isinstance(iid, int) else (GUID(iid) not in cls._iids)):
+  def _new(cls, iid, **kwargs):
+    if hasattr(cls, '_ovtbl') or (GUID(iid) not in cls._iids):
       return None
-    if (impl := vars(cls).get('_impl')) is None:
-      cls._impl = impl = _COMMeta._COMImplMeta((n := cls.__name__ + '_impl'), (), _COMMeta._COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
-    return impl()
+    if (impl := (vars(cls).get('_impl') or globals().get(n := cls.__name__ + '_impl'))) is None:
+      cls._impl = impl = _COMMeta._COMImplMeta(n, (), _COMMeta._COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
+    return impl(iid, **kwargs)
   def __init__(cls, *args, interfaces=None):
     super().__init__(*args)
     cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
@@ -211,7 +211,7 @@ class IUnknown(metaclass=_IMeta):
         return None
       if (clsid_component := getattr(cls, 'CLSID', globals().get('_COM_' + cls.__name__))) is None:
         raise TypeError('%s does not have an implicit constructor' % cls.__name__)
-    if isinstance(clsid_component, _COMMeta):
+    if isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
       if not (pI := wintypes.LPVOID(clsid_component(cls.IID))):
         return None
       lw = True
@@ -257,6 +257,8 @@ class IUnknown(metaclass=_IMeta):
       return None
     if (i := icls(self.__class__._protos['QueryInterface'](self.pI, icls.IID), (None if factory is False else (factory if factory is not None else self.factory)))) is None:
       return None
+    if getattr(self, '_lightweight', False):
+      i._lightweight = True
     return i
   def __bool__(self):
     return bool(self.pI) and self.refs > 0
@@ -330,30 +332,71 @@ class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
     i.AddRef()
     return i
 
+class _COM_IClassFactory(_COM_IUnknown):
+  _iids.add(GUID('00000001-0000-0000-c000-000000000046'))
+  _vtbl['CreateInstance'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.LPVOID, wintypes.PBYTES16, wintypes.PLPVOID)
+  _vtbl['LockServer'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.BOOL)
+  _vars['constr'] = ctypes.WINFUNCTYPE(wintypes.LPVOID, wintypes.PBYTES16)
+  @classmethod
+  def _CreateInstance(cls, pI, pUnkOuter, riid, pObj):
+    if not (self := cls._get_self(pI)) or pUnkOuter:
+      pObj.contents.value = 0
+      return 0x80040110 if self else 0x80004003
+    pObj.contents.value = p = self.constr(riid)
+    return 0 if p else 0x80004002
+  @classmethod
+  def _LockServer(cls, pI, fLock):
+    return 0x8004001 if cls._get_self(pI) else 0x80004003
+
+class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory,)):
+  def __new__(cls, iid, *, _bnew=__new__, impl):
+    return _bnew(cls, iid, constr=impl)
+  def __init__(self, *, constr):
+    super().__init__(constr=_COM_IClassFactory._vars['constr'](constr))
+
 class IClassFactory(IUnknown):
   IID = GUID('00000001-0000-0000-c000-000000000046')
   _protos['CreateInstance'] = 3, (wintypes.LPVOID, wintypes.LPCSTR,), (wintypes.PLPVOID,)
-  def __new__(cls, clsid):
-    if not clsid:
-      raise TypeError('%s does not have an implicit constructor' % cls.__name__)
-    if isinstance(clsid, str):
-      try:
-        clsid = GUID(clsid)
-      except:
-        if (clsid := _IUtil.CLSIDFromProgID(clsid)) is None:
-          return None
-    pI = wintypes.LPVOID()
-    if ISetLastError(ole32.CoGetClassObject(wintypes.LPCSTR(clsid), wintypes.DWORD(1), None, wintypes.LPCSTR(cls.IID), ctypes.byref(pI))):
-      return None
+  def __new__(cls, clsid_component=False, factory=None):
+    lw = None
+    if not clsid_component:
+      if clsid_component is False:
+        raise TypeError('%s does not have an implicit constructor' % cls.__name__)
+      else:
+        return None
+    if isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
+      if not (pI := wintypes.LPVOID(_COM_IClassFactory(cls.IID, impl=clsid_component))):
+        return None
+      lw = True
+    elif isinstance(clsid_component, int):
+      pI = wintypes.LPVOID(clsid_component)
+    elif isinstance(clsid_component, wintypes.LPVOID):
+      pI = clsid_component
+    else:
+      if isinstance(clsid_component, str):
+        try:
+          clsid_component = GUID(clsid_component)
+        except:
+          if (clsid_component := _IUtil.CLSIDFromProgID(clsid_component)) is None:
+            return None
+      pI = wintypes.LPVOID()
+      if ISetLastError(ole32.CoGetClassObject(wintypes.LPCSTR(clsid_component), wintypes.DWORD(1), None, wintypes.LPCSTR(cls.IID), ctypes.byref(pI))):
+        return None
     self = object.__new__(cls)
     self.pI = pI
     self.refs = 1
-    self.factory = None
+    self.factory = factory
+    if lw:
+      self._lightweight = True
     return self
   def CreateInstance(self, icls):
     if self.pI is None:
       return None
-    return icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), self)
+    if (i := icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), self)) is None:
+      return None
+    if getattr(self, '_lightweight', False):
+      i._lightweight = True
+    return i
 
 class IEnumString(IUnknown):
   IID = GUID('00000101-0000-0000-c000-000000000046')
