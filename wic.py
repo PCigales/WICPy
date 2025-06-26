@@ -54,13 +54,12 @@ class WError(int):
 def IGetLastError():
   return WError(ctypes.get_last_error())
 def ISetLastError(e):
-  e = ctypes.c_long(e).value
-  ctypes.set_last_error(e)
+  ctypes.set_last_error(e := e & 0x80000000 and (e & 0x7fffffff) - 0x80000000)
   return e
 
 class GUID(bytes):
   def __new__(cls, *g):
-    return bytes.__new__(cls, (struct.pack('=LHH8B', *((struct.unpack('>LHH8B', bytes.fromhex(g.strip('{}').replace('-', ''))) if isinstance((g := g[0]), str) else struct.unpack('=LHH8B', (g.contents if isinstance(g, wintypes.PBYTES16) else g))) if len(g) == 1 else g))))
+    return bytes.__new__(cls, (struct.pack('=LHH8B', *((struct.unpack('>LHH8B', bytes.fromhex(g.strip('{}').replace('-', ''))) if isinstance((g := g[0]), str) else struct.unpack('=LHH8B', ((g.contents if g else b'\x00' * 16) if isinstance(g, wintypes.PBYTES16) else g))) if len(g) == 1 else g))))
   def to_bytes(self):
     return bytes(self)
   def to_string(self):
@@ -84,7 +83,7 @@ class _IUtil:
     return getattr(r, 'value', r) if (c := getattr(r, '__ctypes_from_outparam__', None)) is None else c()
   @staticmethod
   def CLSIDFromProgID(pid):
-    return None if ole32.CLSIDFromString(wintypes.LPCOLESTR(pid), ctypes.byref(clsid := wintypes.GUID())) else GUID(clsid)
+    return None if ISetLastError(ole32.CLSIDFromString(wintypes.LPCOLESTR(pid), ctypes.byref(clsid := wintypes.GUID()))) else GUID(clsid)
   @staticmethod
   def QueryInterface(interface, icls, factory=None):
     return None if interface is None else interface.QueryInterface(icls, factory)
@@ -132,11 +131,13 @@ class _COMMeta(type):
     @staticmethod
     def _new(cls, iid=0, **kwargs):
       if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
+        ISetLastError(0x80004002)
         return None
       cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
       self.pvtbls[:] = cls._pvtbls
       self.refs = 1
       self.__init__(**kwargs)
+      ISetLastError(0)
       return pI + ind * cls.__class__._psize
     def __init__(cls, *args, interfaces=None):
       super().__init__(*args)
@@ -157,7 +158,10 @@ class _COMMeta(type):
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
   def _new(cls, iid, **kwargs):
-    if hasattr(cls, '_ovtbl') or (GUID(iid) not in cls._iids):
+    if hasattr(cls, '_ovtbl'):
+      return None
+    if (GUID(iid) not in cls._iids):
+      ISetLastError(0x80004002)
       return None
     if (impl := (vars(cls).get('_impl') or globals().get(n := cls.__name__ + '_impl'))) is None:
       cls._impl = impl = _COMMeta._COMImplMeta(n, (), _COMMeta._COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
@@ -178,9 +182,14 @@ class _COM_IUnknown(metaclass=_COMMeta):
   _vtbl['Release'] = (wintypes.ULONG, wintypes.LPVOID)
   @classmethod
   def _QueryInterface(cls, pI, riid, pObj):
-    if not (self := cls._get_self(pI)) or (ind := self.__class__._iids.get(GUID(riid.contents))) is None:
+    if not pObj:
+      return 0x80004003
+    if not (self := cls._get_self(pI)) or not riid:
       pObj.contents.value = 0
-      return 0x80004002 if self else 0x80004003
+      return 0x80004003
+    if (ind := self.__class__._iids.get(GUID(riid))) is None:
+      pObj.contents.value = 0
+      return 0x80004002
     pObj.contents.value = ctypes.addressof(self) + ind * cls.__class__._psize
     self.refs += 1
     return 0
@@ -339,17 +348,22 @@ class _COM_IClassFactory(_COM_IUnknown):
   _vars['constr'] = ctypes.WINFUNCTYPE(wintypes.LPVOID, wintypes.PBYTES16)
   @classmethod
   def _CreateInstance(cls, pI, pUnkOuter, riid, pObj):
-    if not (self := cls._get_self(pI)) or pUnkOuter:
+    if not pObj:
+      return 0x80004003
+    if not (self := cls._get_self(pI)) or not riid:
       pObj.contents.value = 0
-      return 0x80040110 if self else 0x80004003
-    pObj.contents.value = p = self.constr(riid)
-    return 0 if p else 0x80004002
+      return 0x80004003
+    if pUnkOuter:
+      pObj.contents.value = 0
+      return 0x80040110
+    pObj.contents.value = self.constr(riid) if self.constr else None
+    return 0 if pObj.contents else 0x80004002
   @classmethod
   def _LockServer(cls, pI, fLock):
     return 0x80004001 if cls._get_self(pI) else 0x80004003
 
 class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory,)):
-  def __new__(cls, iid, *, _bnew=__new__, impl):
+  def __new__(cls, iid, *, _bnew=__new__, impl=0):
     return _bnew(cls, iid, constr=impl)
   def __init__(self, *, constr):
     super().__init__(constr=_COM_IClassFactory._vars['constr'](constr))
@@ -400,8 +414,8 @@ class IClassFactory(IUnknown):
 
 class IEnumString(IUnknown):
   IID = GUID('00000101-0000-0000-c000-000000000046')
-  _protos['Next'] = 3, (wintypes.ULONG, ctypes.POINTER(wintypes.LPOLESTR), wintypes.PULONG), (), wintypes.ULONG
-  _protos['Skip'] = 4, (wintypes.ULONG,), (), wintypes.ULONG
+  _protos['Next'] = 3, (wintypes.ULONG, ctypes.POINTER(wintypes.LPOLESTR), wintypes.PULONG), ()
+  _protos['Skip'] = 4, (wintypes.ULONG,), ()
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
   def Reset(self):
@@ -409,10 +423,8 @@ class IEnumString(IUnknown):
   def Next(self, number):
     r = wintypes.ULONG()
     a = (wintypes.LPOLESTR * number)()
-    if (c := self.__class__._protos['Next'](self.pI, number, a, r)) > 1:
-      ISetLastError(c)
+    if self.__class__._protos['Next'](self.pI, number, a, r) is None:
       return None
-    ISetLastError(0)
     if (r := r.value) == 0:
       return ()
     ss = tuple(a[s] for s in range(r))
@@ -422,14 +434,10 @@ class IEnumString(IUnknown):
     return ss
   def Skip(self, number):
     try:
-      if (c := self.__class__._protos['Skip'](self.pI, number)) > 1:
-        ISetLastError(c)
-        return None
+      return self.__class__._protos['Skip'](self.pI, number)
     except:
       ISetLastError(0x80070057)
       return None
-    ISetLastError(0)
-    return True
   def Clone(self):
     return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
@@ -441,8 +449,8 @@ class IEnumString(IUnknown):
 
 class IEnumUnknown(IUnknown):
   IID = GUID('00000100-0000-0000-c000-000000000046')
-  _protos['Next'] = 3, (wintypes.ULONG, wintypes.PLPVOID, wintypes.PULONG), (), wintypes.ULONG
-  _protos['Skip'] = 4, (wintypes.ULONG,), (), wintypes.ULONG
+  _protos['Next'] = 3, (wintypes.ULONG, wintypes.PLPVOID, wintypes.PULONG), ()
+  _protos['Skip'] = 4, (wintypes.ULONG,), ()
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
   IClass = IUnknown
@@ -451,24 +459,15 @@ class IEnumUnknown(IUnknown):
   def Next(self, number):
     r = wintypes.ULONG()
     a = (wintypes.LPVOID * number)()
-    if (c := self.__class__._protos['Next'](self.pI, number, a, r)) > 1:
-      ISetLastError(c)
+    if self.__class__._protos['Next'](self.pI, number, a, r) is None:
       return None
-    ISetLastError(0)
-    if self.__class__.IClass is IUnknown:
-      return tuple(IUnknown(a[i], self.factory) for i in range(r.value))
-    else:
-      return tuple(_IUtil.QueryInterface(IUnknown(a[i], self.factory), self.__class__.IClass) for i in range(r.value))
+    return tuple(IUnknown(a[i], self.factory) for i in range(r.value)) if self.__class__.IClass is IUnknown else tuple(_IUtil.QueryInterface(IUnknown(a[i], self.factory), self.__class__.IClass) for i in range(r.value))
   def Skip(self, number):
     try:
-      if (c := self.__class__._protos['Skip'](self.pI, number)) > 1:
-        ISetLastError(c)
-        return None
+      return self.__class__._protos['Skip'](self.pI, number)
     except:
       ISetLastError(0x80070057)
       return None
-    ISetLastError(0)
-    return True
   def Clone(self):
     return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
@@ -546,9 +545,8 @@ class IStream(IUnknown):
     r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), False, None, ctypes.byref(pIStream))
     if r == 0x80070002 and desired_access == 0x12:
       r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), True, None, ctypes.byref(pIStream))
-    if r:
+    if ISetLastError(r):
       return None
-    ISetLastError(0)
     return cls(pIStream)
   shl.SHCreateMemStream.restype = wintypes.LPVOID
   @classmethod
@@ -2284,8 +2282,8 @@ class IWICEncoderPropertyBag(IPropertyBag2, metaclass=_IWICEPBMeta):
 
 class IWICEnumMetadataItem(IUnknown):
   IID = GUID(0xdc2bb46d, 0x3f07, 0x481e, 0x86, 0x25, 0x22, 0x0c, 0x4a, 0xed, 0xbb, 0x33)
-  _protos['Next'] = 3, (wintypes.ULONG, PPROPVARIANT, PPROPVARIANT, PPROPVARIANT, wintypes.PULONG), (), wintypes.ULONG
-  _protos['Skip'] = 4, (wintypes.ULONG,), (), wintypes.ULONG
+  _protos['Next'] = 3, (wintypes.ULONG, PPROPVARIANT, PPROPVARIANT, PPROPVARIANT, wintypes.PULONG), ()
+  _protos['Skip'] = 4, (wintypes.ULONG,), ()
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
   WithType = False
@@ -2297,23 +2295,17 @@ class IWICEnumMetadataItem(IUnknown):
     schemas = (PROPVARIANT * number)(needsclear=True)
     idents = (PROPVARIANT * number)(needsclear=True)
     values = (PROPVARIANT * number)(needsclear=True)
-    if (c := self.__class__._protos['Next'](self.pI, number, schemas, idents, values, r)) > 1:
-      ISetLastError(c)
+    if self.__class__._protos['Next'](self.pI, number, schemas, idents, values, r) is None:
       return None
-    ISetLastError(0)
     if (r := r.value) == 0:
       return ()
     return tuple((s.value, i.value, (_IUtil.QueryInterface(v.value, self.__class__.IClass, self.factory) if v.vt == 13 else v.value)) for s, i, v, _r in zip(schemas, idents, values, range(r))) if not self.__class__.WithType else tuple(((s.vt , s.value), (i.vt, i.value), (v.vt, (_IUtil.QueryInterface(v.value, self.__class__.IClass, self.factory) if v.vt == 13 else v.value))) for s, i, v, _r in zip(schemas, idents, values, range(r)))
   def Skip(self, number):
     try:
-      if (c := self.__class__._protos['Skip'](self.pI, number)) > 1:
-        ISetLastError(c)
-        return None
+      return self.__class__._protos['Skip'](self.pI, number)
     except:
       ISetLastError(0x80070057)
       return None
-    ISetLastError(0)
-    return True
   def Clone(self):
     return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
@@ -6104,13 +6096,13 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
   _vars['jclsid'] = wintypes.BYTES16
   @classmethod
   def _SetFindData(cls, pI, pfd):
-    if not (self := cls._get_self(pI)):
+    if not (self := cls._get_self(pI)) or not pfd:
       return 0x80004003
     self.fd.__init__(*pfd.contents.to_tuple())
     return 0
   @classmethod
   def _GetFindData(cls, pI, pfd):
-    if not (self := cls._get_self(pI)):
+    if not (self := cls._get_self(pI)) or not pfd:
       return 0x80004003
     pfd.contents.__init__(*self.fd.to_tuple())
     return 0
@@ -6122,19 +6114,19 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
     return 0
   @classmethod
   def _GetFileID(cls, pI, pfid):
-    if not (self := cls._get_self(pI)):
+    if not (self := cls._get_self(pI)) or not pfid:
       return 0x80004003
     pfid.contents.value = self.fid
     return 0
   @classmethod
   def _SetJunctionCLSID(cls, pI, pjclsid):
-    if not (self := cls._get_self(pI)):
+    if not (self := cls._get_self(pI)) or not pjclsid:
       return 0x80004003
     self.jclsid[:] = pjclsid.contents
     return 0
   @classmethod
   def _GetJunctionCLSID(cls, pI, pjclsid):
-    if not (self := cls._get_self(pI)):
+    if not (self := cls._get_self(pI)) or not pjclsid:
       return 0x80004003
     pjclsid.contents[:] = self.jclsid
     return 0
@@ -6438,8 +6430,8 @@ WSSTRRET.StrRetToBSTR = staticmethod(_WShUtil._wrap('StrRetToBSTR', (ctypes.POIN
 
 class IEnumIDList(IUnknown):
   IID = GUID(0x000214f2, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
-  _protos['Next'] = 3, (wintypes.ULONG, WSPPITEMIDLIST, wintypes.PULONG), (), wintypes.ULONG
-  _protos['Skip'] = 4, (wintypes.ULONG,), (), wintypes.ULONG
+  _protos['Next'] = 3, (wintypes.ULONG, WSPPITEMIDLIST, wintypes.PULONG), ()
+  _protos['Skip'] = 4, (wintypes.ULONG,), ()
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
   def Reset(self):
@@ -6447,21 +6439,13 @@ class IEnumIDList(IUnknown):
   def Next(self, number):
     r = wintypes.ULONG()
     a = (WSPITEMIDLIST * number)(needsfree=True)
-    if (c := self.__class__._protos['Next'](self.pI, number, a, r)) > 1:
-      ISetLastError(c)
-      return None
-    ISetLastError(0)
-    return tuple(a[p] for p in range(r.value))
+    return None if self.__class__._protos['Next'](self.pI, number, a, r) is None else tuple(a[p] for p in range(r.value))
   def Skip(self, number):
     try:
-      if (c := self.__class__._protos['Skip'](self.pI, number)) > 1:
-        ISetLastError(c)
-        return None
+      return self.__class__._protos['Skip'](self.pI, number)
     except:
       ISetLastError(0x80070057)
       return None
-    ISetLastError(0)
-    return True
   def Clone(self):
     return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
@@ -6473,8 +6457,8 @@ class IEnumIDList(IUnknown):
 
 class IEnumFORMATETC(IUnknown):
   IID = GUID(0x00000103, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
-  _protos['Next'] = 3, (wintypes.ULONG, WSPFORMATETC, wintypes.PULONG), (), wintypes.ULONG
-  _protos['Skip'] = 4, (wintypes.ULONG,), (), wintypes.ULONG
+  _protos['Next'] = 3, (wintypes.ULONG, WSPFORMATETC, wintypes.PULONG), ()
+  _protos['Skip'] = 4, (wintypes.ULONG,), ()
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
   def Reset(self):
@@ -6482,21 +6466,13 @@ class IEnumFORMATETC(IUnknown):
   def Next(self, number):
     r = wintypes.ULONG()
     a = (WSFORMATETC * number)()
-    if (c := self.__class__._protos['Next'](self.pI, number, a, r)) > 1:
-      ISetLastError(c)
-      return None
-    ISetLastError(0)
-    return tuple(a[p].value for p in range(r.value))
+    return None if self.__class__._protos['Next'](self.pI, number, a, r) is None else tuple(a[p].value for p in range(r.value))
   def Skip(self, number):
     try:
-      if (c := self.__class__._protos['Skip'](self.pI, number)) > 1:
-        ISetLastError(c)
-        return None
+      return self.__class__._protos['Skip'](self.pI, number)
     except:
       ISetLastError(0x80070057)
       return None
-    ISetLastError(0)
-    return True
   def Clone(self):
     return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
@@ -6621,7 +6597,7 @@ class IContextMenu(IUnknown):
       self.QueryContextMenu()
     return self
   def QueryContextMenu(self):
-    return None if (n := self._protos['QueryContextMenu'](self.pI, None, 0, 0, -1, 0)) & (1 << 31) else n
+    return None if ISetLastError(n := self._protos['QueryContextMenu'](self.pI, None, 0, 0, -1, 0)) else n
   def GetCommandString(self, identifier, information_flags=0):
     s = ctypes.create_unicode_buffer(256)
     return None if self._protos['GetCommandString'](self.pI, identifier, information_flags | 0x4, None, s, 255) is None else s.value
@@ -6673,7 +6649,7 @@ class IShellFolder(IUnknown):
   def CreateViewObject(self, interface, hwnd=None):
     return interface(self._protos['CreateViewObject'](self.pI, hwnd, interface.IID), self.factory)
   def CompareIDs(self, pidl1, pidl2, comparison_flags=0, comparison_rule=0):
-    return ((self._protos['CompareIDs'](self.pI, WSSHCIDS.name_code(comparison_flags) | comparison_rule, pidl1, pidl2) & 0xffff) ^ 0x8000) - 0x8000
+    return None if ISetLastError(c := self._protos['CompareIDs'](self.pI, WSSHCIDS.name_code(comparison_flags) | comparison_rule, pidl1, pidl2)) else ((c & 0xffff) ^ 0x8000) - 0x8000
   def GetUIObjectOf(self, pidls, interface, hwnd=None):
     return interface(self._protos['GetUIObjectOf'](self.pI, hwnd, (1 if (pidls is None or isinstance(pidls, WSPITEMIDLIST)) else len(pidls)), (pidls if pidls is None or isinstance(pidls, WSPITEMIDLIST) or (isinstance(pidls, ctypes.Array) and issubclass(pidls._type_, WSPITEMIDLIST)) else (WSPITEMIDLIST * len(pidls))(*pidls)), interface.IID, None), self.factory)
   @classmethod
@@ -6765,8 +6741,8 @@ class IShellItem(IUnknown):
   _protos['BindToHandler'] = 3, (wintypes.LPVOID, WSPBHID, PUUID), (wintypes.PLPVOID,)
   _protos['GetParent'] = 4, (), (wintypes.PLPVOID,)
   _protos['GetDisplayName'] = 5, (WSSIGDN,), (wintypes.PLPVOID,)
-  _protos['GetAttributes'] = 6, (WSSFGAO, WSPSFGAO), (), wintypes.ULONG
-  _protos['Compare'] = 7, (wintypes.LPVOID, WSSICHINTF, wintypes.PINT,), (), wintypes.ULONG
+  _protos['GetAttributes'] = 6, (WSSFGAO,), (WSPSFGAO,)
+  _protos['Compare'] = 7, (wintypes.LPVOID, WSSICHINTF), (wintypes.PINT,)
   def __new__(cls, clsid_component=False, factory=None):
     if clsid_component is False:
       clsid_component = IShellFolder()
@@ -6782,19 +6758,9 @@ class IShellItem(IUnknown):
   def GetParent(self):
     return self.__class__(self._protos['GetParent'](self.pI), self.factory)
   def GetAttributes(self, query_attributes):
-    a = WSSFGAO()
-    if (c := self._protos['GetAttributes'](self.pI, query_attributes, ctypes.byref(a))) > 1:
-      ISetLastError(c)
-      return None
-    ISetLastError(0)
-    return a
+    return self._protos['GetAttributes'](self.pI, query_attributes)
   def Compare(self, item, compare_mode=0):
-    o = wintypes.INT()
-    if (c := self._protos['Compare'](self.pI, item, compare_mode, ctypes.byref(o))) > 1:
-      ISetLastError(c)
-      return None
-    ISetLastError(0)
-    return o.value
+    return self._protos['Compare'](self.pI, item, compare_mode)
   def BindToHandler(self, handler_guid, interface, bind_context=None):
     return interface(self._protos['BindToHandler'](self.pI, bind_context, handler_guid, interface.IID), self.factory)
   @classmethod
@@ -6920,8 +6886,8 @@ IshellItem2 = IShellItem
 
 class IEnumShellItems(IUnknown):
   IID = GUID(0x70629033, 0xe363, 0x4a28, 0xa5, 0x67, 0x0d, 0xb7, 0x80, 0x06, 0xe6, 0xd7)
-  _protos['Next'] = 3, (wintypes.ULONG, wintypes.PLPVOID, wintypes.PULONG), (), wintypes.ULONG
-  _protos['Skip'] = 4, (wintypes.ULONG,), (), wintypes.ULONG
+  _protos['Next'] = 3, (wintypes.ULONG, wintypes.PLPVOID, wintypes.PULONG), ()
+  _protos['Skip'] = 4, (wintypes.ULONG,), ()
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
   def __new__(cls, clsid_component=False, factory=None):
@@ -6939,21 +6905,13 @@ class IEnumShellItems(IUnknown):
   def Next(self, number):
     r = wintypes.ULONG()
     a = (wintypes.LPVOID * number)()
-    if (c := self.__class__._protos['Next'](self.pI, number, a, r)) > 1:
-      ISetLastError(c)
-      return None
-    ISetLastError(0)
-    return tuple(IShellItem(a[i], self.factory) for i in range(r.value))
+    return None if self.__class__._protos['Next'](self.pI, number, a, r) is None else tuple(IShellItem(a[i], self.factory) for i in range(r.value))
   def Skip(self, number):
     try:
-      if (c := self.__class__._protos['Skip'](self.pI, number)) > 1:
-        ISetLastError(c)
-        return None
+      return self.__class__._protos['Skip'](self.pI, number)
     except:
       ISetLastError(0x80070057)
       return None
-    ISetLastError(0)
-    return True
   def Clone(self):
     return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   def __iter__(self):
@@ -6966,7 +6924,7 @@ class IEnumShellItems(IUnknown):
 class IShellItemArray(IUnknown):
   IID = GUID(0xb63ea76d, 0x1f85, 0x456f, 0xa1, 0x9c, 0x48, 0x15, 0x9e, 0xfa, 0x85, 0x8b)
   _protos['BindToHandler'] = 3, (wintypes.LPVOID, WSPBHID, PUUID), (wintypes.PLPVOID,)
-  _protos['GetAttributes'] = 6, (WSSIATTRIBFLAGS, WSSFGAO, WSPSFGAO), (), wintypes.ULONG
+  _protos['GetAttributes'] = 6, (WSSIATTRIBFLAGS, WSSFGAO), (WSPSFGAO,)
   _protos['GetCount'] = 7, (), (wintypes.PDWORD,)
   _protos['GetItemAt'] = 8, (wintypes.DWORD,), (wintypes.PLPVOID,)
   _protos['EnumItems'] = 9, (), (wintypes.PLPVOID,)
@@ -6994,12 +6952,7 @@ class IShellItemArray(IUnknown):
       return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromIDLists(tuple(p if p is None or isinstance(p, WSPITEMIDLIST) else WSPITEMIDLIST(p) for p in clsid_component)), factory)
     return IUnknown.__new__(cls, clsid_component, factory)
   def GetAttributes(self, combine_flags, query_attributes):
-    a = WSSFGAO()
-    if (c := self._protos['GetAttributes'](self.pI, combine_flags, query_attributes, ctypes.byref(a))) > 1:
-      ISetLastError(c)
-      return None
-    ISetLastError(0)
-    return a
+    return self._protos['GetAttributes'](self.pI, combine_flags, query_attributes)
   def GetCount(self):
     return self.__class__._protos['GetCount'](self.pI)
   def GetItemAt(self, index):
@@ -7456,13 +7409,13 @@ class Window(metaclass=_WndMeta):
 
 
 def Initialize(mode=6, ole=False):
-  if ISetLastError(ole32.OleInitialize(None) if ole else ole32.CoInitializeEx(None, wintypes.DWORD((mode := (4 if mode.lower() in ('mt', 'mta') else 6)) if isinstance(mode, str) else mode))) in (0, 1):
-    if not hasattr(_IUtil._local, 'initialized'):
-      _IUtil._local.initialized = [0, 0]
-      _IUtil._local.multithreaded = not (ole or bool(mode & 2))
-    _IUtil._local.initialized[1 if ole else 0] += 1
-    return True
-  return None
+  if ISetLastError(ole32.OleInitialize(None) if ole else ole32.CoInitializeEx(None, wintypes.DWORD((mode := (4 if mode.lower() in ('mt', 'mta') else 6)) if isinstance(mode, str) else mode))):
+    return None
+  if not hasattr(_IUtil._local, 'initialized'):
+    _IUtil._local.initialized = [0, 0]
+    _IUtil._local.multithreaded = not (ole or bool(mode & 2))
+  _IUtil._local.initialized[1 if ole else 0] += 1
+  return True
 def Uninitialize():
   if hasattr(_IUtil._local, 'initialized'):
     while _IUtil._local.initialized[1] > 0:
