@@ -173,7 +173,7 @@ class _COMMeta(type):
       setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
       v[i] = ctypes.cast(f, wintypes.LPVOID)
   def _get_self(cls, pI):
-    return cls.__class__._refs.get(pI - getattr(cls, '_ovtbl', 0))
+    return None if not pI else cls.__class__._refs.get(pI - getattr(cls, '_ovtbl', 0))
 
 class _COM_IUnknown(metaclass=_COMMeta):
   _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
