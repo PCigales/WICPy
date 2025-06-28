@@ -375,10 +375,12 @@ class IClassFactory(IUnknown):
     lw = None
     if not clsid_component:
       if clsid_component is False:
-        raise TypeError('%s does not have an implicit constructor' % cls.__name__)
+        clsid_component = 0
       else:
         return None
-    if isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
+    elif isinstance(clsid_component, _IMeta) and (clsid_component := getattr((icls := clsid_component), 'CLSID', globals().get('_COM_' + icls.__name__))) is None:
+        raise TypeError('%s does not have an implicit constructor' % icls.__name__)
+    if clsid_component == 0 or isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
       if not (pI := wintypes.LPVOID(_COM_IClassFactory(cls.IID, impl=clsid_component))):
         return None
       lw = True
