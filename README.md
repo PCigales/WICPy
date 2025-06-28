@@ -8,7 +8,8 @@ WICPy defines Python (>=v3.8) classes wrapping the COM interfaces, bringing acce
 The COM library must be initialized for each thread creating from scratch a new component by calling Initialize() and therefore uninitialized at the end by calling Uninitialize(), after having released all interfaces.
 
 Bases of wrappers for Direct2D, Direct3D 11 and DXGI interfaces involved in interoperability with WIC are made available.
-
 WICPy also gives access to the Windows Media Player photo library, as well as some Windows Shell Namespace resources.
+
+Besides, the module facilitates the creation of custom COM interfaces and implementations using metaclasses.
 
 The script test.py illustrates how to use the module through various applications.
