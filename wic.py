@@ -284,6 +284,8 @@ class IUnknown(metaclass=_IMeta):
     return self
   def __exit__(self, et, ev, tb):
     self.__del__()
+  def __repr__(self):
+    return '<%s.%s(%s) object at %#018X>' % (self.__class__.__module__, self.__class__.__qualname__, ('%#018X' % self.pI.value if self else 'None'), id(self))
 
 class _PCOMUtil:
   _mul_cache = {}
@@ -470,7 +472,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
       (wintypes.LPVOID * celt).from_address(rgelt.value)[:] = (None,) * celt
       return 0x80004003
     pceltFetched.contents.value = fcelt = min(celt, self.count - self.index)
-    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(i.AddRef(False) and i.pI for i in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
+    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(i.AddRef(False) and i.pI if i else None for i in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
     self.index += fcelt
     return 0 if fcelt == celt else 1
   @classmethod
