@@ -122,18 +122,18 @@ class _COMMeta(type):
       return {} if not interfaces or bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new}
     def __new__(mcls, name, bases, namespace, interfaces=None):
       if not interfaces or any(hasattr(interface, '_ovtbl') for interface in interfaces) or bases:
-        return None
+        raise ValueError('an invalid value has been provided for the \'interfaces\' argument of the declaration of %s' % name)
       fs = {}
       if any(fs.setdefault(n, t) != t for interface in interfaces for n, t in interface._vars.items()):
-        return None
+        raise AttributeError('a conflict between variables has been detected among the \'_vars\' declarations of the interfaces tied to %s' % name)
       namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
       return super().__new__(mcls, name, (ctypes.Structure,), namespace)
     @staticmethod
-    def _new(cls, iid=0, **kwargs):
+    def _new(cls, iid=0, isize=None, **kwargs):
       if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
         ISetLastError(0x80004002)
         return None
-      cls.__class__._refs[pI := ctypes.addressof(self)] = (self := ctypes.Structure.__new__(cls))
+      cls.__class__._refs[pI := ctypes.addressof(self)] = (self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
       self.pvtbls[:] = cls._pvtbls
       self.refs = 1
       self.__init__(**kwargs)
@@ -149,17 +149,19 @@ class _COMMeta(type):
   def __prepare__(mcls, name, bases, interfaces=None):
     if interfaces:
       return mcls._COMImplMeta.__prepare__(name, bases, interfaces=interfaces)
-    return ({} if len(bases) > 1 else {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, '_offsetted': mcls._Offsetted()}) if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '_offsetted': mcls._Offsetted(), '__new__': mcls._new}
+    return {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, '_offsetted': mcls._Offsetted()} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '_offsetted': mcls._Offsetted(), '__new__': mcls._new}
   def __new__(mcls, name, bases, namespace, interfaces=None):
     if interfaces:
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
-      return None
+      raise ValueError('an invalid value or more than one value has been provided as base class in the declaration of %s' % name)
+    if (v := namespace.get('_vars')) and any(n in {'pvtbls', 'refs', 'iid', 'isize'} for n in v):
+      raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
   def _new(cls, iid, **kwargs):
     if hasattr(cls, '_ovtbl'):
-      return None
+      raise TypeError('%s does not have any constructor' % cls.__name__)
     if (GUID(iid) not in cls._iids):
       ISetLastError(0x80004002)
       return None
@@ -251,12 +253,12 @@ class IUnknown(metaclass=_IMeta):
     if own_ref:
       self.refs += 1
     return self.__class__._protos['AddRef'](self.pI), self.refs
-  def Release(self):
+  def Release(self, own_ref=True):
     if self.pI is None:
       return None
     if (r := self.__class__._protos['Release'](self.pI)) == 0:
       self.refs = 0
-    else:
+    elif own_ref:
       self.refs -= 1
     if self.refs == 0:
       self.pI = None
@@ -449,6 +451,65 @@ class IEnumString(IUnknown):
       raise StopIteration
     return n[0]
 
+class _COM_IEnumUnknown(_COM_IUnknown):
+  _iids.add(GUID('00000100-0000-0000-c000-000000000046'))
+  _vtbl['Next'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.ULONG, wintypes.LPVOID, wintypes.PULONG)
+  _vtbl['Skip'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.ULONG)
+  _vtbl['Reset'] = (wintypes.ULONG, wintypes.LPVOID)
+  _vtbl['Clone'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PLPVOID)
+  _vars['count'] = wintypes.ULONG
+  _vars['index'] = wintypes.ULONG
+  _vars['container'] = PCOM
+  _vars['items'] = PCOM * 0
+  @classmethod
+  def _Next(cls, pI, celt, rgelt, pceltFetched):
+    if not rgelt or not pceltFetched:
+      return 0x80004003
+    if not (self := cls._get_self(pI)):
+      pceltFetched.contents.value = 0
+      (wintypes.LPVOID * celt).from_address(rgelt.value)[:] = (None,) * celt
+      return 0x80004003
+    pceltFetched.contents.value = fcelt = min(celt, self.count - self.index)
+    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(i.AddRef(False) and i.pI for i in self._items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
+    self.index += fcelt
+    return 0 if fcelt == celt else 1
+  @classmethod
+  def _Skip(cls, pI, celt):
+    if not (self := cls._get_self(pI)):
+      return 0x80004003
+    self.index = min((nindex := self.index + celt), self.count)
+    return 0 if self.index == nindex else 1
+  @classmethod
+  def _Reset(cls, pI):
+    if not (self := cls._get_self(pI)):
+      return 0x80004003
+    self.index = 0
+    return 0
+  @classmethod
+  def _Clone(cls, pI, ppenum):
+    if not ppenum:
+      return 0x80004003
+    if not (self := cls._get_self(pI)):
+      ppenum.contents.value = None
+      return 0x80004003
+    ppenum.contents.value = self.__class__(items=self._items, index=self.index)
+    return 0
+
+class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
+  def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
+    return _bnew(cls, iid, cls.items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
+  def __init__(self, *, items, index, container):
+    super().__init__(count=len(items), index=index, container=PCOM(container))
+    self._items[:] = tuple(items)
+    if self.container:
+      self.container.content.AddRef(False)
+  @property
+  def _items(self):
+    return (PCOM * self.count).from_address(ctypes.addressof(self.items))
+  def __del__(self):
+    if self.container:
+      self.container.content.Release(False)
+
 class IEnumUnknown(IUnknown):
   IID = GUID('00000100-0000-0000-c000-000000000046')
   _protos['Next'] = 3, (wintypes.ULONG, wintypes.PLPVOID, wintypes.PULONG), ()
@@ -456,6 +517,17 @@ class IEnumUnknown(IUnknown):
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
   IClass = IUnknown
+  def __new__(cls, clsid_component=False, factory=None):
+    if isinstance(clsid_component, (tuple, list, ctypes.Array)):
+      if not (pI := wintypes.LPVOID(_COM_IEnumUnknown(cls.IID, items=clsid_component, container=factory))):
+        return None
+      self = object.__new__(cls)
+      self.pI = pI
+      self.refs = 1
+      self.factory = factory
+      self._lightweight = True
+      return self
+    return super().__new__(cls, clsid_component, factory)
   def Reset(self):
     return self.__class__._protos['Reset'](self.pI)
   def Next(self, number):
