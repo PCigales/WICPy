@@ -460,7 +460,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
   _vars['count'] = wintypes.ULONG
   _vars['index'] = wintypes.ULONG
   _vars['container'] = PCOM
-  _vars['items'] = PCOM * 0
+  _vars['_items'] = PCOM * 0
   @classmethod
   def _Next(cls, pI, celt, rgelt, pceltFetched):
     if not rgelt or not pceltFetched:
@@ -470,7 +470,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
       (wintypes.LPVOID * celt).from_address(rgelt.value)[:] = (None,) * celt
       return 0x80004003
     pceltFetched.contents.value = fcelt = min(celt, self.count - self.index)
-    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(i.AddRef(False) and i.pI for i in self._items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
+    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(i.AddRef(False) and i.pI for i in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
     self.index += fcelt
     return 0 if fcelt == celt else 1
   @classmethod
@@ -492,20 +492,23 @@ class _COM_IEnumUnknown(_COM_IUnknown):
     if not (self := cls._get_self(pI)):
       ppenum.contents.value = None
       return 0x80004003
-    ppenum.contents.value = self.__class__(items=self._items, index=self.index)
+    ppenum.contents.value = self.__class__(items=self.items, index=self.index)
     return 0
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
   def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
-    return _bnew(cls, iid, cls.items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
+    return _bnew(cls, iid, cls._items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
   def __init__(self, *, items, index, container):
     super().__init__(count=len(items), index=index, container=PCOM(container))
-    self._items[:] = tuple(items)
+    self.items = items
     if self.container:
       self.container.content.AddRef(False)
   @property
-  def _items(self):
-    return (PCOM * self.count).from_address(ctypes.addressof(self.items))
+  def items(self):
+    return (PCOM * self.count).from_address(ctypes.addressof(self._items))
+  @items.setter
+  def items(self, value):
+    self.items.__init__(*value)
   def __del__(self):
     if self.container:
       self.container.content.Release(False)
