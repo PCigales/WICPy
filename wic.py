@@ -501,7 +501,7 @@ class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)
   def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
     return _bnew(cls, iid, cls._items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
   def __init__(self, *, items, index, container):
-    super().__init__(count=len(items), index=index, container=PCOM(container), items=items)
+    super().__init__(count=len(items), index=index, container=PCOM(container).value, items=items)
     if self.container:
       self.container.content.AddRef(False)
   @property
