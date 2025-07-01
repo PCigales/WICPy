@@ -319,7 +319,7 @@ class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
       self.value = getattr(interface.pI, 'value', interface.pI)
       self.icls = interface.__class__ if self.__class__.icls is IUnknown else self.__class__.icls
     elif isinstance(interface, PCOM):
-      self._interface = interface._interface
+      self._interface = getattr(interface, '_interface', None)
       self.value = interface.value
       self.icls = interface.icls if self.__class__.icls is IUnknown else self.__class__.icls
     else:
@@ -494,7 +494,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
     if not (self := cls._get_self(pI)):
       ppenum.contents.value = None
       return 0x80004003
-    ppenum.contents.value = self.__class__(items=self.items, index=self.index)
+    ppenum.contents.value = self.__class__(items=self.items, index=self.index, container=self.container)
     return 0
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
