@@ -344,6 +344,10 @@ class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
     i.factory = None
     i.AddRef()
     return i
+  def AddRef(self):
+    return IUnknown._protos['AddRef'](self) if self else 0
+  def Release(self):
+    return IUnknown._protos['Release'](self) if self else 0
 
 class _COM_IClassFactory(_COM_IUnknown):
   _iids.add(GUID('00000001-0000-0000-c000-000000000046'))
@@ -462,7 +466,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
   _vars['count'] = wintypes.ULONG
   _vars['index'] = wintypes.ULONG
   _vars['container'] = PCOM
-  _vars['_items'] = PCOM * 0
+  _vars['_items'] = wintypes.LPVOID * 0
   @classmethod
   def _Next(cls, pI, celt, rgelt, pceltFetched):
     if not rgelt or not pceltFetched:
@@ -472,7 +476,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
       (wintypes.LPVOID * celt).from_address(rgelt.value)[:] = (None,) * celt
       return 0x80004003
     pceltFetched.contents.value = fcelt = min(celt, self.count - self.index)
-    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(i.AddRef(False) and i.pI if i else None for i in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
+    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(PCOM.AddRef(wintypes.LPVOID(pI)) and pI for pI in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
     self.index += fcelt
     return 0 if fcelt == celt else 1
   @classmethod
@@ -496,23 +500,28 @@ class _COM_IEnumUnknown(_COM_IUnknown):
       return 0x80004003
     ppenum.contents.value = self.__class__(items=self.items, index=self.index, container=self.container)
     return 0
+  @classmethod
+  def _Release(cls, pI):
+    if not (self := cls._get_self(pI)):
+      return 0
+    self.refs = max(self.refs - 1, 0)
+    if not self.refs:
+      cls._refs.pop(ctypes.addressof(self), None)
+      self.container.Release()  
+    return self.refs
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
   def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
     return _bnew(cls, iid, cls._items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
   def __init__(self, *, items, index, container):
     super().__init__(count=len(items), index=index, container=PCOM(container).value, items=items)
-    if self.container:
-      self.container.content.AddRef(False)
+    self.container.AddRef()
   @property
   def items(self):
-    return (PCOM * self.count).from_address(ctypes.addressof(self._items))
+    return (wintypes.LPVOID * self.count).from_address(ctypes.addressof(self._items))
   @items.setter
   def items(self, value):
-    self.items[:] = value
-  def __del__(self):
-    if self.container:
-      self.container.content.Release(False)
+    (PCOM * self.count).from_address(ctypes.addressof(self._items))[:] = value
 
 class IEnumUnknown(IUnknown):
   IID = GUID('00000100-0000-0000-c000-000000000046')
