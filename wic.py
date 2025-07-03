@@ -469,13 +469,15 @@ class _COM_IEnumUnknown(_COM_IUnknown):
   _vars['_items'] = wintypes.LPVOID * 0
   @classmethod
   def _Next(cls, pI, celt, rgelt, pceltFetched):
-    if not rgelt or not pceltFetched:
+    if not rgelt or (celt > 1 and not pceltFetched) or not (self := cls._get_self(pI)):
+      if pceltFetched:
+        pceltFetched.contents.value = 0
+      if rgelt:
+        (wintypes.LPVOID * celt).from_address(rgelt)[:] = (None,) * celt
       return 0x80004003
-    if not (self := cls._get_self(pI)):
-      pceltFetched.contents.value = 0
-      (wintypes.LPVOID * celt).from_address(rgelt.value)[:] = (None,) * celt
-      return 0x80004003
-    pceltFetched.contents.value = fcelt = min(celt, self.count - self.index)
+    fcelt = min(celt, self.count - self.index)
+    if pceltFetched:
+      pceltFetched.contents.value = fcelt
     (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(PCOM.AddRef(wintypes.LPVOID(pI)) and pI for pI in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
     self.index += fcelt
     return 0 if fcelt == celt else 1
@@ -507,7 +509,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
     self.refs = max(self.refs - 1, 0)
     if not self.refs:
       cls._refs.pop(ctypes.addressof(self), None)
-      self.container.Release()  
+      self.container.Release()
     return self.refs
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
