@@ -119,10 +119,12 @@ class _COMMeta(type):
     _refs = {}
     @classmethod
     def __prepare__(mcls, name, bases, interfaces=None):
-      return {} if not interfaces or bases else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new}
+      return {} if not interfaces else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new}
     def __new__(mcls, name, bases, namespace, interfaces=None):
-      if not interfaces or any(hasattr(interface, '_ovtbl') for interface in interfaces) or bases:
+      if not interfaces or any(hasattr(interface, '_ovtbl') for interface in interfaces):
         raise ValueError('an invalid value has been provided for the \'interfaces\' argument of the declaration of %s' % name)
+      if bases:
+        raise ValueError('a base class has been provided in the declaration of %s' % name)
       fs = {}
       if any(fs.setdefault(n, t) != t for interface in interfaces for n, t in interface._vars.items()):
         raise AttributeError('a conflict between variables has been detected among the \'_vars\' declarations of the interfaces tied to %s' % name)
@@ -154,7 +156,7 @@ class _COMMeta(type):
     if interfaces:
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
-      raise ValueError('an invalid value or more than one value has been provided as base class in the declaration of %s' % name)
+      raise ValueError('an invalid or more than one base class has been provided in the declaration of %s' % name)
     if (v := namespace.get('_vars')) and any(n in {'pvtbls', 'refs', 'iid', 'isize'} for n in v):
       raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     return super().__new__(mcls, name, bases, namespace)
