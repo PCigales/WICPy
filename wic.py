@@ -117,6 +117,32 @@ class _COMMeta(type):
   class _COMImplMeta(ctypes.Structure.__class__):
     _psize = ctypes.sizeof(wintypes.LPVOID)
     _refs = {}
+    class _COMThreadUnsafe:
+      def __init__(self, obj=None):
+        object.__setattr__(self, '_obj', obj)
+      def __bool__(self):
+        return bool(getattr(self._obj, 'refs', False))
+      def __enter__(self):
+        return self._obj
+      def __exit__(self, et, ev, tb):
+        if not getattr((obj := self._obj), 'refs', True):
+          obj.__class__._refs.pop(ctypes.addressof(obj), None)
+      def __getattr__(self, name):
+        return getattr(self._obj, name) if self._obj else None
+      def __setattr__(self, name, value):
+        return setattr(self._obj, name, value) if hasattr(self._obj, name) else object.__setattr__(self, name, value)
+      def __repr__(self):
+        return '<%s.%s(%s) object at %#018X>' % (self.__class__.__module__, self.__class__.__qualname__, self._obj, id(self))
+    class _COMThreadSafe(_COMThreadUnsafe):
+      def __init__(self, obj=None):
+        super().__init__(obj)
+        self._lock = threading.RLock()
+      def __enter__(self):
+        self._lock.acquire()
+        return super().__enter__()
+      def __exit__(self, et, ev, tb):
+        super().__exit__(et, ev, tb)
+        self._lock.release()
     @classmethod
     def __prepare__(mcls, name, bases, interfaces=None):
       return {} if not interfaces else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new}
@@ -135,7 +161,7 @@ class _COMMeta(type):
       if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
         ISetLastError(0x80004002)
         return None
-      cls.__class__._refs[pI := ctypes.addressof(self)] = (self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
+      cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if getattr(_IUtil._local, 'multithreaded', False) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
       self.pvtbls[:] = cls._pvtbls
       self.refs = 1
       self.__init__(**kwargs)
@@ -147,6 +173,7 @@ class _COMMeta(type):
         cls._pvtbls = tuple(ctypes.addressof(interface._offsetted[i].vtbl) for i, interface in enumerate(interfaces))
   _psize = _COMImplMeta._psize
   _refs = _COMImplMeta._refs
+  _none = _COMImplMeta._COMThreadUnsafe()
   @classmethod
   def __prepare__(mcls, name, bases, interfaces=None):
     if interfaces:
@@ -157,7 +184,7 @@ class _COMMeta(type):
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       raise ValueError('an invalid or more than one base class has been provided in the declaration of %s' % name)
-    if (v := namespace.get('_vars')) and any(n in {'pvtbls', 'refs', 'iid', 'isize'} for n in v):
+    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_iids', '_pvtbls', '_fields_', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
       raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
@@ -176,8 +203,8 @@ class _COMMeta(type):
     for i, (n, a) in enumerate(cls._vtbl.items()):
       setattr(cls, n, (f := ctypes.WINFUNCTYPE(*a)(getattr(cls, '_' + n))))
       v[i] = ctypes.cast(f, wintypes.LPVOID)
-  def _get_self(cls, pI):
-    return None if not pI else cls.__class__._refs.get(pI - getattr(cls, '_ovtbl', 0))
+  def __getitem__(cls, pI):
+    return cls.__class__._none if not pI else cls.__class__._refs.get(pI - getattr(cls, '_ovtbl', 0), cls.__class__._none)
 
 class _COM_IUnknown(metaclass=_COMMeta):
   _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
@@ -188,29 +215,30 @@ class _COM_IUnknown(metaclass=_COMMeta):
   def _QueryInterface(cls, pI, riid, pObj):
     if not pObj:
       return 0x80004003
-    if not (self := cls._get_self(pI)) or not riid:
-      pObj.contents.value = 0
-      return 0x80004003
-    if (ind := self.__class__._iids.get(GUID(riid))) is None:
-      pObj.contents.value = 0
-      return 0x80004002
-    pObj.contents.value = ctypes.addressof(self) + ind * cls.__class__._psize
-    self.refs += 1
-    return 0
+    with cls[pI] as self:
+      if not self or not riid:
+        pObj.contents.value = 0
+        return 0x80004003
+      if (ind := self.__class__._iids.get(GUID(riid))) is None:
+        pObj.contents.value = 0
+        return 0x80004002
+      pObj.contents.value = ctypes.addressof(self) + ind * cls.__class__._psize
+      self.refs += 1
+      return 0
   @classmethod
   def _AddRef(cls, pI):
-    if not (self := cls._get_self(pI)):
-      return 0
-    self.refs += 1
-    return self.refs
+    with cls[pI] as self:
+      if not self:
+        return 0
+      self.refs += 1
+      return self.refs
   @classmethod
   def _Release(cls, pI):
-    if not (self := cls._get_self(pI)):
-      return 0
-    self.refs = max(self.refs - 1, 0)
-    if not self.refs:
-      cls._refs.pop(ctypes.addressof(self), None)
-    return self.refs
+    with cls[pI] as self:
+      if not self:
+        return 0
+      self.refs = max(self.refs - 1, 0)
+      return self.refs
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -360,17 +388,18 @@ class _COM_IClassFactory(_COM_IUnknown):
   def _CreateInstance(cls, pI, pUnkOuter, riid, pObj):
     if not pObj:
       return 0x80004003
-    if not (self := cls._get_self(pI)) or not riid:
-      pObj.contents.value = 0
-      return 0x80004003
-    if pUnkOuter:
-      pObj.contents.value = 0
-      return 0x80040110
-    pObj.contents.value = self.constr(riid) if self.constr else None
-    return 0 if pObj.contents else 0x80004002
+    with cls[pI] as self:
+      if not self or not riid:
+        pObj.contents.value = 0
+        return 0x80004003
+      if pUnkOuter:
+        pObj.contents.value = 0
+        return 0x80040110
+      pObj.contents.value = self.constr(riid) if self.constr else None
+      return 0 if pObj.contents else 0x80004002
   @classmethod
   def _LockServer(cls, pI, fLock):
-    return 0x80004001 if cls._get_self(pI) else 0x80004003
+    return 0x80004001 if cls[pI] else 0x80004003
 
 class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory,)):
   def __new__(cls, iid, *, _bnew=__new__, impl=0):
@@ -471,48 +500,51 @@ class _COM_IEnumUnknown(_COM_IUnknown):
   _vars['_items'] = wintypes.LPVOID * 0
   @classmethod
   def _Next(cls, pI, celt, rgelt, pceltFetched):
-    if not rgelt or (celt > 1 and not pceltFetched) or not (self := cls._get_self(pI)):
+    with cls[pI] as self:
+      if not self or not rgelt or (celt > 1 and not pceltFetched):
+        if pceltFetched:
+          pceltFetched.contents.value = 0
+        if rgelt:
+          (wintypes.LPVOID * celt).from_address(rgelt)[:] = (None,) * celt
+        return 0x80004003
+      fcelt = min(celt, self.count - self.index)
       if pceltFetched:
-        pceltFetched.contents.value = 0
-      if rgelt:
-        (wintypes.LPVOID * celt).from_address(rgelt)[:] = (None,) * celt
-      return 0x80004003
-    fcelt = min(celt, self.count - self.index)
-    if pceltFetched:
-      pceltFetched.contents.value = fcelt
-    (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(PCOM.AddRef(wintypes.LPVOID(pI)) and pI for pI in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
-    self.index += fcelt
-    return 0 if fcelt == celt else 1
+        pceltFetched.contents.value = fcelt
+      (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(PCOM.AddRef(wintypes.LPVOID(pI)) and pI for pI in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
+      self.index += fcelt
+      return 0 if fcelt == celt else 1
   @classmethod
   def _Skip(cls, pI, celt):
-    if not (self := cls._get_self(pI)):
-      return 0x80004003
-    self.index = min((nindex := self.index + celt), self.count)
-    return 0 if self.index == nindex else 1
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      self.index = min((nindex := self.index + celt), self.count)
+      return 0 if self.index == nindex else 1
   @classmethod
   def _Reset(cls, pI):
-    if not (self := cls._get_self(pI)):
-      return 0x80004003
-    self.index = 0
-    return 0
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      self.index = 0
+      return 0
   @classmethod
   def _Clone(cls, pI, ppenum):
-    if not ppenum:
-      return 0x80004003
-    if not (self := cls._get_self(pI)):
-      ppenum.contents.value = None
-      return 0x80004003
-    ppenum.contents.value = self.__class__(items=self.items, index=self.index, container=self.container)
-    return 0
+    with cls[pI] as self:
+      if not self or not ppenum:
+        if ppenum:
+          ppenum.contents.value = None
+        return 0x80004003
+      ppenum.contents.value = self.__class__(items=self.items, index=self.index, container=self.container)
+      return 0
   @classmethod
   def _Release(cls, pI):
-    if not (self := cls._get_self(pI)):
-      return 0
-    self.refs = max(self.refs - 1, 0)
-    if not self.refs:
-      cls._refs.pop(ctypes.addressof(self), None)
-      self.container.Release()
-    return self.refs
+    with cls[pI] as self:
+      if not self:
+        return 0
+      self.refs = max(self.refs - 1, 0)
+      if not self.refs:
+        self.container.Release()
+      return self.refs
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
   def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
@@ -6187,40 +6219,46 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
   _vars['jclsid'] = wintypes.BYTES16
   @classmethod
   def _SetFindData(cls, pI, pfd):
-    if not (self := cls._get_self(pI)) or not pfd:
-      return 0x80004003
-    self.fd.__init__(*pfd.contents.to_tuple())
-    return 0
+    with cls[pI] as self:
+      if not self or not pfd:
+        return 0x80004003
+      self.fd.__init__(*pfd.contents.to_tuple())
+      return 0
   @classmethod
   def _GetFindData(cls, pI, pfd):
-    if not (self := cls._get_self(pI)) or not pfd:
-      return 0x80004003
-    pfd.contents.__init__(*self.fd.to_tuple())
-    return 0
+    with cls[pI] as self:
+      if not self or not pfd:
+        return 0x80004003
+      pfd.contents.__init__(*self.fd.to_tuple())
+      return 0
   @classmethod
   def _SetFileID(cls, pI, fid):
-    if not (self := cls._get_self(pI)):
-      return 0x80004003
-    self.fid = fid
-    return 0
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      self.fid = fid
+      return 0
   @classmethod
   def _GetFileID(cls, pI, pfid):
-    if not (self := cls._get_self(pI)) or not pfid:
-      return 0x80004003
-    pfid.contents.value = self.fid
-    return 0
+    with cls[pI] as self:
+      if not self or not pfid:
+        return 0x80004003
+      pfid.contents.value = self.fid
+      return 0
   @classmethod
   def _SetJunctionCLSID(cls, pI, pjclsid):
-    if not (self := cls._get_self(pI)) or not pjclsid:
-      return 0x80004003
-    self.jclsid[:] = pjclsid.contents
-    return 0
+    with cls[pI] as self:
+      if not self or not pjclsid:
+        return 0x80004003
+      self.jclsid[:] = pjclsid.contents
+      return 0
   @classmethod
   def _GetJunctionCLSID(cls, pI, pjclsid):
-    if not (self := cls._get_self(pI)) or not pjclsid:
-      return 0x80004003
-    pjclsid.contents[:] = self.jclsid
-    return 0
+    with cls[pI] as self:
+      if not self or not pjclsid:
+        return 0x80004003
+      pjclsid.contents[:] = self.jclsid
+      return 0
 
 class IFileSystemBindData(IUnknown):
   IID = GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8)
