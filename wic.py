@@ -7556,3 +7556,13 @@ def Uninitialize():
     del _IUtil._local.initialized
     return True
   return None
+def DllGetClassObject(component):
+  if isinstance(component, _IMeta):
+    component = getattr((icls := component), 'CLSID', globals().get('_COM_' + icls.__name__))
+  return ISetLastError(0) or IClassFactory(component) if isinstance(component, (_COMMeta, _COMMeta._COMImplMeta)) else ISetLastError(0x80040111) and None
+def DllCanUnloadNow():
+  return ISetLastError(0) or not _COMMeta._refs
+def MarshalInterface(interface):
+  return None if ISetLastError(ole32.CoMarshalInterThreadInterfaceInStream(PUUID.from_param(interface.IID), getattr(interface, 'pI', None), ctypes.byref(p := wintypes.LPVOID()))) else IStream(p, factory=interface)
+def UnmarshalInterface(istream):
+  return None if ISetLastError(ole32.CoGetInterfaceAndReleaseStream(istream, PUUID.from_param(istream.factory.IID), ctypes.byref(p := wintypes.LPVOID()))) else (istream.factory if isinstance(istream.factory, _IMeta) else istream.factory.__class__)(p)
