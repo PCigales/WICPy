@@ -125,8 +125,7 @@ class _COMMeta(type):
       def __enter__(self):
         return self._obj
       def __exit__(self, et, ev, tb):
-        if not getattr((obj := self._obj), 'refs', True):
-          obj.__class__._refs.pop(ctypes.addressof(obj), None)
+        pass
       def __getattr__(self, name):
         return getattr(self._obj, name) if self._obj else None
       def __setattr__(self, name, value):
@@ -136,12 +135,11 @@ class _COMMeta(type):
     class _COMThreadSafe(_COMThreadUnsafe):
       def __init__(self, obj=None):
         super().__init__(obj)
-        self._lock = threading.RLock()
+        object.__setattr__(self, '_lock', threading.RLock())
       def __enter__(self):
         self._lock.acquire()
-        return super().__enter__()
+        return self._obj
       def __exit__(self, et, ev, tb):
-        super().__exit__(et, ev, tb)
         self._lock.release()
     @classmethod
     def __prepare__(mcls, name, bases, interfaces=None):
@@ -238,6 +236,8 @@ class _COM_IUnknown(metaclass=_COMMeta):
       if not self:
         return 0
       self.refs = max(self.refs - 1, 0)
+      if not self.refs:
+        cls._refs.pop(ctypes.addressof(self), None)
       return self.refs
 
 class IUnknown(metaclass=_IMeta):
@@ -543,6 +543,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
         return 0
       self.refs = max(self.refs - 1, 0)
       if not self.refs:
+        cls._refs.pop(ctypes.addressof(self), None)
         self.container.Release()
       return self.refs
 
