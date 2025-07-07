@@ -131,7 +131,7 @@ class _COMMeta(type):
       def __setattr__(self, name, value):
         return setattr(self._obj, name, value) if hasattr(self._obj, name) else object.__setattr__(self, name, value)
       def __repr__(self):
-        return '<%s.%s(%s) object at %#018X>' % (self.__class__.__module__, self.__class__.__qualname__, self._obj, id(self))
+        return '<%s.%s(%s) object at 0x%016X>' % (self.__class__.__module__, self.__class__.__qualname__, self._obj, id(self))
     class _COMThreadSafe(_COMThreadUnsafe):
       def __init__(self, obj=None):
         super().__init__(obj)
@@ -315,7 +315,7 @@ class IUnknown(metaclass=_IMeta):
   def __exit__(self, et, ev, tb):
     self.__del__()
   def __repr__(self):
-    return '<%s.%s(%s) object at %#018X>' % (self.__class__.__module__, self.__class__.__qualname__, ('%#018X' % self.pI.value if self else 'None'), id(self))
+    return '<%s.%s(%s) object at 0x%016X>' % (self.__class__.__module__, self.__class__.__qualname__, ('0x%016X' % self.pI.value if self else 'None'), id(self))
 
 class _PCOMUtil:
   _mul_cache = {}
@@ -7557,48 +7557,59 @@ def Uninitialize():
     del _IUtil._local.initialized
     return True
   return None
+
 def DllGetClassObject(component):
   if isinstance(component, _IMeta):
     component = getattr((icls := component), 'CLSID', globals().get('_COM_' + icls.__name__))
   return ISetLastError(0) or IClassFactory(component) if isinstance(component, (_COMMeta, _COMMeta._COMImplMeta)) else ISetLastError(0x80040111) and None
 def DllCanUnloadNow():
   return ISetLastError(0) or not _COMMeta._refs
+
 class InterfaceSharing:
-  def __new__(cls, ole=False):
-    self = object.__new__(cls)
-    return self
-  @classmethod
-  def Marshal(cls, iinstance):
-    return IStream(cls.CoMarshalInterThreadInterfaceInStream(iinstance.IID, iinstance), factory=iinstance) if iinstance else None
-  @classmethod
-  def Unmarshal(cls, istream):
-    return ((f := istream.factory).__class__)(cls.CoGetInterfaceAndReleaseStream(istream, f.__class__.IID), factory=f.factory) if istream else None
   def __init__(self, ole=False):
     self._ole = ole
-    self._requested = None
+    self._request = None
+    self._response = [threading.Event(), None, None]
     self._lock = threading.Lock()
     self._thread = None
+  @classmethod
+  def Marshal(cls, iinstance):
+    if (istream := IStream(cls.CoMarshalInterThreadInterfaceInStream(iinstance.IID, iinstance), factory=iinstance) if iinstance else None) is not None:
+      istream.AddRef(False)
+      istream._pI = iinstance.pI
+    return istream
+  @classmethod
+  def Unmarshal(cls, istream):
+    if istream:
+      if (iinstance := ((f := istream.factory).__class__)(cls.CoGetInterfaceAndReleaseStream(istream, f.__class__.IID), factory=f.factory)) is not None:
+        iinstance._pI = istream._pI
+      istream.Release()
+      return iinstance
+    else:
+      return None
+  @staticmethod
+  def Source(iinstance):
+    if (iinstance := iinstance.__class__(getattr(iinstance, '_pI', iinstance.pI), factory=iinstance.factory) if iinstance else None):
+      iinstance.AddRef(False)
+    return iinstance
   def _message_loop(self):
     Initialize(ole=self._ole)
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
+    Window.PeekMessage(lpMsg, None, 0x8000, 0x8000, 0)
+    (r := self._response)[0].set()
     while Window.GetMessage(lpMsg, None, 0, 0) > 0:
       if not msg.hWnd and msg.message == 0x8000:
-        if self._requested:
-          pr, interface_iinstance, args, kwargs = self._requested
-          self._requested = None
-          if isinstance(interface_iinstance, _IMeta):
-            iinstance = interface_iinstance(*args, **kwargs)
-          elif isinstance(interface_iinstance, IUnknown):
-            if (iinstance := interface_iinstance.__class__(interface_iinstance._pI, factory=interface_iinstance.factory) if interface_iinstance else None):
-              iinstance.AddRef(False)
-          else:
-            iinstance = None
-          pr[1] = istream = self.__class__.Marshal(iinstance)
+        if self._request:
+          interface_iinstance, args, kwargs = self._request
+          self._request = None
+          iinstance = interface_iinstance(*args, **kwargs) if callable(interface_iinstance) else (self.__class__.Source(interface_iinstance) if isinstance(interface_iinstance, IUnknown) and not (args or kwargs) else None)
+          interface_iinstance = args = kwargs = None
+          r[1] = self.__class__.Marshal(iinstance)
+          r[2] = IGetLastError()
           if iinstance:
-            if istream:
-              istream._pI = iinstance.pI
             iinstance.Release()
-          pr[0].set()
+          iinstance = None
+          r[0].set()
         continue
       Window.TranslateMessage(lpMsg)
       Window.DispatchMessage(lpMsg)
@@ -7607,8 +7618,10 @@ class InterfaceSharing:
     with self._lock:
       if self._thread:
         return False
-      self._thread = threading.Thread(target=self._message_loop)    
+      self._thread = threading.Thread(target=self._message_loop, daemon=True)
       self._thread.start()
+      self._response[0].wait()
+      self._response[0].clear()
     return True
   def Stop(self):
     with self._lock:
@@ -7622,12 +7635,16 @@ class InterfaceSharing:
     with self._lock:
       if not self._thread or (nid := self._thread.native_id) is None:
         return None
-      self._requested = ((pr := [threading.Event(), None]), interface_iinstance, args, kwargs)
+      self._request = (interface_iinstance, args, kwargs)
       self.__class__.PostThreadMessage(nid, 0x8000, 0, 0)
-      pr[0].wait()
-    if (iinstance := self.__class__.Unmarshal(pr[1])) is not None:
-      iinstance._pI = pr[1]._pI
+      (r := self._response)[0].wait()
+      r[0].clear()
+      ISetLastError(r[2])
+      iinstance = self.__class__.Unmarshal(r[1])
+      r[1] = None
+      r[2] = None
     return iinstance
+  __call__ = Get
   CoMarshalInterThreadInterfaceInStream = _WShUtil._wrap('CoMarshalInterThreadInterfaceInStream', (PUUID, 1), (wintypes.LPVOID, 1), (wintypes.PLPVOID, 2), p=ole32)
   CoGetInterfaceAndReleaseStream = _WShUtil._wrap('CoGetInterfaceAndReleaseStream', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), p=ole32)
   PostThreadMessage = _WndUtil._wrap('PostThreadMessageW', wintypes.BOOLE, wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
