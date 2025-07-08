@@ -7574,13 +7574,16 @@ class InterfaceSharing:
     self._thread = None
   @classmethod
   def Marshal(cls, iinstance):
-    if (istream := IStream(cls.CoMarshalInterThreadInterfaceInStream(iinstance.IID, iinstance), factory=iinstance) if iinstance else None) is not None:
-      istream.AddRef(False)
-      istream._pI = iinstance.pI
-    return istream
+    if iinstance:
+      if (istream := IStream(cls.CoMarshalInterThreadInterfaceInStream(iinstance.IID, iinstance), factory=iinstance)) is not None:
+        istream._pI = iinstance.pI
+      return istream
+    else:
+      return None
   @classmethod
   def Unmarshal(cls, istream):
     if istream:
+      istream.AddRef(False)
       if (iinstance := ((f := istream.factory).__class__)(cls.CoGetInterfaceAndReleaseStream(istream, f.__class__.IID), factory=f.factory)) is not None:
         iinstance._pI = istream._pI
       istream.Release()
