@@ -171,7 +171,7 @@ class _COMMeta(type):
       if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
         ISetLastError(0x80004002)
         return None
-      cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if getattr(_IUtil._local, 'multithreaded', cls.__class__._is_mta()) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
+      cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if (mt if (mt := getattr(_IUtil._local, 'multithreaded', None)) is not None else cls.__class__._is_mta()) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
       self.pvtbls[:] = cls._pvtbls
       self.refs = 1
       self.__init__(**kwargs)
