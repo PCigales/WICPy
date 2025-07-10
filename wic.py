@@ -24,6 +24,7 @@ import threading
 import math
 from fractions import Fraction
 import datetime
+from hashlib import md5
 
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 user32 = ctypes.WinDLL('user32', use_errno=True, use_last_error=True)
@@ -117,6 +118,7 @@ class _COMMeta(type):
   class _COMImplMeta(ctypes.Structure.__class__):
     _psize = ctypes.sizeof(wintypes.LPVOID)
     _refs = {}
+    _clsids = {}
     class _COMThreadUnsafe:
       def __init__(self, obj=None):
         object.__setattr__(self, '_obj', obj)
@@ -153,13 +155,23 @@ class _COMMeta(type):
       if any(fs.setdefault(n, t) != t for interface in interfaces for n, t in interface._vars.items()):
         raise AttributeError('a conflict between variables has been detected among the \'_vars\' declarations of the interfaces tied to %s' % name)
       namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
-      return super().__new__(mcls, name, (ctypes.Structure,), namespace)
+      if (clsid := namespace.get('CLSID')):
+        namespace['CLSID'] = clsid = GUID(md5(name.encode(), usedforsecurity=False).digest() if clsid is True else clsid)
+      cls = super().__new__(mcls, name, (ctypes.Structure,), namespace)
+      if clsid:
+        mcls._clsids[clsid] = cls
+      return cls
+    @staticmethod
+    def _is_mta():
+      a_t = wintypes.INT()
+      a_q = wintypes.INT()
+      return None if ISetLastError(ole32.CoGetApartmentType(ctypes.byref(a_t), ctypes.byref(a_q))) else a_t.value == 1 or (a_t.value == 2 and a_q.value in (2, 4))
     @staticmethod
     def _new(cls, iid=0, isize=None, **kwargs):
       if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
         ISetLastError(0x80004002)
         return None
-      cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if getattr(_IUtil._local, 'multithreaded', False) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
+      cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if getattr(_IUtil._local, 'multithreaded', cls.__class__._is_mta()) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
       self.pvtbls[:] = cls._pvtbls
       self.refs = 1
       self.__init__(**kwargs)
@@ -182,7 +194,7 @@ class _COMMeta(type):
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       raise ValueError('an invalid or more than one base class has been provided in the declaration of %s' % name)
-    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_iids', '_pvtbls', '_fields_', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
+    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_iids', 'CLSID', '_pvtbls', '_fields_', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
       raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
@@ -239,6 +251,9 @@ class _COM_IUnknown(metaclass=_COMMeta):
       if not self.refs:
         cls._refs.pop(ctypes.addressof(self), None)
       return self.refs
+
+class _COM_IUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IUnknown,)):
+  CLSID = True
 
 class IUnknown(metaclass=_IMeta):
   IID = GUID('00000000-0000-0000-c000-000000000046')
@@ -6261,6 +6276,10 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
       pjclsid.contents[:] = self.jclsid
       return 0
 
+class _COM_IFileSystemBindData_impl(metaclass=_COMMeta, interfaces=(_COM_IFileSystemBindData,)):
+  CLSID = True
+_COM_IFileSystemBindData._impl = _COM_IFileSystemBindData_impl
+
 class IFileSystemBindData(IUnknown):
   IID = GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8)
   _protos['SetFindData'] = 3, (WSPFINDDATA,), ()
@@ -7558,12 +7577,14 @@ def Uninitialize():
     return True
   return None
 
-def DllGetClassObject(component):
-  if isinstance(component, _IMeta):
-    component = getattr((icls := component), 'CLSID', globals().get('_COM_' + icls.__name__))
-  return ISetLastError(0) or IClassFactory(component) if isinstance(component, (_COMMeta, _COMMeta._COMImplMeta)) else ISetLastError(0x80040111) and None
+def DllGetClassObject(rclsid, riid, ppv):
+  if (impl := _COMMeta._COMImplMeta._clsids.get(rclsid := GUID(UUID.from_address(rclsid)))) is None:
+    ISetLastError(0x80040154)
+  wintypes.LPVOID.from_address(ppv).value = impl and _COM_IClassFactory_impl(UUID.from_address(riid), impl=impl)
+  return ctypes.get_last_error()
 def DllCanUnloadNow():
-  return ISetLastError(0) or not _COMMeta._refs
+  ISetLastError(0)
+  return 1 if _COMMeta._refs else 0
 
 class InterfaceSharing:
   def __init__(self, ole=False):
