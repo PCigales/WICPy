@@ -168,7 +168,7 @@ class _COMMeta(type):
       return None if ISetLastError(ole32.CoGetApartmentType(ctypes.byref(a_t), ctypes.byref(a_q))) else a_t.value == 1 or (a_t.value == 2 and a_q.value in (2, 4))
     @staticmethod
     def _new(cls, iid=0, isize=None, **kwargs):
-      if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
+      if (((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None)):
         ISetLastError(0x80004002)
         return None
       cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if (mt if (mt := getattr(_IUtil._local, 'multithreaded', None)) is not None else cls.__class__._is_mta()) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
@@ -181,9 +181,11 @@ class _COMMeta(type):
       super().__init__(*args)
       if interfaces:
         cls._pvtbls = tuple(ctypes.addressof(interface._offsetted[i].vtbl) for i, interface in enumerate(interfaces))
+        cls._aggregatable = all((interface == _COM_IUnknown) if i == 0 else issubclass(interface, _COM_IUnknown_aggregatable) for i, interface in enumerate(interfaces))
   _psize = _COMImplMeta._psize
   _refs = _COMImplMeta._refs
   _none = _COMImplMeta._COMThreadUnsafe()
+  _iunknown_iid = GUID('00000000-0000-0000-c000-000000000046')
   @classmethod
   def __prepare__(mcls, name, bases, interfaces=None):
     if interfaces:
@@ -194,7 +196,7 @@ class _COMMeta(type):
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       raise ValueError('an invalid or more than one base class has been provided in the declaration of %s' % name)
-    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_iids', 'CLSID', '_pvtbls', '_fields_', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
+    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_iids', '_aggregatable', 'CLSID', '_pvtbls', '_fields_', '_destroy', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
       raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
@@ -232,8 +234,8 @@ class _COM_IUnknown(metaclass=_COMMeta):
       if (ind := self.__class__._iids.get(GUID(riid))) is None:
         pObj.contents.value = 0
         return 0x80004002
-      pObj.contents.value = ctypes.addressof(self) + ind * cls.__class__._psize
-      self.refs += 1
+      pObj.contents.value = pI = ctypes.addressof(self) + ind * cls.__class__._psize
+      PCOM.AddRef(wintypes.LPVOID(pI))
       return 0
   @classmethod
   def _AddRef(cls, pI):
@@ -250,6 +252,8 @@ class _COM_IUnknown(metaclass=_COMMeta):
       self.refs = max(self.refs - 1, 0)
       if not self.refs:
         cls._refs.pop(ctypes.addressof(self), None)
+        if (d := getattr(self, '_destroy', None)):
+          d()
       return self.refs
 
 class _COM_IUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IUnknown,)):
@@ -393,6 +397,71 @@ class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
     return IUnknown._protos['AddRef'](self) if self else 0
   def Release(self):
     return IUnknown._protos['Release'](self) if self else 0
+  def QueryInterface(self, riid):
+    return IUnknown._protos['QueryInterface'](self, (ctypes.cast(riid, wintypes.LPCSTR) if isinstance(riid, (wintypes.PBYTES16, wintypes.PGUID, PUUID, wintypes.LPCSTR, wintypes.LPVOID)) else GUID(riid))) if self else None
+  def __repr__(self):
+    return '<%s.%s(%s) object at 0x%016X>' % (self.__class__.__module__, self.__class__.__qualname__, ('0x%016X' % self.value if self else 'None'), id(self))
+
+class _COM_IUnknown_aggregatable(_COM_IUnknown):
+  _vars['pUnkOuter'] = PCOM
+  @classmethod
+  def _QueryInterface(cls, pI, riid, pObj):
+    with cls[pI] as self:
+      if not (self and self.pUnkOuter and pObj and riid):
+        return super()._QueryInterface(pI, riid, pObj)
+      pObj.contents.value = self.pUnkOuter.QueryInterface(riid)
+      return IGetLastError()
+  @classmethod
+  def _AddRef(cls, pI):
+    with cls[pI] as self:
+      return self.pUnkOuter.AddRef() if self and self.pUnkOuter else super()._AddRef(pI)
+  @classmethod
+  def _Release(cls, pI):
+    with cls[pI] as self:
+      return self.pUnkOuter.Release() if self and self.pUnkOuter else super()._Release(pI)
+
+class _COM_IUnknown_aggregator(_COM_IUnknown):
+  _aiids = {}
+  _vars['pUnkInners'] = wintypes.LPVOID * 0
+  @classmethod
+  def _QueryInterface(cls, pI, riid, pObj):
+    with cls[pI] as self:
+      if (r := super()._QueryInterface(pI, riid, pObj)) != 0x80004002 or GUID(riid) == _COMMeta._iunknown_iid:
+        return r
+      if (ind := cls._aiids.get(GUID(riid))) is None or ind >= len(self.pUnkInners) or not (pUnkInner := self.pUnkInners[ind]):
+        pObj.contents.value = 0
+        return 0x80004002
+      pObj.contents.value = PCOM.QueryInterface(wintypes.LPVOID(pUnkInner), riid)
+      return IGetLastError()
+  @classmethod
+  def _Release(cls, pI):
+    with cls[pI] as self:
+      if not self:
+        return 0
+      if super()._Release(pI) == 0:
+        for pUnkInner in self.pUnkInners:
+          PCOM.Release(wintypes.LPVOID(pUnkInner))
+      return self.refs
+  @staticmethod
+  def set_inner(outer, index, impl, **kwargs):
+    with _COM_IUnknown[pI := ctypes.addressof(outer) if hasattr(outer, 'pvtbls') else getattr(outer, 'value', outer)] as outer:
+      if not outer or index < 0 or index >= len(outer.pUnkInners):
+        return False
+      PCOM.Release(wintypes.LPVOID(outer.pUnkInners[index]))
+      outer.pUnkInners[index] = None
+      if kwargs:
+        if not isinstance(impl, _COMMeta._COMImplMeta) or not impl._aggregatable:
+          return False
+        outer.pUnkInners[index] = pUnkInner = impl(_COMMeta._iunknown_iid, **kwargs)
+        with _COM_IUnknown[pUnkInner] as inner:
+          if inner:
+            inner.pUnkOuter = pI
+      else:
+        if (f := IClassFactory(impl)) is None:
+          return False
+        outer.pUnkInners[index] = pUnkInner = IClassFactory._protos['CreateInstance'](f.pI, pI, _COMMeta._iunknown_iid)
+        f.Release()
+      return bool(pUnkInner)
 
 class _COM_IClassFactory(_COM_IUnknown):
   _iids.add(GUID('00000001-0000-0000-c000-000000000046'))
@@ -407,11 +476,20 @@ class _COM_IClassFactory(_COM_IUnknown):
       if not self or not riid:
         pObj.contents.value = 0
         return 0x80004003
-      if pUnkOuter:
+      if pUnkOuter and GUID(riid) != _COMMeta._iunknown_iid:
         pObj.contents.value = 0
-        return 0x80040110
-      pObj.contents.value = self.constr(riid) if self.constr else None
-      return 0 if pObj.contents else 0x80004002
+        return 0x80004002
+      pObj.contents.value = pI = self.constr(riid) if self.constr else None
+      if not pI:
+        return 0x80004002
+      if pUnkOuter:
+        with _COM_IUnknown[pI] as inner:
+          if not inner or not inner.__class__._aggregatable:
+            PCOM(pI).Release()
+            pObj.contents.value = 0
+            return 0x80040110
+          inner.pUnkOuter = pUnkOuter
+      return 0
   @classmethod
   def _LockServer(cls, pI, fLock):
     return 0x80004001 if cls[pI] else 0x80004003
@@ -420,7 +498,7 @@ class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory
   def __new__(cls, iid, *, _bnew=__new__, impl=0):
     return _bnew(cls, iid, constr=impl)
   def __init__(self, *, constr):
-    super().__init__(constr=_COM_IClassFactory._vars['constr'](constr))
+    super(self.__class__, self).__init__(constr=_COM_IClassFactory._vars['constr'](constr))
 
 class IClassFactory(IUnknown):
   IID = GUID('00000001-0000-0000-c000-000000000046')
@@ -460,9 +538,7 @@ class IClassFactory(IUnknown):
       self._lightweight = True
     return self
   def CreateInstance(self, icls):
-    if self.pI is None:
-      return None
-    if (i := icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), self)) is None:
+    if self.pI is None or (i := icls(self.__class__._protos['CreateInstance'](self.pI, None, icls.IID), self)) is None:
       return None
     if getattr(self, '_lightweight', False):
       i._lightweight = True
@@ -549,25 +625,17 @@ class _COM_IEnumUnknown(_COM_IUnknown):
         if ppenum:
           ppenum.contents.value = None
         return 0x80004003
-      ppenum.contents.value = self.__class__(items=self.items, index=self.index, container=self.container)
+      ppenum.contents.value = self.__class__(GUID('00000100-0000-0000-c000-000000000046'), items=self.items, index=self.index, container=self.container)
       return 0
-  @classmethod
-  def _Release(cls, pI):
-    with cls[pI] as self:
-      if not self:
-        return 0
-      self.refs = max(self.refs - 1, 0)
-      if not self.refs:
-        cls._refs.pop(ctypes.addressof(self), None)
-        self.container.Release()
-      return self.refs
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
   def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
     return _bnew(cls, iid, cls._items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
   def __init__(self, *, items, index, container):
-    super().__init__(count=len(items), index=index, container=PCOM(container).value, items=items)
+    super(self.__class__, self).__init__(count=len(items), index=index, container=PCOM(container).value, items=items)
     self.container.AddRef()
+  def _destroy(self):
+    self.container.Release()
   @property
   def items(self):
     return (wintypes.LPVOID * self.count).from_address(ctypes.addressof(self._items))
@@ -615,6 +683,47 @@ class IEnumUnknown(IUnknown):
     if not (n := self.Next(1)):
       raise StopIteration
     return n[0]
+
+class _COM_IEnumUnknown_agg(_COM_IUnknown_aggregatable):
+  locals().update({n: object.__getattribute__(_COM_IEnumUnknown, n) for n in ('_iids', '_vtbl', '_Next', '_Skip', '_Reset', '_Clone')})
+  _vars.update(_COM_IEnumUnknown._vars)
+
+class _COM_IEnumUnknown_agg_impl(metaclass=_COMMeta, interfaces=(_COM_IUnknown, _COM_IEnumUnknown_agg)):
+  locals().update({n: object.__getattribute__(_COM_IEnumUnknown_impl, n) for n in ('__new__', '__init__', '_destroy', 'items')})
+
+class _COM_IEnumUnknownFactory(_COM_IUnknown_aggregator):
+  _iids = _COM_IClassFactory._iids
+  _aiids = {GUID('00000100-0000-0000-c000-000000000046'): 0}
+  _vars['pUnkInners'] = wintypes.LPVOID * 1
+  _vtbl = _COM_IClassFactory._vtbl
+  @classmethod
+  def _CreateInstance(cls, pI, pUnkOuter, riid, pObj):
+    if not pObj:
+      return 0x80004003
+    with cls[pI] as self:
+      if not self or not riid:
+        pObj.contents.value = 0
+        return 0x80004003
+      with _COM_IEnumUnknown[self.pUnkInners[0]] as inner:
+        if not inner:
+          pObj.contents.value = 0
+          return 0x80004003
+        if pUnkOuter:
+          pObj.contents.value = 0
+          return 0x80040110
+        pObj.contents.value = _COM_IEnumUnknown_impl(GUID('00000100-0000-0000-c000-000000000046'), items=(wintypes.LPVOID * self.count)(*(PCOM.QueryInterface(wintypes.LPVOID(item), riid) for item in inner.items)), index=inner.index)
+      return 0
+  _LockServer = object.__getattribute__(_COM_IClassFactory, '_LockServer')
+
+class _COM_IEnumUnknownFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknownFactory,)):
+  def __new__(cls, iid=0, *, _bnew=__new__, items=(), container=None):
+    return _bnew(cls, iid, items=items, container=container)
+  def __init__(self, *, items, container):
+    super(self.__class__, self).__init__(count=len(items))
+    if items or container:
+      _COM_IEnumUnknownFactory.set_inner(self, 0, _COM_IEnumUnknown_agg_impl, items=items, container=container)
+    else:
+      _COM_IEnumUnknownFactory.set_inner(self, 0, _COM_IEnumUnknown_agg_impl)
 
 class PBUFFER(wintypes.LPVOID):
   @staticmethod
@@ -6276,7 +6385,7 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
       pjclsid.contents[:] = self.jclsid
       return 0
 
-class _COM_IFileSystemBindData_impl(metaclass=_COMMeta, interfaces=(_COM_IFileSystemBindData,)):
+class _COM_IFileSystemBindData_impl(metaclass=_COMMeta, interfaces=(_COM_IUnknown, _COM_IFileSystemBindData,)):
   CLSID = True
 _COM_IFileSystemBindData._impl = _COM_IFileSystemBindData_impl
 
