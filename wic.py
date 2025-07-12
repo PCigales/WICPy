@@ -168,7 +168,7 @@ class _COMMeta(type):
       return None if ISetLastError(ole32.CoGetApartmentType(ctypes.byref(a_t), ctypes.byref(a_q))) else a_t.value == 1 or (a_t.value == 2 and a_q.value in (2, 4))
     @staticmethod
     def _new(cls, iid=0, isize=None, **kwargs):
-      if (((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None)):
+      if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
         ISetLastError(0x80004002)
         return None
       cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if (mt if (mt := getattr(_IUtil._local, 'multithreaded', None)) is not None else cls.__class__._is_mta()) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
@@ -6385,7 +6385,7 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
       pjclsid.contents[:] = self.jclsid
       return 0
 
-class _COM_IFileSystemBindData_impl(metaclass=_COMMeta, interfaces=(_COM_IUnknown, _COM_IFileSystemBindData,)):
+class _COM_IFileSystemBindData_impl(metaclass=_COMMeta, interfaces=(_COM_IFileSystemBindData,)):
   CLSID = True
 _COM_IFileSystemBindData._impl = _COM_IFileSystemBindData_impl
 
