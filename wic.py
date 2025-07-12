@@ -181,7 +181,7 @@ class _COMMeta(type):
       super().__init__(*args)
       if interfaces:
         cls._pvtbls = tuple(ctypes.addressof(interface._offsetted[i].vtbl) for i, interface in enumerate(interfaces))
-        cls._aggregatable = all((interface == _COM_IUnknown) if i == 0 else issubclass(interface, _COM_IUnknown_aggregatable) for i, interface in enumerate(interfaces))
+        cls._aggregatable = all((interface == _COM_IUnknown) if i == 0 else issubclass(interface, _COM_IUnknown_aggregatable) for i, interface in enumerate(interfaces)) and hasattr(cls, 'pUnkOuter')
   _psize = _COMImplMeta._psize
   _refs = _COMImplMeta._refs
   _none = _COMImplMeta._COMThreadUnsafe()
