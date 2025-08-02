@@ -857,7 +857,7 @@ class _COM_IRpcStubBuffer(_COM_IUnknown):
       if not self or not riid:
         ISetLastError(0x80004003)
         return None
-      if not (ind := self.__class__._siids[0].get(GUID(riid))):
+      if (ind := self.__class__._siids[0].get(GUID(riid))) is None:
         ISetLastError(0x80004002)
         return None
       if self.pUnkServer and not self.pIntServers[ind]:
