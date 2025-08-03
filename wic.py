@@ -853,7 +853,6 @@ class _COM_IRpcStubBuffer(_COM_IUnknown):
     return (iargs, oargs)
   @classmethod
   def _IsIIDSupported(cls, pI, riid):
-    print('i')
     with cls[pI] as self:
       if not self or not riid:
         ISetLastError(0x80004003)
