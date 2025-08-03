@@ -853,6 +853,7 @@ class _COM_IRpcStubBuffer(_COM_IUnknown):
     return (iargs, oargs)
   @classmethod
   def _IsIIDSupported(cls, pI, riid):
+    print('i')
     with cls[pI] as self:
       if not self or not riid:
         ISetLastError(0x80004003)
@@ -1129,6 +1130,64 @@ class IEnumInterface(IEnumUnknown):
   def Contains(self, obj):
     return None if ISetLastError(c := self.__class__._protos['Contains'](self.pI, obj)) else c == 0
 
+class _COM_IEnumInterfaceFactory(_COM_IUnknown_aggregator):
+  _iids.add(_iid := GUID.from_name('_COM_IEnumInterfaceFactory'))
+  _aiids = {_COM_IEnumInterface._iid: 0}
+  _vars['pUnkInners'] = wintypes.LPVOID * 1
+  _vtbl['CreateInstance'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PBYTES16, wintypes.PLPVOID)
+  _vtbl['LockServer'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.BOOL)
+  @classmethod
+  def _CreateInstance(cls, pI, riid, ppObj):
+    if not ppObj:
+      return 0x80004003
+    with cls[pI] as self:
+      if not self or not riid:
+        ppObj.contents.value = 0
+        return 0x80004003
+      with _COM_IUnknown[self.pUnkInners[0]] as inner:
+        if not inner:
+          ppObj.contents.value = 0
+          return 0x80004003
+        ppObj.contents.value = _COM_IEnumInterface_impl(_COM_IEnumInterface._iid, iiid=riid.contents, items=(wintypes.LPVOID * inner.count)(*(PCOM.QueryInterface(wintypes.LPVOID(item), riid) for item in inner.items)), index=inner.index, container=inner.container)
+      return 0
+  @classmethod
+  def _LockServer(cls, pI, fLock):
+    return 0x80004001 if cls[pI] else 0x80004003
+
+class _COM_IEnumInterfaceFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumInterfaceFactory,)):
+  def __new__(cls, iid=0, *, _bnew=__new__, iiid=_COMMeta._iid_iunknown, items=(), container=None):
+    return _bnew(cls, iid, iiid=iiid, items=items, container=container)
+  def __init__(self, *, iiid, items, container):
+    super(self.__class__, self).__init__()
+    _COM_IEnumInterfaceFactory.set_inner(self, 0, _COM_IEnumInterface_impl, iiid=iiid, items=items, container=container)
+
+class IEnumInterfaceFactory(IUnknown):
+  IID = _COM_IEnumInterfaceFactory._iid
+  _protos['CreateInstance'] = 3, (wintypes.LPCSTR,), (wintypes.PLPVOID,)
+  def __new__(cls, clsid_component_items=False, factory=None, icls=IUnknown):
+    if isinstance(clsid_component_items, (tuple, list, ctypes.Array)):
+      if not (pI := wintypes.LPVOID(_COM_IEnumInterfaceFactory_impl(cls.IID, iiid=icls.IID, items=clsid_component_items, container=factory))):
+        return None
+      self = object.__new__(cls)
+      self.pI = pI
+      self.refs = 1
+      self.factory = factory
+      self._lightweight = True
+    elif (self := super().__new__(cls, clsid_component_items, factory)) is None:
+      return None
+    return self
+  def CreateInstance(self, icls):
+    if (i := IEnumInterface(self.__class__._protos['CreateInstance'](self.pI, icls.IID), self.factory)) is None:
+      return None
+    i.IClass = icls
+    if getattr(self, '_lightweight', False):
+      i._lightweight = True
+    return i
+  def QueryInterface(self, icls, factory=None):
+    if (i := super().QueryInterface(icls, factory)) is not None:
+      i.IClass = icls
+    return i
+
 class _COM_IEnumInterface_Proxy(_COM_IRpcProxy):
   _iids.update(_COM_IEnumInterface._iids)
   _vtbl.update(_COM_IEnumInterface._vtbl)
@@ -1225,63 +1284,6 @@ class _COM_IEnumInterface_Stub(_COM_IRpcStubBuffer):
       iargs, oargs = cls._gen_args(self, channel, message, (), ())
       return oargs if iargs is None else cls._fin_message(message, oargs, 0x80004001)
 
-class _PS_IEnumInterface_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IEnumInterface_Proxy, _COM_IEnumInterface_Stub),)):
-  CLSID = True
-
-class _COM_IEnumInterfaceFactory(_COM_IUnknown_aggregator):
-  _iids.add(_iid := GUID.from_name('_COM_IEnumInterfaceFactory'))
-  _aiids = {_COM_IEnumInterface._iid: 0}
-  _vars['pUnkInners'] = wintypes.LPVOID * 1
-  _vtbl['CreateInstance'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PBYTES16, wintypes.PLPVOID)
-  _vtbl['LockServer'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.BOOL)
-  @classmethod
-  def _CreateInstance(cls, pI, riid, ppObj):
-    if not ppObj:
-      return 0x80004003
-    with cls[pI] as self:
-      if not self or not riid:
-        ppObj.contents.value = 0
-        return 0x80004003
-      with _COM_IUnknown[self.pUnkInners[0]] as inner:
-        if not inner:
-          ppObj.contents.value = 0
-          return 0x80004003
-        ppObj.contents.value = _COM_IEnumInterface_impl(_COM_IEnumInterface._iid, iiid=riid.contents, items=(wintypes.LPVOID * inner.count)(*(PCOM.QueryInterface(wintypes.LPVOID(item), riid) for item in inner.items)), index=inner.index, container=inner.container)
-      return 0
-  @classmethod
-  def _LockServer(cls, pI, fLock):
-    return 0x80004001 if cls[pI] else 0x80004003
-
-class _COM_IEnumInterfaceFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumInterfaceFactory,)):
-  def __new__(cls, iid=0, *, _bnew=__new__, iiid=_COMMeta._iid_iunknown, items=(), container=None):
-    return _bnew(cls, iid, iiid=iiid, items=items, container=container)
-  def __init__(self, *, iiid, items, container):
-    super(self.__class__, self).__init__()
-    _COM_IEnumInterfaceFactory.set_inner(self, 0, _COM_IEnumInterface_impl, iiid=iiid, items=items, container=container)
-
-class IEnumInterfaceFactory(IUnknown):
-  IID = _COM_IEnumInterfaceFactory._iid
-  _protos['CreateInstance'] = 3, (wintypes.LPCSTR,), (wintypes.PLPVOID,)
-  def __new__(cls, clsid_component_items=False, factory=None, icls=IUnknown):
-    if isinstance(clsid_component_items, (tuple, list, ctypes.Array)):
-      if not (pI := wintypes.LPVOID(_COM_IEnumInterfaceFactory_impl(cls.IID, iiid=icls.IID, items=clsid_component_items, container=factory))):
-        return None
-      self = object.__new__(cls)
-      self.pI = pI
-      self.refs = 1
-      self.factory = factory
-      self._lightweight = True
-    elif (self := super().__new__(cls, clsid_component_items, factory)) is None:
-      return None
-    return self
-  def CreateInstance(self, icls):
-    if (i := IEnumInterface(self.__class__._protos['CreateInstance'](self.pI, icls.IID), self.factory)) is None:
-      return None
-    i.IClass = icls
-    if getattr(self, '_lightweight', False):
-      i._lightweight = True
-    return i
-
 class _COM_IEnumInterfaceFactory_Proxy(_COM_IRpcProxy):
   _iids.update(_COM_IEnumInterfaceFactory._iids)
   _vtbl.update(_COM_IEnumInterfaceFactory._vtbl)
@@ -1314,7 +1316,7 @@ class _COM_IEnumInterfaceFactory_Stub(_COM_IRpcStubBuffer):
       iargs, oargs = cls._gen_args(self, channel, message, (), ())
       return oargs if iargs is None else cls._fin_message(message, oargs, 0x80004001)
 
-class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IEnumInterfaceFactory_Proxy, _COM_IEnumInterfaceFactory_Stub),)):
+class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IEnumInterface_Proxy, _COM_IEnumInterface_Stub), (_COM_IEnumInterfaceFactory_Proxy, _COM_IEnumInterfaceFactory_Stub))):
   CLSID = True
 
 class PBUFFER(wintypes.LPVOID):
