@@ -8,6 +8,7 @@ vars(ctypes).setdefault('_Pointer', ctypes.POINTER(ctypes.c_byte).__mro__[1])
 vars(ctypes).setdefault('_CData', ctypes.c_byte.__mro__[-2])
 wintypes.PLPVOID = ctypes.POINTER(wintypes.LPVOID)
 wintypes.PDOUBLE = ctypes.POINTER(wintypes.DOUBLE)
+wintypes.PLPOLESTR = ctypes.POINTER(wintypes.LPOLESTR)
 wintypes.BOOLE = type('BOOLE', (wintypes.BOOL,), {'value': property(lambda s: bool(wintypes.BOOL.value.__get__(s)), wintypes.BOOL.value.__set__), '__ctypes_from_outparam__': lambda s: s.value})
 wintypes.PBOOLE = ctypes.POINTER(wintypes.BOOLE)
 wintypes.SIZE_T = ctypes.c_size_t
@@ -923,7 +924,7 @@ class _PSImplMeta(type):
 
 class IEnumString(IUnknown):
   IID = GUID('00000101-0000-0000-c000-000000000046')
-  _protos['Next'] = 3, (wintypes.ULONG, ctypes.POINTER(wintypes.LPOLESTR), wintypes.PULONG), ()
+  _protos['Next'] = 3, (wintypes.ULONG, wintypes.PLPOLESTR, wintypes.PULONG), ()
   _protos['Skip'] = 4, (wintypes.ULONG,), ()
   _protos['Reset'] = 5, (), ()
   _protos['Clone'] = 6, (), (wintypes.PLPVOID,)
@@ -1856,6 +1857,8 @@ class _BCode:
     return '<%d: %s>' % (c, self.__class__.code_name(c))
   def __repr__(self):
     return str(self)
+  def __hash__(self):
+    return int.__hash__(self.code)
 
 class _BCodeOr(_BCode):
   @classmethod
@@ -3012,7 +3015,7 @@ class IPropertyBag2(IUnknown):
     values = (VARIANT * n)(needsclear=True)
     results = (wintypes.ULONG * n)()
     for pb, prop in zip(propbags, property_infos.items()):
-      if not (pb.set(prop[0], *prop[1], self.__class__._ptype) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1], self.__class__._ptype)):
+      if not (pb.set(prop[0], *prop[1], ptype=self.__class__._ptype) if isinstance(prop[1], (tuple, list)) else pb.set(prop[0], prop[1], ptype=self.__class__._ptype)):
         ISetLastError(0x80070057)
         return None
     if self.__class__._protos['Read'](self.pI, n, propbags, None, values, results) is None:
@@ -3023,7 +3026,7 @@ class IPropertyBag2(IUnknown):
     propbags = (PROPBAG2 * n)()
     values = (VARIANT * n)()
     for pb, val, prop in zip(propbags, values, properties.items()):
-      if not (pb.set(prop[0], *prop[1][0], self.__class__._ptype) if isinstance(prop[1][0], (tuple, list)) else pb.set(prop[0], prop[1][0]), self.__class__._ptype) or not val.set(pb.vt, prop[1][1]):
+      if not (pb.set(prop[0], *prop[1][0], ptype=self.__class__._ptype) if isinstance(prop[1][0], (tuple, list)) else pb.set(prop[0], prop[1][0], ptype=self.__class__._ptype)) or not val.set(pb.vt, prop[1][1]):
         ISetLastError(0x80070057)
         return None
     if self.__class__._protos['Write'](self.pI, n, propbags, values) is None:
@@ -6389,6 +6392,58 @@ class ID2D1Factory(IUnknown):
   MultiplyMatrix4x4 = staticmethod(lambda a, b: a @ b)
 ID2D1Factory1 = ID2D1Factory
 
+
+DISPId = {'Value': 0, 'Unknown': -1, 'PropertyPut': -3, 'NewEnum': -4, 'Evaluate': -5, 'Destructor': -7, 'Constructor': -6, 'Collect': -8}
+DISPID = type('DISPID', (_BCode, wintypes.LONG), {'_tab_nc': {n.lower(): c for n, c in DISPId.items()}, '_tab_cn': {c: n for n, c in DISPId.items()}, '_def': 0})
+DISPPID = ctypes.POINTER(DISPID)
+
+DISPFlags = {'Method': 1, 'PropertyGet': 2, 'PropertyPut': 4, 'PropertyPutRef': 8}
+DISPFLAGS = type('DISPFLAGS', (_BCodeOr, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in DISPFlags.items()}, '_tab_cn': {c: n for n, c in DISPFlags.items()}, '_def': 1})
+
+class DISPPARAMS(ctypes.Structure):
+  _fields_ = [('rgvarg', wintypes.LPVOID), ('rgdispidNamedArgs', wintypes.LPVOID), ('cArgs', wintypes.UINT), ('cNamedArgs', wintypes.UINT)]
+  @classmethod
+  def from_params(cls, pargs, nargs=None):
+    args = (VARIANT * (cargs := len(pargs) + (cnargs := 0)))(*reversed(pargs)) if nargs is None else (VARIANT * (cargs := len(pargs) + (cnargs := len(nargs))))(*reversed(nargs.values()), *reversed(pargs))
+    names = None if nargs is None else (DISPID * cnargs)(*reversed(nargs))
+    return DISPPARAMS(ctypes.cast(ctypes.pointer(args), wintypes.LPVOID), (None if nargs is None else ctypes.cast(ctypes.pointer(names), wintypes.LPVOID)), cargs, cnargs)
+  def to_params(self):
+    args = (VARIANT * self.cArgs).from_address(self.rgvarg)
+    names = (DISPID * self.cNamedArgs).from_address(self.rgdispidNamedArgs) if self.cNamedArgs else ()
+    p = self.cNamedArgs - self.cArgs - 1
+    return tuple(args[:p:-1]), dict(zip(names[::-1], args[p::-1]))
+  @classmethod
+  def from_param(cls, obj):
+    return cls.from_params(*obj)
+  @property
+  def value(self):
+    return self.to_params()
+DISPPPARAMS = type('DISPPPARAMS', (_BPStruct, ctypes.POINTER(DISPPARAMS)),  {'_type_': DISPPARAMS})
+
+class IDispatch(IUnknown):
+  IID = GUID('00020400-0000-0000-C000-000000000046')
+  _protos['GetIDsOfNames'] = 5, (wintypes.PGUID, wintypes.PLPOLESTR, wintypes.UINT, wintypes.LCID, DISPPID), (), wintypes.ULONG
+  _protos['Invoke'] = 6, (DISPID, wintypes.PGUID, wintypes.LCID, DISPFLAGS, DISPPPARAMS, PVARIANT, wintypes.LPVOID, wintypes.LPVOID), ()
+  def GetIDsOfNames(self, member_name, param_names=None, lcid=0):
+    names = wintypes.LPOLESTR(member_name) if (count := 1 if param_names is None else 1 + len(param_names)) == 1 else (wintypes.LPOLESTR * count)(member_name, *param_names)
+    ids = (DISPID * count)()
+    _ids = (dispid.code if dispid.code >= 0 else dispid for dispid in ids)
+    return None if ISetLastError(self.__class__._protos['GetIDsOfNames'](self.pI, wintypes.GUID(), names, count, lcid, ids)) not in (0, -2147352570) else (next(_ids) if param_names is None else (next(_ids), tuple(_ids)))
+  def Invoke(self, member, context_flags=1, pargs=(), nargs=None, lcid=0):
+    if isinstance(member, str):
+      if nargs is None:
+        if (member := (self.GetIDsOfNames(member, nargs, lcid))) == -1:
+          ISetLastError(0x80020006)
+          return None
+      else:
+        member, names = self.GetIDsOfNames(member, nargs, lcid)
+        if member == -1 or -1 in names:
+          ISetLastError(0x80020006)
+          return None
+        nargs = dict(zip(names, nargs.values()))
+    vr = VARIANT()
+    return None if (r := self.__class__._protos['Invoke'](self.pI, member, wintypes.GUID(), lcid, context_flags, (pargs, nargs), vr, None, None)) is None else vr.__ctypes_from_outparam__().value
+
 class _WMPMAttribute:
   def __set_name__(self, owner, name):
     self.attribute_name = owner.__class__._attributes[owner.ItemType][name]
@@ -6462,7 +6517,7 @@ class _IWMPMMeta(_IWMPPMeta):
     italias[_IWMPMMeta] = cls
     return cls
 
-class IWMPMedia(IUnknown, metaclass=_IWMPMMeta):
+class IWMPMedia(IDispatch, metaclass=_IWMPMMeta):
   IID = GUID(0xf118efc7, 0xf03a, 0x4fb4, 0x99, 0xc9, 0x1c, 0x02, 0xa5, 0xc1, 0x06, 0x5b)
   _protos['get_sourceURL'] = 8, (), (PBSTRING,)
   _protos['get_name'] = 9, (), (PBSTRING,)
@@ -6506,7 +6561,7 @@ IWMPMedia3 = IWMPMedia
 class IWMPPhoto(IWMPMedia):
   ItemType = 'photo'
 
-class IWMPPlaylist(IUnknown, metaclass=_IWMPPMeta):
+class IWMPPlaylist(IDispatch, metaclass=_IWMPPMeta):
   IID = GUID(0xd5f0f4f1, 0x130c, 0x11d3, 0xb1, 0x4e, 0x00, 0xc0, 0x4f, 0x79, 0xfa, 0xa6)
   _protos['get_count'] = 7, (), (wintypes.PLONG,)
   _protos['get_name'] = 8, (), (PBSTRING,)
@@ -6537,7 +6592,7 @@ class IWMPPlaylist(IUnknown, metaclass=_IWMPPMeta):
 class IWMPPPlaylist(IWMPPlaylist):
   ItemType = 'photo'
 
-class IWMPQuery(IUnknown):
+class IWMPQuery(IDispatch):
   IID = GUID(0xa00918f3, 0xa6b0, 0x4bfb, 0x91, 0x89, 0xfd, 0x83, 0x4c, 0x7b, 0xc5, 0xa5)
   _protos['addCondition'] = 7, (BSTRING, BSTRING, BSTRING), ()
   _protos['beginNextGroup'] = 8, (), ()
@@ -6546,7 +6601,7 @@ class IWMPQuery(IUnknown):
   def BeginNextGroup(self):
     return self.__class__._protos['beginNextGroup'](self.pI)
 
-class IWMPMediaCollection(IUnknown):
+class IWMPMediaCollection(IDispatch):
   IID = GUID(0x8ba957f5, 0xfd8c, 0x4791, 0xb8, 0x2d, 0xf8, 0x40, 0x40, 0x1e, 0xe4, 0x74)
   _protos['getAll'] = 8, (), (wintypes.PLPVOID,)
   _protos['getByName'] = 9, (BSTRING,), (wintypes.PLPVOID,)
@@ -6611,7 +6666,7 @@ class IWMPMediaCollection(IUnknown):
     return self.GetByFolder(folder_name, 'photo', sort_attribute, sort_ascending)
 IWMPMediaCollection2 = IWMPMediaCollection
 
-class IWMPCore(IUnknown):
+class IWMPCore(IDispatch):
   CLSID = 'WMPlayer.ocx'
   IID = GUID(0x7587C667, 0x628f, 0x499f, 0x88, 0xe7, 0x6a, 0x6f, 0x4e, 0x88, 0x84, 0x64)
   _protos['get_mediaCollection'] = 16, (), (wintypes.PLPVOID,)
