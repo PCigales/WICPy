@@ -6393,8 +6393,8 @@ class ID2D1Factory(IUnknown):
 ID2D1Factory1 = ID2D1Factory
 
 
-DISPId = {'Value': 0, 'Unknown': -1, 'PropertyPut': -3, 'NewEnum': -4, 'Evaluate': -5, 'Destructor': -7, 'Constructor': -6, 'Collect': -8}
-DISPID = type('DISPID', (_BCode, wintypes.LONG), {'_tab_nc': {n.lower(): c for n, c in DISPId.items()}, '_tab_cn': {c: n for n, c in DISPId.items()}, '_def': 0})
+DISPId = {'Value': 0, 'Unknown': -1, 'PropertyPut': -3, 'NewEnum': -4, 'Evaluate': -5, 'Constructor': -6, 'Destructor': -7, 'Collect': -8}
+DISPID = type('DISPID', (_BCode, wintypes.LONG), {'_tab_nc': {n.lower(): c for n, c in DISPId.items()}, '_tab_cn': {c: n for n, c in DISPId.items()}, '_def': -1})
 DISPPID = ctypes.POINTER(DISPID)
 
 DISPFlags = {'Method': 1, 'PropertyGet': 2, 'PropertyPut': 4, 'PropertyPutRef': 8}
@@ -6403,9 +6403,9 @@ DISPFLAGS = type('DISPFLAGS', (_BCodeOr, wintypes.WORD), {'_tab_nc': {n.lower():
 class DISPPARAMS(ctypes.Structure):
   _fields_ = [('rgvarg', wintypes.LPVOID), ('rgdispidNamedArgs', wintypes.LPVOID), ('cArgs', wintypes.UINT), ('cNamedArgs', wintypes.UINT)]
   @classmethod
-  def from_params(cls, pargs, nargs=None):
+  def from_params(cls, pargs=(), nargs=None):
     args = (VARIANT * (cargs := len(pargs) + (cnargs := 0)))(*reversed(pargs)) if nargs is None else (VARIANT * (cargs := len(pargs) + (cnargs := len(nargs))))(*reversed(nargs.values()), *reversed(pargs))
-    names = None if nargs is None else (DISPID * cnargs)(*reversed(nargs))
+    names = None if nargs is None else (DISPID * cnargs)(*map(DISPID, reversed(nargs)))
     return DISPPARAMS(ctypes.cast(ctypes.pointer(args), wintypes.LPVOID), (None if nargs is None else ctypes.cast(ctypes.pointer(names), wintypes.LPVOID)), cargs, cnargs)
   def to_params(self):
     args = (VARIANT * self.cArgs).from_address(self.rgvarg)
@@ -6431,16 +6431,24 @@ class IDispatch(IUnknown):
     return None if ISetLastError(self.__class__._protos['GetIDsOfNames'](self.pI, wintypes.GUID(), names, count, lcid, ids)) not in (0, -2147352570) else (next(_ids) if param_names is None else (next(_ids), tuple(_ids)))
   def Invoke(self, member, context_flags=1, pargs=(), nargs=None, lcid=0):
     if isinstance(member, str):
-      if nargs is None:
-        if (member := (self.GetIDsOfNames(member, nargs, lcid))) == -1:
-          ISetLastError(0x80020006)
-          return None
+      if member.startswith('[') and member.endswith(']'):
+        member = member[1:-1]
       else:
-        member, names = self.GetIDsOfNames(member, nargs, lcid)
-        if member == -1 or -1 in names:
-          ISetLastError(0x80020006)
-          return None
-        nargs = dict(zip(names, nargs.values()))
+        if nargs is None:
+          if (member := (self.GetIDsOfNames(member, nargs, lcid))) == -1:
+            ISetLastError(0x80020006)
+            return None
+        else:
+          member, names = self.GetIDsOfNames(member, nargs, lcid)
+          for i, narg in enumerate(nargs):
+            if narg.startswith('[') and narg.endswith(']'):
+              if isinstance(names, tuple):
+                names = list(names)
+              names[i] = narg[1:-1]
+          if member == -1 or -1 in names:
+            ISetLastError(0x80020006)
+            return None
+          nargs = dict(zip(names, nargs.values()))
     vr = VARIANT()
     return None if (r := self.__class__._protos['Invoke'](self.pI, member, wintypes.GUID(), lcid, context_flags, (pargs, nargs), vr, None, None)) is None else vr.__ctypes_from_outparam__().value
 
