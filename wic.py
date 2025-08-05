@@ -1509,7 +1509,7 @@ class _GUtil:
 class _GMeta(wintypes.GUID.__class__):
   def __init__(cls, *args, **kwargs):
     super().__init__(*args, **kwargs)
-    if hasattr(cls, 'value'):
+    if 'value' in vars(cls):
       del cls.value
   def __mul__(bcls, size):
     return _GUtil._mul_cache.get((bcls, size)) or _GUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.wintypes.GUID.__class__.__mul__(bcls, size),), {'__setitem__': _GUtil._asitem, 'value': property(_GUtil._avalue)}))
@@ -6393,8 +6393,21 @@ class ID2D1Factory(IUnknown):
 ID2D1Factory1 = ID2D1Factory
 
 
-DISPId = {'Value': 0, 'Unknown': -1, 'PropertyPut': -3, 'NewEnum': -4, 'Evaluate': -5, 'Constructor': -6, 'Destructor': -7, 'Collect': -8}
-DISPID = type('DISPID', (_BCode, wintypes.LONG), {'_tab_nc': {n.lower(): c for n, c in DISPId.items()}, '_tab_cn': {c: n for n, c in DISPId.items()}, '_def': -1})
+class _DISPIdUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, DISPID(value) if isinstance(key, int) else list(map(DISPID, value)))
+  @staticmethod
+  def _avalue(arr):
+    return None if (l := len(arr)) == 0 else (arr[0] if l == 1 else (next(iarr := iter(arr)), tuple(iarr)))
+
+class _DISPIdMeta(wintypes.LONG.__class__):
+  def __mul__(bcls, size):
+    return _DISPIdUtil._mul_cache.get((bcls, size)) or _DISPIdUtil._mul_cache.setdefault((bcls, size), type(('DISPID_Array_%d' % size), (wintypes.LONG.__class__.__mul__(bcls, size),), {'__setitem__': _DISPIdUtil._asitem, 'value': property(_DISPIdUtil._avalue)}))
+
+DISPId = {'Unknown': -1, 'PropertyPut': -3, 'NewEnum': -4, 'Evaluate': -5, 'Constructor': -6, 'Destructor': -7, 'Collect': -8}
+DISPID = _DISPIdMeta('DISPID', (_BCode, wintypes.LONG), {'_tab_nc': {**{n.lower(): c for n, c in DISPId.items()}, **{('@' + n.lower()): c for n, c in DISPId.items()}}, '_tab_cn': {c: n for n, c in DISPId.items()}, '_def': -1})
 DISPPID = ctypes.POINTER(DISPID)
 
 DISPFlags = {'Method': 1, 'PropertyGet': 2, 'PropertyPut': 4, 'PropertyPutRef': 8}
@@ -6405,7 +6418,7 @@ class DISPPARAMS(ctypes.Structure):
   @classmethod
   def from_params(cls, pargs=(), nargs=None):
     args = (VARIANT * (cargs := len(pargs) + (cnargs := 0)))(*reversed(pargs)) if nargs is None else (VARIANT * (cargs := len(pargs) + (cnargs := len(nargs))))(*reversed(nargs.values()), *reversed(pargs))
-    names = None if nargs is None else (DISPID * cnargs)(*map(DISPID, reversed(nargs)))
+    names = None if nargs is None else (DISPID * cnargs)(*reversed(nargs))
     return DISPPARAMS(ctypes.cast(ctypes.pointer(args), wintypes.LPVOID), (None if nargs is None else ctypes.cast(ctypes.pointer(names), wintypes.LPVOID)), cargs, cnargs)
   def to_params(self):
     args = (VARIANT * self.cArgs).from_address(self.rgvarg)
@@ -6425,32 +6438,51 @@ class IDispatch(IUnknown):
   _protos['GetIDsOfNames'] = 5, (wintypes.PGUID, wintypes.PLPOLESTR, wintypes.UINT, wintypes.LCID, DISPPID), (), wintypes.ULONG
   _protos['Invoke'] = 6, (DISPID, wintypes.PGUID, wintypes.LCID, DISPFLAGS, DISPPPARAMS, PVARIANT, wintypes.LPVOID, wintypes.LPVOID), ()
   def GetIDsOfNames(self, member_name, param_names=None, lcid=0):
-    names = wintypes.LPOLESTR(member_name) if (count := 1 if param_names is None else 1 + len(param_names)) == 1 else (wintypes.LPOLESTR * count)(member_name, *param_names)
-    ids = (DISPID * count)()
-    _ids = (dispid.code if dispid.code >= 0 else dispid for dispid in ids)
-    return None if ISetLastError(self.__class__._protos['GetIDsOfNames'](self.pI, wintypes.GUID(), names, count, lcid, ids)) not in (0, -2147352570) else (next(_ids) if param_names is None else (next(_ids), tuple(_ids)))
-  def Invoke(self, member, context_flags=1, pargs=(), nargs=None, lcid=0):
-    if isinstance(member, str):
-      if member.startswith('[') and member.endswith(']'):
-        member = member[1:-1]
+    mn = member_name.lower()
+    if (_cache := getattr(self, '_cache', None)) is None:
+      self._cache = _cache = {}
+    elif (cids := _cache.get(member_name.lower())) is not None:
+      if param_names:
+        if cids[1] is not None:
+          pids = tuple(map(cids[1].get, map(str.lower, param_names)))
+          if all(pid is not None for pid in pids):
+            return (cids[0], pids)
       else:
-        if nargs is None:
-          if (member := (self.GetIDsOfNames(member, nargs, lcid))) == -1:
-            ISetLastError(0x80020006)
-            return None
-        else:
-          member, names = self.GetIDsOfNames(member, nargs, lcid)
-          for i, narg in enumerate(nargs):
-            if narg.startswith('[') and narg.endswith(']'):
-              if isinstance(names, tuple):
-                names = list(names)
-              names[i] = narg[1:-1]
-          if member == -1 or -1 in names:
-            ISetLastError(0x80020006)
-            return None
-          nargs = dict(zip(names, nargs.values()))
-    vr = VARIANT()
-    return None if (r := self.__class__._protos['Invoke'](self.pI, member, wintypes.GUID(), lcid, context_flags, (pargs, nargs), vr, None, None)) is None else vr.__ctypes_from_outparam__().value
+        return cids[0]
+    names = wintypes.LPOLESTR(member_name) if (count := 1 if not param_names else 1 + len(param_names)) == 1 else (wintypes.LPOLESTR * count)(member_name, *param_names)
+    ids = (DISPID * count)()
+    if ISetLastError(self.__class__._protos['GetIDsOfNames'](self.pI, wintypes.GUID(), names, count, lcid, ids)) not in (0, -2147352570):
+      return None
+    else:
+      iids = iter(ids)
+      if next(iids).code >= 0:
+        if (cids := _cache.get(mn)) is None:
+          _cache[mn] = cids = [ids[0], None]
+        if count > 1:
+          if (pids := cids[1]) is None:
+            cids[1] = pids = {}
+          for pn, pid in zip(map(str.lower, param_names), iids):
+            if pid.code >= 0:
+              pids[pn] = pid
+      return ids.value
+  def Invoke(self, member=0, context_flags=1, pargs=(), nargs=None, lcid=0):
+    if isinstance(member, str) and not member.startswith('@'):
+      if nargs:
+        member, dids = self.GetIDsOfNames(member, list(map(str, nargs)), lcid)
+        nargs = dict(zip((dids[i] if isinstance(name, str) and not name.startswith('@') else name for i, name in enumerate(nargs)), nargs.values()))
+      else:
+        member = self.GetIDsOfNames(member, None, lcid)
+    return None if (r := self.__class__._protos['Invoke'](self.pI, member, wintypes.GUID(), lcid, context_flags, (pargs, nargs), (vr := None if context_flags >= 4 else VARIANT()), None, None)) is None else (True if vr is None else vr.__ctypes_from_outparam__().value)
+  def InvokeMethod(self, method, pargs=(), nargs=None, lcid=0):
+    return self.Invoke(method, 1, pargs, nargs, lcid)
+  def InvokeGet(self, property, pargs=(), nargs=None, lcid=0):
+    return self.Invoke(property, 2, pargs, nargs, lcid)
+  def InvokeSet(self, property, value, pargs=(), nargs=None, lcid=0):
+    return self.Invoke(property, 4, pargs, ({-3: value} if nargs is None else {-3: value, **nargs}), lcid)
+  InvokePut = InvokeSet
+  def InvokeSetRef(self, property, value, pargs=(), nargs=None, lcid=0):
+    return self.Invoke(property, 8, pargs, ({-3: value} if nargs is None else {-3: value, **nargs}), lcid)
+  InvokePutRef = InvokeSetRef
 
 class _WMPMAttribute:
   def __set_name__(self, owner, name):
@@ -8088,6 +8120,107 @@ class IFileOperation(IUnknown):
   @classmethod
   def Create(cls, confirmation=True, hwnd=None):
     return None if (f := cls()) is None or (not confirmation and f.SetOperationFlags(0x250) is None) or (hwnd is not None and f.SetOwnerWindow(hwnd) is None) else f
+
+class IWshShortcut(IDispatch):
+  IID = GUID(0xf935dc23, 0x1cf0, 0x11d0, 0xad, 0xb9, 0x00, 0xc0, 0x4f, 0xd5, 0x8a, 0x0b)
+  def Save(self):
+    self.InvokeMethod('Save')
+    return IGetLastError() == 0
+  @property
+  def FullName(self):
+    return self.InvokeGet('FullName')
+  @property
+  def Description(self):
+    return self.InvokeGet('Description')
+  @Description.setter
+  def Description(self, value):
+    return self.InvokeSet('Description', ('VT_BSTR', value))
+  @property
+  def Hotkey(self):
+    return self.InvokeGet('Hotkey')
+  @Hotkey.setter
+  def Hotkey(self, value):
+    return self.InvokeSet('Hotkey', ('VT_BSTR', value))
+  @property
+  def TargetPath(self):
+    return self.InvokeGet('TargetPath')
+  @TargetPath.setter
+  def TargetPath(self, value):
+    return self.InvokeSet('TargetPath', ('VT_BSTR', value))
+  @property
+  def Arguments(self):
+    return self.InvokeGet('Arguments')
+  @Arguments.setter
+  def Arguments(self, value):
+    return self.InvokeSet('Arguments', ('VT_BSTR', value))
+  @property
+  def WorkingDirectory(self):
+    return self.InvokeGet('WorkingDirectory')
+  @WorkingDirectory.setter
+  def WorkingDirectory(self, value):
+    return self.InvokeSet('WorkingDirectory', ('VT_BSTR', value))
+  @property
+  def WindowStyle(self):
+    return {1: 'default', 3: 'maximized', 7: 'minimized'}.get((r := self.InvokeGet('WindowStyle')), r)
+  @WindowStyle.setter
+  def WindowStyle(self, value):
+    return self.InvokeSet('WindowStyle', ('VT_INT', ({'default': 1, 'maximized': 3, 'minimized': 7}.get(value.lower(), 1) if isinstance(value, str) else value)))
+  @property
+  def IconLocation(self):
+    return self.InvokeGet('IconLocation')
+  @IconLocation.setter
+  def IconLocation(self, value):
+    return self.InvokeSet('IconLocation', ('VT_BSTR', value))
+
+class IWshCollection(IDispatch):
+  IID = GUID(0xf935dc27, 0x1cf0, 0x11d0, 0xad, 0xb9, 0x00, 0xc0, 0x4f, 0xd5, 0x8a, 0x0b)
+  def __len__(self):
+    return self.InvokeGet('length') or 0
+  def Item(self, index):
+    return self.InvokeMethod('Item', ((('VT_BSTR' if isinstance(index, str) else 'VT_UINT'), index),)) or None
+  def __getitem__(self, index):
+    return self.Item(index) if isinstance(index, str) or isinstance((k := range(len(self))[index]), int) else tuple(map(self.Item, k))
+
+class IWshEnvironment(IDispatch):
+  IID = GUID(0xf935dc29, 0x1cf0, 0x11d0, 0xad, 0xb9, 0x00, 0xc0, 0x4f, 0xd5, 0x8a, 0x0b)
+  def __len__(self):
+    return self.InvokeGet('length') or 0
+  def Item(self, name):
+    return self.InvokeGet('Item', (('VT_BSTR', name),)) or None
+  def __getitem__(self, name):
+    if isinstance(name, str):
+      return self.Item(name)
+    raise TypeError('range indices must be str')
+
+class IWshShell(IDispatch):
+  CLSID = 'Wscript.Shell'
+  IID = GUID(0x24be5a30, 0xedfe, 0x11d2, 0xb9, 0x33, 0x00, 0x10, 0x4b, 0x36, 0x5c, 0x9f)
+  def CreateShortcut(self, link_path):
+    return _IUtil.QueryInterface(self.InvokeMethod('CreateShortCut', (('VT_BSTR', link_path),)), IWshShortcut, self.factory)
+  def Popup(self, text, title=None, icon=None, buttons=None, secs=None):
+    nargs = {}
+    if title is not None:
+      nargs['Title'] = ('VT_BYREF | VT_VARIANT', ctypes.pointer(VARIANT('VT_BSTR', title)))
+    if icon is not None or buttons is not None:
+      if isinstance(icon, str):
+        icon = {'critical': 16, 'question': 32, 'exclamation': 48, 'information': 64}.get(icon.lower(), 64)
+      if isinstance(buttons, str):
+        buttons = {'ok': 0, 'ok,cancel': 1, 'abort,ignore,retry': 2, 'yes,no,cancel': 3, 'yes,no': 4, 'retry,cancel': 5}.get(buttons.lower().replace(' ', ''), 0)
+      nargs['Type'] = ('VT_BYREF | VT_VARIANT', ctypes.pointer(VARIANT('VT_UINT', (icon or 0) | (buttons or 0))))
+    if secs is not None:
+      nargs['SecondsToWait'] = ('VT_BYREF | VT_VARIANT', ctypes.pointer(VARIANT('VT_UINT', secs)))
+    return None if (ob := self.InvokeMethod('Popup', (('VT_BSTR', text),), nargs)) is None else (ob, {1: 'OK', 2: 'Cancel', 3: 'Abort', 4: 'Retry', 5: 'Ignore', 6: 'Yes', 7: 'No', -1: 'None'}.get(ob, ''))
+  @property
+  def SpecialFolders(self):
+    return _IUtil.QueryInterface(self.InvokeGet('SpecialFolders'), IWshCollection, self.factory)
+  def Environment(self, etype=None):
+    return _IUtil.QueryInterface(self.InvokeGet('Environment', nargs=(None if etype is None else {'type': ('VT_BSTR', etype)})), IWshEnvironment, self.factory)
+  def SendKeys(self, keys):
+    self.InvokeMethod('SendKeys', (('VT_BSTR', keys),))
+    return IGetLastError() == 0
+  def AppActivate(self, app):
+    return self.InvokeMethod('AppActivate', ((('VT_BSTR' if isinstance(app, str) else 'VT_UINT'), app),))
+IWshShell2 = IWshShell
 
 
 class _WndUtil:
