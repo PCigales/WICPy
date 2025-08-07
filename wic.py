@@ -2555,15 +2555,13 @@ class CA(ctypes.Structure):
   _fields_ = [('vc', wintypes.DWORD), ('vp', wintypes.LPVOID)]
   def content(self, etype):
     if isinstance(etype, (int, str)):
-      etype = _BVType.vtype_code(etype)
-      etype = None if etype is None else _BVARIANT.code_ctype.get(etype & 4095)
+      etype = None if (etype := PropVariantType.vtype_code(etype)) is None else PROPVARIANT.code_ctype.get(etype & 4095)
     return (etype * self.vc).from_buffer_copy(ctypes.cast(self.vp, ctypes.POINTER(etype * self.vc)).contents) if etype is not None and self.vp else None
   def __new__(cls, etype=None, data=None):
     self = ctypes.Structure.__new__(cls)
     if data is not None:
       if isinstance(etype, (int, str)):
-        etype = _BVType.vtype_code(etype)
-        etype = None if etype is None else _BVARIANT.code_ctype.get(etype & 4095)
+        etype = None if (etype := PropVariantType.vtype_code(etype)) is None else PROPVARIANT.code_ctype.get(etype & 4095)
       if etype is None:
         return None
       self.vc = len(data)
@@ -2614,7 +2612,7 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
       self._pdata = args[0]
     elif l == 2:
       vtype, data = args
-      if (vtype := _BVType.vtype_code(vtype)) is None:
+      if (vtype := VariantType.vtype_code(vtype)) is None:
         return None
       vtype &= 4095
       self.vtype = vtype
@@ -2648,7 +2646,7 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
         ctypes.memmove(pdata, ctypes.pointer(ctypes.c_byte.from_buffer(data)), self.size)
         if oleauto32.SafeArrayUnaccessData(psafearray):
           return None
-        if issubclass(_BVARIANT.code_ctype[vtype], (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, VARIANT)):
+        if issubclass(VARIANT.code_ctype[vtype], (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, VARIANT)):
           self._pdata = ctypes.pointer(data)
     else:
       return None
@@ -2657,9 +2655,12 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
     return self
   def __init__(self, *args, **kwargs):
     super().__init__()
+  @classmethod
+  def from_address(cls, address):
+    return cls(wintypes.LPVOID.from_address(address))
   @property
   def content(self):
-    if not self.psafearray:
+    if not self.psafearray or (atype := VARIANT.code_ctype.get(self.vtype)) is None:
       return None
     data = ctypes.create_string_buffer(self.size)
     if self.size > 0:
@@ -2668,7 +2669,6 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
         return None
       ctypes.memmove(data, pdata, self.size)
       oleauto32.SafeArrayUnaccessData(self.psafearray)
-    atype = _BVARIANT.code_ctype[self.vtype]
     for d in self.shape[::-1]:
       atype = atype * d
     return atype.from_buffer(data)
@@ -2688,8 +2688,20 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
       self._needsdestroy = True
       self._needsclear = True
     return self
-PPSAFEARRAY = ctypes.POINTER(PSAFEARRAY)
+class PPSAFEARRAY (ctypes.POINTER(PSAFEARRAY)):
+  _type_ = PSAFEARRAY
+  def __init__(self, psafearray=None):
+    super().__init__(psafearray)
+    self.psafearray = psafearray
+  @property
+  def contents(self):
+    return self.psafearray if hasattr(self, 'psafearray') else (PSAFEARRAY.from_address(ctypes.cast(self, wintypes.LPVOID).value) if self else None)
 PSAFEARRAY.duplicate = lambda s, _d=ctypes.WINFUNCTYPE(wintypes.ULONG, PSAFEARRAY, PPSAFEARRAY, use_last_error=True)(('SafeArrayCopy', oleauto32), ((1,), (2,))): _d(s)
+
+class BRECORD(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('pvRecord', wintypes.LPVOID), ('pRecInfo', PCOM)]
+  def to_tuple(self):
+    return (wintypes.LPVOID(self.pvRecord), self.pRecInfo)
 
 class _BVType(int):
   @classmethod
@@ -2761,20 +2773,23 @@ class _BVUtil:
   @staticmethod
   def _adup(arr):
     return arr.__class__.from_buffer_copy(arr)
+  @staticmethod
+  def _brec(var):
+    val = var._brecord.value
+    val[0]._bvariant = var
+    return val
 
 class _BVMeta(ctypes.Structure.__class__):
   def __mul__(bcls, size):
     return _BVUtil._mul_cache.get((bcls, size)) or _BVUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__init__': _BVUtil._ainit, '__del__': _BVUtil._adel}))
   def __new__(mcls, name, bases, namespace, **kwds):
     if (code_name := namespace.get('code_name')) is not None:
-      cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for na, co in {na: co for co, na in code_name.items() if co != 14}.items()), ('pad', wintypes.BYTES16)]})
+      cls_iu = ctypes.Union.__class__(name + '_IU', (ctypes.Union, ), {'_fields_': [*((na, _BVARIANT.code_ctype[co]) for co, na in code_name.items() if co != 14), ('pad', (wintypes.BYTE * (2 * ctypes.sizeof(wintypes.SIZE_T))))]})
       cls_i = ctypes.Structure.__class__(name + '_I', (ctypes.Structure, ), {'_anonymous_' : ('vn',), '_fields_': [('vt', ctypes.c_ushort), ('wReserved1', wintypes.WORD), ('wReserved2', wintypes.WORD), ('wReserved3', wintypes.WORD), ('vn', cls_iu)]})
       cls_ou = ctypes.Union.__class__(name + '_OU', (ctypes.Union, ), {'_anonymous_' : ('vn',), '_fields_': [('vn', cls_i), ('decVal', wintypes.BYTES16)]})
-      namespace.update({'_anonymous_': ('vn',), '_fields_': [('vn', cls_ou)], 'code_ctype': {co: ct for co, ct in _BVARIANT.code_ctype.items() if co in code_name or co == 12}, 'vtype_code': {vt: co for vt, co in _BVARIANT.vtype_code.items() if co in code_name or co in (0, 1, 12)}, 'code_vtype': {co: vt for co, vt in _BVARIANT.code_vtype.items() if co in code_name or co in (0, 1, 12)}})
+      namespace.update({'_anonymous_': ('vn',), '_fields_': [('vn', cls_ou)], 'code_ctype': {co: ct for co, ct in _BVARIANT.code_ctype.items() if co in code_name}, 'vtype_code': {vt: co for vt, co in _BVARIANT.vtype_code.items() if co in code_name or co in (0, 1, 12)}, 'code_vtype': {co: vt for co, vt in _BVARIANT.code_vtype.items() if co in code_name or co in (0, 1, 12)}})
     cls = ctypes.Structure.__class__.__new__(mcls, name, bases, namespace, **kwds)
-    if name == 'VARIANT':
-      _BVARIANT.code_ctype[12] = cls
-      cls.code_ctype[12] = cls
+    cls.code_ctype[12] = cls
     if (vtype := namespace.get('_vtype')) is not None:
       vtype._vcls = cls
     return cls
@@ -2814,11 +2829,14 @@ class _BVMeta(ctypes.Structure.__class__):
     if hasattr(cls, 'pVersionedStream'):
       cls._pVersionedStream = cls.pVersionedStream
       cls.pVersionedStream = property(lambda s: s._pVersionedStream.contents.value if s._pVersionedStream else None, lambda s, v: setattr(s, '_pVersionedStream', v if isinstance(v, (PVERSIONEDSTREAM)) else (ctypes.cast(v, PVERSIONEDSTREAM) if isinstance(v, wintypes.LPVOID) else PVERSIONEDSTREAM(VERSIONEDSTREAM.from_param(v)))), cls._pVersionedStream.__delete__)
+    if hasattr(cls, 'brecord'):
+      cls._brecord = cls.brecord
+      cls.brecord = property(lambda s: cls._brec(s), lambda s, v: setattr(s, '_brecord', BRECORD.from_param(v)), cls._brecord.__delete__)
 
 class _BVARIANT(metaclass=_BVMeta):
-  vtype_code = {'VT_EMPTY': 0, 'VT_NULL': 1, 'VT_I1': 16, 'VT_UI1': 17, 'VT_I2': 2, 'VT_UI2': 18, 'VT_I4': 3, 'VT_UI4': 19, 'VT_INT': 22, 'VT_UINT': 23, 'VT_I8': 20, 'VT_UI8': 21, 'VT_R4': 4, 'VT_R8': 5, 'VT_BOOL': 11, 'VT_ERROR': 10, 'VT_CY': 6, 'VT_DATE': 7, 'VT_FILETIME': 64, 'VT_CLSID': 72, 'VT_CF': 71, 'VT_BSTR': 8, 'VT_BLOB': 65, 'VT_BLOBOBJECT': 70, 'VT_LPSTR': 30, 'VT_LPWSTR': 31, 'VT_UNKNOWN': 13, 'VT_DISPATCH': 9, 'VT_STREAM': 66, 'VT_STREAMED_OBJECT': 68, 'VT_STORAGE': 67, 'VT_STORED_OBJECT': 69, 'VT_VERSIONED_STREAM': 73, 'VT_DECIMAL': 14, 'VT_VECTOR': 4096, 'VT_ARRAY': 8192, 'VT_BYREF': 16384, 'VT_VARIANT': 12}
+  vtype_code = {'VT_EMPTY': 0, 'VT_NULL': 1, 'VT_I1': 16, 'VT_UI1': 17, 'VT_I2': 2, 'VT_UI2': 18, 'VT_I4': 3, 'VT_UI4': 19, 'VT_INT': 22, 'VT_UINT': 23, 'VT_I8': 20, 'VT_UI8': 21, 'VT_R4': 4, 'VT_R8': 5, 'VT_BOOL': 11, 'VT_ERROR': 10, 'VT_CY': 6, 'VT_DATE': 7, 'VT_FILETIME': 64, 'VT_CLSID': 72, 'VT_CF': 71, 'VT_BSTR': 8, 'VT_BLOB': 65, 'VT_BLOBOBJECT': 70, 'VT_LPSTR': 30, 'VT_LPWSTR': 31, 'VT_UNKNOWN': 13, 'VT_DISPATCH': 9, 'VT_STREAM': 66, 'VT_STREAMED_OBJECT': 68, 'VT_STORAGE': 67, 'VT_STORED_OBJECT': 69, 'VT_VERSIONED_STREAM': 73, 'VT_DECIMAL': 14, 'VT_VECTOR': 4096, 'VT_ARRAY': 8192, 'VT_BYREF': 16384, 'VT_VARIANT': 12, 'VT_RECORD': 36}
   code_vtype = {co: vt for vt, co in vtype_code.items()}
-  code_ctype = {16: wintypes.CHAR, 17: wintypes.BYTE, 2: wintypes.SHORT, 18: wintypes.USHORT, 3: wintypes.LONG, 19: wintypes.ULONG, 22: wintypes.INT, 23: wintypes.UINT, 20: wintypes.LARGE_INTEGER, 21: wintypes.ULARGE_INTEGER, 4: wintypes.FLOAT, 5: wintypes.DOUBLE, 11: wintypes.VARIANT_BOOL, 10: wintypes.ULONG, 6: wintypes.LARGE_INTEGER, 7: wintypes.DOUBLE, 64: wintypes.FILETIME, 72: wintypes.PGUID, 71: wintypes.PBYTES16, 8: BSTR, 65: BLOB, 70: BLOB, 30: wintypes.LPSTR, 31: wintypes.LPWSTR, 13: PCOM, 9: PCOM, 66: PCOMSTREAM, 68: PCOMSTREAM, 67: PCOM, 69: PCOM, 73: PVERSIONEDSTREAM, 14: wintypes.BYTES16, 12: None, 4096: CA, 8192: wintypes.LPVOID, 16384: wintypes.LPVOID}
+  code_ctype = {16: wintypes.CHAR, 17: wintypes.BYTE, 2: wintypes.SHORT, 18: wintypes.USHORT, 3: wintypes.LONG, 19: wintypes.ULONG, 22: wintypes.INT, 23: wintypes.UINT, 20: wintypes.LARGE_INTEGER, 21: wintypes.ULARGE_INTEGER, 4: wintypes.FLOAT, 5: wintypes.DOUBLE, 11: wintypes.VARIANT_BOOL, 10: wintypes.ULONG, 6: wintypes.LARGE_INTEGER, 7: wintypes.DOUBLE, 64: wintypes.FILETIME, 72: wintypes.PGUID, 71: wintypes.PBYTES16, 8: BSTR, 65: BLOB, 70: BLOB, 30: wintypes.LPSTR, 31: wintypes.LPWSTR, 13: PCOM, 9: PCOM, 66: PCOMSTREAM, 68: PCOMSTREAM, 67: PCOM, 69: PCOM, 73: PVERSIONEDSTREAM, 14: wintypes.BYTES16, 12: None, 36: BRECORD, 4096: CA, 8192: wintypes.LPVOID, 16384: wintypes.LPVOID}
   _vtype = _BVType
   @classmethod
   def vt_co(cls, vt):
@@ -2844,31 +2862,32 @@ class _BVARIANT(metaclass=_BVMeta):
       if 'VT_VECTOR' not in cls.vtype_code:
         return None
       vt ^= 4096
-      if (t := cls.code_ctype.get(vt)) is None:
+      if (t := PROPVARIANT.code_ctype.get(vt)) is None:
         return None
       if (v := self.ca.content(t)) is None:
         return None
-      if issubclass(t, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, VARIANT)):
+      if issubclass(t, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, _BVARIANT)):
         v._bvariant = self
       return v
     elif vt > 8192 and vt < 16384:
       if 'VT_ARRAY' not in cls.vtype_code:
         return None
       vt ^= 8192
-      if (t := cls.code_ctype.get(vt)) is None:
+      if (t := VARIANT.code_ctype.get(vt)) is None:
         return None
-      if (v := PSAFEARRAY(wintypes.LPVOID(self.parray))) is None:
+      if (v := getattr(PSAFEARRAY(wintypes.LPVOID(self.parray)), 'content', None)) is None:
         return None
-      if (v := v.content) is None:
-        return None
-      if issubclass(t, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, VARIANT)):
+      if issubclass(t, (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_wchar_p, ctypes._Pointer, _BVARIANT)):
         v._bvariant = self
       return v
     elif vt > 16384:
       vt ^= 16384
-      if (t := cls.code_ctype.get(vt & 4095)) is None:
+      if vt >= 8192:
+        if 'VT_ARRAY' not in cls.vtype_code or (t := VARIANT.code_ctype.get(vt ^ 8192)) is None:
+          return None
+      elif (t := cls.code_ctype.get(vt)) is None:
         return None
-      v = ctypes.cast(wintypes.LPVOID(self.byref), ctypes.POINTER(wintypes.LPVOID if vt > 8192 else t))
+      v = ctypes.cast(wintypes.LPVOID(self.byref), (ctypes.POINTER(t) if vt < 8192 else PPSAFEARRAY))
       v._bvariant = self
       return v
   def set(self, vtype=None, data=None):
@@ -2931,7 +2950,7 @@ class _BPBVARIANT:
     return ctypes.byref(cls._type_(13, obj)) if isinstance(obj, (IUnknown, PCOM)) else (obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.byref(obj) if isinstance(obj, cls._type_) or (isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_)) else ctypes.byref(cls._type_(*obj) or cls._type_())))
 
 class VARIANT(_BVARIANT, ctypes.Structure):
-  code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
+  code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 36: 'brecord', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
   _vtype = VariantType
   _clear = oleauto32.VariantClear
 class PVARIANT(_BPBVARIANT, ctypes.POINTER(VARIANT)):
