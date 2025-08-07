@@ -2628,7 +2628,7 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
         self.esize = ctypes.sizeof(d)
         self.size = size * self.esize
       else:
-        self.shape = data.shape if isinstance(data, memoryview) else (len(data), )
+        self.shape = data.shape if isinstance(data, memoryview) else (len(data),)
         self.esize = data.itemsize
         self.size = data.nbytes if isinstance(data, memoryview) else (len(data) * data.itemsize)
       sabs = (SAFEARRAYBOUND * len(self.shape))()
@@ -2691,8 +2691,11 @@ class PSAFEARRAY(ctypes.POINTER(wintypes.USHORT)):
 class PPSAFEARRAY (ctypes.POINTER(PSAFEARRAY)):
   _type_ = PSAFEARRAY
   def __init__(self, psafearray=None):
-    super().__init__(psafearray)
-    self.psafearray = psafearray
+    if psafearray is None:
+      super().__init__()
+    else:
+      super().__init__(psafearray)
+      self.psafearray = psafearray
   @property
   def contents(self):
     return self.psafearray if hasattr(self, 'psafearray') else (PSAFEARRAY.from_address(ctypes.cast(self, wintypes.LPVOID).value) if self else None)
@@ -2831,7 +2834,7 @@ class _BVMeta(ctypes.Structure.__class__):
       cls.pVersionedStream = property(lambda s: s._pVersionedStream.contents.value if s._pVersionedStream else None, lambda s, v: setattr(s, '_pVersionedStream', v if isinstance(v, (PVERSIONEDSTREAM)) else (ctypes.cast(v, PVERSIONEDSTREAM) if isinstance(v, wintypes.LPVOID) else PVERSIONEDSTREAM(VERSIONEDSTREAM.from_param(v)))), cls._pVersionedStream.__delete__)
     if hasattr(cls, 'brecord'):
       cls._brecord = cls.brecord
-      cls.brecord = property(lambda s: cls._brec(s), lambda s, v: setattr(s, '_brecord', BRECORD.from_param(v)), cls._brecord.__delete__)
+      cls.brecord = property(lambda s: _BVUtil._brec(s), lambda s, v: setattr(s, '_brecord', BRECORD.from_param(v)), cls._brecord.__delete__)
 
 class _BVARIANT(metaclass=_BVMeta):
   vtype_code = {'VT_EMPTY': 0, 'VT_NULL': 1, 'VT_I1': 16, 'VT_UI1': 17, 'VT_I2': 2, 'VT_UI2': 18, 'VT_I4': 3, 'VT_UI4': 19, 'VT_INT': 22, 'VT_UINT': 23, 'VT_I8': 20, 'VT_UI8': 21, 'VT_R4': 4, 'VT_R8': 5, 'VT_BOOL': 11, 'VT_ERROR': 10, 'VT_CY': 6, 'VT_DATE': 7, 'VT_FILETIME': 64, 'VT_CLSID': 72, 'VT_CF': 71, 'VT_BSTR': 8, 'VT_BLOB': 65, 'VT_BLOBOBJECT': 70, 'VT_LPSTR': 30, 'VT_LPWSTR': 31, 'VT_UNKNOWN': 13, 'VT_DISPATCH': 9, 'VT_STREAM': 66, 'VT_STREAMED_OBJECT': 68, 'VT_STORAGE': 67, 'VT_STORED_OBJECT': 69, 'VT_VERSIONED_STREAM': 73, 'VT_DECIMAL': 14, 'VT_VECTOR': 4096, 'VT_ARRAY': 8192, 'VT_BYREF': 16384, 'VT_VARIANT': 12, 'VT_RECORD': 36}
