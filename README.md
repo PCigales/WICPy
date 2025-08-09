@@ -10,6 +10,8 @@ The COM library must be initialized for each thread creating from scratch a new 
 Bases of wrappers for Direct2D, Direct3D 11 and DXGI interfaces involved in interoperability with WIC are made available.
 WICPy also gives access to the Windows Media Player photo library, as well as some Windows Shell Namespace resources.
 
-Besides, the module facilitates the creation of custom COM interfaces, implementations and pxoxies/stubs using metaclasses. Factory classes registered in the registry can be invoked from their CLSID only if "Lib\site-packages\comtypes\server\inprocserver.py" is symlinked to "wic.py" as the module referred to by the hook in ctypes which is called by "DllGetClassObject" in _ctypes.pyd is hardcoded, with no possibility to define an alternative in the registry, such as through a dedicated subkey in the key associated with the CLSID (see https://github.com/python/cpython/issues/127369 and https://github.com/python/cpython/issues/127369#issuecomment-2544931573).
+Besides, the module facilitates the creation of custom COM interfaces, implementations and pxoxies/stubs using metaclasses. Factory classes can be registered in the registry and invoked using comserver.dll which must be placed in the same folder as wic.py.  
+The DLL comserver.dll can be compiled from the source code comserver.c for example with MINGW64 with the command (the args must be set according to the path and installed version of python):  
+  gcc -shared comserver.c -o comserver.dll -I "C:\Program Files\Python\include" -L "C:\Program Files\Python\libs" -l python313
 
 The script test.py illustrates how to use the module through various applications.
