@@ -8572,7 +8572,9 @@ def Uninitialize():
   return None
 
 def DllGetClassObject(rclsid, riid, ppv):
-  if not (rclsid and riid and ppv):
+  if not ppv:
+    return ISetLastError(0x80004003)
+  if not rclsid or not riid:
     arg = None
     ISetLastError(0x80004003)
   elif (arg := _COMMeta._COMImplMeta._clsids.get(GUID(UUID.from_address(rclsid)))) is None:
