@@ -27,6 +27,7 @@ from fractions import Fraction
 import datetime
 from hashlib import md5
 import importlib.util
+import os.path
 import winreg
 
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -8612,7 +8613,7 @@ class COMRegistration:
       return None
     return {iid: cls.CoRegisterPSClsid(iid, clsid) for iid in ps_impl.stub_impl._siids[0]} if iid is None else cls.CoRegisterPSClsid(iid, clsid)
   @staticmethod
-  def _RegistryAddFactory(clsid, name, user):
+  def _RegistryAddFactory(clsid, name, user, server):
     if clsid is None:
       return False
     clsid = ('{%s}' % GUID(clsid)).upper()
@@ -8621,7 +8622,7 @@ class COMRegistration:
       key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\CLSID\%s' % clsid)
       winreg.SetValue(key, '', winreg.REG_SZ, name)
       skey = winreg.CreateKey(key, 'InprocServer32')
-      winreg.SetValue(skey, '', winreg.REG_SZ, importlib.util.find_spec('_ctypes').origin)
+      winreg.SetValue(skey, '', winreg.REG_SZ, (server or os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', ' '))), "comserver.dll")))
       winreg.SetValueEx(skey, 'ThreadingModel', 0, winreg.REG_SZ, 'Both')
       winreg.CloseKey(skey)
       winreg.SetValue(key, 'ProgID', winreg.REG_SZ, name)
@@ -8634,15 +8635,15 @@ class COMRegistration:
     except:
       return False
   @classmethod
-  def RegistryAddCOMFactory(cls, icls_impl, name=None, *, user=True):
+  def RegistryAddCOMFactory(cls, icls_impl, name=None, *, user=True, server=None):
     if not isinstance((impl := globals().get('_COM_%s_impl' % icls_impl.__name__) if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), (impl.__name__[slice((5 if impl.__name__.upper().startswith('_COM_') else 0), (-5 if impl.__name__.lower().endswith('_impl') else None))] if name is None else name), user)
+    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), (impl.__name__[slice((5 if impl.__name__.upper().startswith('_COM_') else 0), (-5 if impl.__name__.lower().endswith('_impl') else None))] if name is None else name), user, server)
   @classmethod
-  def RegistryAddPSFactory(cls, icls_ps_impl, name=None, *, user=True):
+  def RegistryAddPSFactory(cls, icls_ps_impl, name=None, *, user=True, server=None):
     if not isinstance((ps_impl := globals().get('_PS_%s_impl' % icls_ps_impl.__name__) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ((ps_impl.__name__[slice((4 if ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if ps_impl.__name__.lower().endswith('_impl') else None))] + 'ProxyStub') if name is None else name), user)
+    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ((ps_impl.__name__[slice((4 if ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if ps_impl.__name__.lower().endswith('_impl') else None))] + 'ProxyStub') if name is None else name), user, server)
   @staticmethod
   def _RegistryRemoveFactory(clsid, user):
     if clsid is None:
