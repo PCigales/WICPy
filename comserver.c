@@ -4,7 +4,7 @@
 #include <Python.h>
 
 PyObject *py_mod;
-INT py_ini;
+INT py_ini = 1;
 
 HRESULT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
   PyGILState_STATE state = PyGILState_Ensure();
