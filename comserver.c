@@ -3,7 +3,7 @@
 #include <shlwapi.h>
 #include <Python.h>
 
-PyObject *py_mod;
+PyObject *py_mod = NULL;
 INT py_ini = 1;
 
 HRESULT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
@@ -59,6 +59,8 @@ HRESULT WINAPI DllCanUnloadNow(void) {
 BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOID lpvReserved ) {
   switch(fdwReason) {
     case DLL_PROCESS_ATTACH:
+      py_ini = Py_IsInitialized();
+      if (! py_ini) {Py_InitializeEx(0);}
       WCHAR *dllpath = NULL;
       DWORD alen = MAX_PATH;
       DWORD rlen;
@@ -72,8 +74,6 @@ BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOI
       if (! dllpath) {return FALSE;}
       WCHAR *e = wcsrchr(dllpath, '\\');
       if (e) {*e = '\0';}
-      py_ini = Py_IsInitialized();
-      if (! py_ini) {Py_InitializeEx(0);}
       PyGILState_STATE state = PyGILState_Ensure();
       PyObject *py_path = PySys_GetObject("path");
       PyObject *py_mpath = PyUnicode_FromWideChar(dllpath, -1);
