@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <windows.h>
-#include <shlwapi.h>
 #include <Python.h>
 
 PyObject *py_mod = NULL;
@@ -8,8 +7,8 @@ INT py_ini = 1;
 
 HRESULT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
   PyGILState_STATE state = PyGILState_Ensure();
-  PyObject *py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject");
-  if (! py_func) {
+  PyObject *py_func;
+  if (! py_mod || ! (py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject"))) {
     PyGILState_Release(state);
     return E_FAIL;
   }
@@ -37,8 +36,8 @@ HRESULT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOI
 
 HRESULT WINAPI DllCanUnloadNow(void) {
   PyGILState_STATE state = PyGILState_Ensure();
-  PyObject *py_func = PyObject_GetAttrString(py_mod, "DllCanUnloadNow");
-  if (! py_func) {
+  PyObject *py_func;
+  if (! py_mod || ! (py_func = PyObject_GetAttrString(py_mod, "DllCanUnloadNow"))) {
     PyGILState_Release(state);
     return E_FAIL;
   }
@@ -84,8 +83,7 @@ BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOI
       PyList_Append(py_path, py_mpath);
       Py_XDECREF(py_mpath);
       free(dllpath);
-      py_mod = PyImport_ImportModule("wic");
-      if (! py_mod) {
+      if (! (py_mod = PyImport_ImportModule("wic"))) {
         PyErr_Clear();
         PyGILState_Release(state);
         return FALSE;
@@ -96,8 +94,12 @@ BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOI
       if (! lpvReserved) {
         PyGILState_STATE state = PyGILState_Ensure();
         Py_XDECREF(py_mod);
+        py_mod = NULL;
         PyGILState_Release(state);
-        if (! py_ini) {Py_FinalizeEx();}
+        if (! py_ini) {
+          py_ini = 1;
+          Py_FinalizeEx();
+        }
       }
     break;
   }
