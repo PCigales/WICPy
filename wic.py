@@ -8569,6 +8569,8 @@ def Uninitialize():
       ISetLastError(ole32.CoUninitialize())
       _IUtil._local.initialized[0] -= 1
     del _IUtil._local.initialized
+    if hasattr(_IUtil._local, 'multithreaded'):
+      del _IUtil._local.multithreaded
     return True
   return None
 
