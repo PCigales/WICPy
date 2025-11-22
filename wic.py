@@ -1,4 +1,4 @@
-# WICPy v1.3.0 (https://github.com/PCigales/WICPy)
+# WICPy v1.3.1 (https://github.com/PCigales/WICPy)
 # Copyright © 2024 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -882,7 +882,7 @@ class _COM_IRpcStubBuffer(_COM_IUnknown):
     def __getitem__(self, key):
       key -= 3
       if key < 0 or key >= len(self):
-        return ((lambda *args, **kwargs: 0x80004001), ((), ()))
+        return ((lambda *args, **kwargs: 0x80004001), (), ()
       func, (iargs, oargs) = super().__getitem__(key)
       return func, tuple(PCOM_IID(*arg) if isinstance(arg, tuple) else arg for arg in iargs), tuple(PCOM_IID(*arg) if isinstance(arg, tuple) else arg for arg in oargs)
   @classmethod
@@ -8727,7 +8727,6 @@ class COMSharing:
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
     Window.PeekMessage(lpMsg, None, 0x8000, 0x8000, 0)
     (r := self._response)[0].set()
-    COMRegistration.RegisterProxyStub(IFileSystemBindData)
     while Window.GetMessage(lpMsg, None, 0, 0) > 0:
       if not msg.hWnd and msg.message == 0x8000:
         if self._request:
