@@ -1395,4 +1395,95 @@ print('Waiting for the closure of the resizable pop-up window...')
 hwnd.WaitShutdown()
 tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
 
+#Creating a COM interface provider thread
+CS = COMSharing()
+CS.Start()
+#Registering the ProxyStub CLSID for IFileSystemBindData and IFileSystemBindData2
+COMRegistration.RegisterProxyStub(IFileSystemBindData)
+#Registering a factory for this CLSID
+to = COMRegistration.RegisterPSFactory(IFileSystemBindData)
+#Registering a factory for this CLSID in the provider thread
+sto = CS.RegisterPSFactory(IFileSystemBindData)
+#Retrieving a IFileSystemBindData interface from the provider with initialization
+FileSystemBindData = CS.Get(IFileSystemBindData, find_data=('Directory',), file_id=10)
+print(FileSystemBindData, FileSystemBindData.GetFindData(), FileSystemBindData.GetFileID())
+#Retrieving a IFileSystemBindData interface from the provider based on this interface (itself as in same thread)
+print(CS.Source(FileSystemBindData), CS(FileSystemBindData))
+#Declaring and running in another thread a function retrieving a IFileSystemBindData interface from the provider based on the previous interface (another one as in different thread) and changing the FileID
+def f():
+   Initialize()
+   to = COMRegistration.RegisterPSFactory(IFileSystemBindData)
+   FileSystemBindData2 = CS(FileSystemBindData)
+   FileSystemBindData2.SetFileID(30)
+   print(FileSystemBindData2, FileSystemBindData2.GetFindData(), FileSystemBindData2.GetFileID())
+   FileSystemBindData2.Release()
+   COMRegistration.RevokeFactory(to)
+   Uninitialize()
+th = threading.Thread(target=f)
+th.start()
+th.join()
+#Printing the FileID, modified in the other thread, of the previous interface
+print(FileSystemBindData.GetFileID())
+#Releasing the interface
+FileSystemBindData.Release()
+#Registering a factory for the CLSID of IFileSystemBindData in the provider thread
+scto = CS.RegisterCOMFactory(IFileSystemBindData)
+#Declaring a function creating the IFileSystemBindData interface from its CLSID in the provider thread
+from wic import _COM_IFileSystemBindData_impl
+def gen(**kwargs):
+  print(FileSystemBindData := IFileSystemBindData(_COM_IFileSystemBindData_impl.CLSID, **kwargs))
+  return FileSystemBindData
+#Retrieving an interface upon tis function from the provider with initialization
+FileSystemBindData = CS(gen, find_data={'ftLastWriteTime': 133814211450000000}, file_id=20)
+print(CS.Source(FileSystemBindData), FileSystemBindData, FileSystemBindData.GetFindData(), FileSystemBindData.GetFileID())
+#Releasing the interface
+FileSystemBindData.Release()
+#Registering the ProxyStub CLSID for IEnumInterfaceFactory and IEnumInterface
+COMRegistration.RegisterProxyStub(IEnumInterfaceFactory)
+#Registering a factory for this CLSID
+toe = COMRegistration.RegisterPSFactory(IEnumInterfaceFactory)
+#Registering a factory for this CLSID in the provider thread
+stoe = CS.RegisterPSFactory(IEnumInterfaceFactory)
+#Declaring a function creating two IFileSystemBindData interfaces incorporated into a IEnumInterfaceFactory interface in the provider thread
+def gen():
+  FileSystemBindData1 = IFileSystemBindData(file_id=10)
+  FileSystemBindData2 = IFileSystemBindData(file_id=20)
+  return IEnumInterfaceFactory((FileSystemBindData1, FileSystemBindData2), icls=IFileSystemBindData)
+#Retrieving an interface upon tis function from the provider
+EnumInterfaceFactory = CS(gen)
+#Creating an instance of IEnumInterface, of IFileSystemBindData interfaces, from this interface
+EnumInterface = EnumInterfaceFactory.CreateInstance(IFileSystemBindData)
+#Checking the registered iid of the content of this interface
+print(EnumInterface.GetIID(), IFileSystemBindData.IID)
+#Retrieving the included interfaces
+FileSystemBindData1, FileSystemBindData2 = EnumInterface
+#Checking that these interfaces are included in the enum interface and their FileID
+print(EnumInterface.Contains(FileSystemBindData1), EnumInterface.Contains(FileSystemBindData2))
+print(FileSystemBindData1.GetFileID(), FileSystemBindData2.GetFileID())
+#Clonig the enum interface
+EnumInterface2 = EnumInterface.Clone()
+#Retrieving the included interfaces from the cloned enum interface before and after resetting it
+print(tuple(EnumInterface2), EnumInterface2.Reset(), tuple(EnumInterface2))
+#Releasing the interfaces
+EnumInterface2.Release()
+EnumInterface.Release()
+#Querying the aggregated enum interface from the enum factory interface and setting the iid of its content
+EnumInterface = EnumInterfaceFactory.QueryInterface(IEnumInterface)
+EnumInterface.IClass = IFileSystemBindData
+#Checking the registered iid of the content of this interface
+print(EnumInterface.GetIID())
+#Checking the FileID of the interfaces in the enum interface
+print(tuple(map(IFileSystemBindData.GetFileID, EnumInterface)))
+#Releasing the interfaces
+EnumInterface.Release()
+EnumInterfaceFactory.Release()
+#Revoking the registered factories in the main and provider threads
+CS.RevokeFactory(scto)
+CS.RevokeFactory(stoe)
+CS.RevokeFactory(sto)
+COMRegistration.RevokeFactory(toe)
+COMRegistration.RevokeFactory(to)
+#Stopping the COM interface provider
+CS.Stop()
+
 Uninitialize()

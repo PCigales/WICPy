@@ -72,7 +72,7 @@ BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOI
       } while (alen <= 66560);
       if (! dllpath) {return FALSE;}
       WCHAR *e = wcsrchr(dllpath, '\\');
-      if (e) {*e = '\0';}
+      if (e) {*e = 0;}
       PyGILState_STATE state = PyGILState_Ensure();
       PyObject *py_path = PySys_GetObject("path");
       PyObject *py_mpath = PyUnicode_FromWideChar(dllpath, -1);
