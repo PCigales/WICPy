@@ -1445,9 +1445,10 @@ toe = COMRegistration.RegisterPSFactory(IEnumInterfaceFactory)
 #Registering a factory for this CLSID in the provider thread
 stoe = CS.RegisterPSFactory(IEnumInterfaceFactory)
 #Declaring a function creating two IFileSystemBindData interfaces incorporated into a IEnumInterfaceFactory interface in the provider thread
+C = None
 def gen():
-  FileSystemBindData1 = IFileSystemBindData(file_id=10)
-  FileSystemBindData2 = IFileSystemBindData(file_id=20)
+  global C
+  C = (FileSystemBindData1 := IFileSystemBindData(file_id=10), FileSystemBindData2 := IFileSystemBindData(file_id=20))
   return IEnumInterfaceFactory((FileSystemBindData1, FileSystemBindData2), icls=IFileSystemBindData)
 #Retrieving an interface upon tis function from the provider
 EnumInterfaceFactory = CS(gen)
@@ -1475,8 +1476,8 @@ print(EnumInterface.GetIID())
 #Checking the FileID of the interfaces in the enum interface
 print(tuple(map(IFileSystemBindData.GetFileID, EnumInterface)))
 #Releasing the interfaces
-EnumInterface.Release()
-EnumInterfaceFactory.Release()
+tuple(map(IUnknown.Release, (FileSystemBindData1, FileSystemBindData2, EnumInterface, EnumInterfaceFactory, *C)))
+del C
 #Revoking the registered factories in the main and provider threads
 CS.RevokeFactory(scto)
 CS.RevokeFactory(stoe)
