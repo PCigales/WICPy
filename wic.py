@@ -1005,6 +1005,10 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
           else:
             pI.value = None
         else:
+          if isinstance(arg, RIID_PI):
+            b = ctypes.cast(ctypes.create_string_buffer(arg.number * s), wintypes.PLPVOID)
+            ctypes.memmove(b, arg.p, arg.number * s)
+            arg.p = b
           ctypes.memmove(message.Buffer + o, ctypes.addressof(p := arg.p), s)
           if p:
             add = wintypes.LPVOID.from_buffer(p).value
