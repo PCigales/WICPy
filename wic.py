@@ -994,10 +994,11 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
     for arg in args:
       s = ctypes.sizeof(arg)
       if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
-        if arg.number is None:
+        p = arg.p
+        if (n := arg.number) is None:
           pI = wintypes.LPVOID.from_address(message.Buffer + o)
-          if arg.p:
-            if COMSharing.CoMarshalInterThreadInterfaceIntoStream(arg, arg.p, pI) is None:
+          if p:
+            if COMSharing.CoMarshalInterThreadInterfaceIntoStream(arg, p, pI) is None:
               r = 0x8001000b
               break
             else:
@@ -1005,20 +1006,21 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
           else:
             pI.value = None
         else:
-          if isinstance(arg, RIID_PI):
-            b = ctypes.cast(ctypes.create_string_buffer(arg.number * s), wintypes.PLPVOID)
-            ctypes.memmove(b, arg.p, arg.number * s)
-            arg.p = b
-          ctypes.memmove(message.Buffer + o, ctypes.addressof(p := arg.p), s)
           if p:
+            bs = n * s
+            if isinstance(arg, RIID_PI):
+              b = ctypes.cast(ctypes.create_string_buffer(bs), wintypes.PLPVOID)
+              ctypes.memmove(b, p, bs)
+              arg.p = p = b
             add = wintypes.LPVOID.from_buffer(p).value
-            for a in range(add, add + arg.number * s, s):
+            for a in range(add, add + bs, s):
               if (ar := wintypes.LPVOID.from_address(a)):
                 if COMSharing.CoMarshalInterThreadInterfaceIntoStream(arg, ar.value, ar) is None:
                   r = 0x8001000b
                   break
                 else:
                   marsh.append(ar)
+          ctypes.memmove(message.Buffer + o, ctypes.addressof(p), s)
       else:
         ctypes.memmove(message.Buffer + o, ctypes.addressof(arg.p if isinstance(arg, RIID_PPI) else arg), s)
       o += s
