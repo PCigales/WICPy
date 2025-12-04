@@ -28,8 +28,10 @@ import datetime
 from hashlib import md5
 import sys
 import importlib.util
-import os.path
+import os, os.path
 import winreg
+import json
+import time
 
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 user32 = ctypes.WinDLL('user32', use_errno=True, use_last_error=True)
@@ -77,6 +79,9 @@ class GUID(bytes):
     return self.to_string()
   def __repr__(self):
     return str(self)
+  @property
+  def _for_json(self):
+    return self.to_string()
 
 class PBUFFER(wintypes.LPVOID):
   @staticmethod
@@ -156,6 +161,9 @@ class _BGUID:
     return '<%s: %s>' % (self.guid, self.name)
   def __repr__(self):
     return str(self)
+  @property
+  def _for_json(self):
+    return self.guid
 
 class _BPGUID:
   @classmethod
@@ -233,6 +241,9 @@ class _BCode:
     return str(self)
   def __hash__(self):
     return int.__hash__(self.code)
+  @property
+  def _for_json(self):
+    return self.code
 
 class _BCodeOr(_BCode):
   @classmethod
@@ -284,6 +295,19 @@ class _BCodeU(_BCodeOr):
   def code_name(cls, c):
     return ' | '.join((n_ for c_, n_ in cls._tab_cn.items() if c_ & c == c_) if c & 15 == 0 else (n_ for c_, n_ in cls._tab_cn.items() if c_ & c == c_ and c_ != 0))
 
+COMMshCtx = {'Local': 0, 'NoSharedMem': 1, 'DifferentMachine': 2, 'InProc': 3, 'CrossCtx': 4}
+COMMSHCTX = type('COMMSHCTX', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMMshCtx.items()}, '_tab_cn': {c: n for n, c in COMMshCtx.items()}, '_def': 3})
+COMPMSHCTX = ctypes.POINTER(COMMSHCTX)
+
+COMClsCtx = {'InProcServer': 0x1, 'InProcHandler': 0x2, 'LocalServer': 0x4, 'RemoteServer': 0x10, 'DisableAaA': 0x8000, 'EnableAaA': 0x10000, 'FromDefaultContext': 0x20000, 'EnableCloaking': 0x100000, 'PSDll': 0x80000000}
+COMCLSCTX = type('COMCLSCTX', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMClsCtx.items()}, '_tab_cn': {c: n for n, c in COMClsCtx.items()}, '_def': 3})
+
+COMRegCls = {'SingleUse': 0, 'MultipleUse': 1, 'MultiSeparate': 2, 'Suspended': 4, 'Surrogate': 8, 'Agile': 16}
+COMREGCLS = type('COMREGCLS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMRegCls.items()}, '_tab_cn': {c: n for n, c in COMRegCls.items()}, '_def': 3})
+
+COMMshlFlags = {'Normal': 0, 'TableStrong': 1, 'TableWeak': 2, 'NoPing': 4}
+COMMSHLFLAGS = type('COMMSHLFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMMshlFlags.items()}, '_tab_cn': {c: n for n, c in COMMshlFlags.items()}, '_def': 3})
+
 class _IUtil:
   _local = threading.local()
   _mul_cache = {}
@@ -299,12 +323,44 @@ class _IUtil:
   @staticmethod
   def _errcheck_r(r, f, a):
     return getattr(r, 'value', r) if (c := getattr(r, '__ctypes_from_outparam__', None)) is None else c()
-  @staticmethod
-  def CLSIDFromProgID(pid):
-    return None if ISetLastError(ole32.CLSIDFromString(wintypes.LPCOLESTR(pid), ctypes.byref(clsid := wintypes.GUID()))) else GUID(clsid)
+  @classmethod
+  def CLSIDFromProgID(cls, pid):
+    return None if (clsid := cls.CLSIDFromString(pid)) is None else GUID(clsid)
   @staticmethod
   def QueryInterface(interface, icls, factory=None):
     return None if interface is None else interface.QueryInterface(icls, factory)
+  @staticmethod
+  def _wrap(n, *a, p=ole32):
+    if next(a_d := (t[1] for t in a), None) == 0:
+      f = ctypes.WINFUNCTYPE(*(t[0] for t in a), use_last_error=True)(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((d,) for d in a_d))
+      if all(t[1] != 2 for t in a):
+        f.errcheck = _IUtil._errcheck_r
+    else:
+      f = ctypes.WINFUNCTYPE(wintypes.ULONG, *(t[0] for t in a))(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((t[1],) for t in a))
+      f.errcheck = _IUtil._errcheck_o if any(t[1] == 2 for t in a) else _IUtil._errcheck_no
+    return f
+  @staticmethod
+  def _json_def(obj):
+    return obj._for_json
+_IUtil.CLSIDFromString = _IUtil._wrap('CLSIDFromString', (wintypes.LPCOLESTR, 1), (wintypes.PGUID, 2))
+_IUtil.OleInitialize = _IUtil._wrap('OleInitialize', (wintypes.LPVOID, 1))
+_IUtil.OleUninitialize = _IUtil._wrap('OleUninitialize')
+_IUtil.CoInitializeEx = _IUtil._wrap('CoInitializeEx', (wintypes.LPVOID, 1), (wintypes.DWORD, 1))
+_IUtil.CoUninitialize = _IUtil._wrap('CoUninitialize')
+_IUtil.CoGetApartmentType = _IUtil._wrap('CoGetApartmentType', (wintypes.PINT, 2), (wintypes.PINT, 2))
+_IUtil.CoCreateInstance = _IUtil._wrap('CoCreateInstance', (wintypes.LPCSTR, 1), (wintypes.LPVOID, 1), (COMCLSCTX, 1), (wintypes.LPCSTR, 1), (wintypes.PLPVOID, 2))
+_IUtil.CoGetClassObject = _IUtil._wrap('CoGetClassObject', (wintypes.LPCSTR, 1), (COMCLSCTX, 1), (wintypes.LPVOID, 1), (wintypes.LPCSTR, 1), (wintypes.PLPVOID, 2))
+_IUtil.CoTaskMemFree = _IUtil._wrap('CoTaskMemFree', (None, 0), (wintypes.LPVOID, 1))
+_IUtil.CoRegisterClassObject = _IUtil._wrap('CoRegisterClassObject', (PUUID, 1), (wintypes.LPVOID, 1), (COMCLSCTX, 1), (COMREGCLS, 1), (wintypes.PDWORD, 2))
+_IUtil.CoRevokeClassObject = _IUtil._wrap('CoRevokeClassObject', (wintypes.DWORD, 1))
+_IUtil.CoRegisterPSClsid = _IUtil._wrap('CoRegisterPSClsid', (PUUID, 1), (PUUID, 1))
+_IUtil.CoMarshalInterThreadInterfaceInStream = _IUtil._wrap('CoMarshalInterThreadInterfaceInStream', (PUUID, 1), (wintypes.LPVOID, 1), (wintypes.PLPVOID, 2))
+_IUtil.CoMarshalInterThreadInterfaceIntoStream = _IUtil._wrap('CoMarshalInterThreadInterfaceInStream', (PUUID, 1), (wintypes.LPVOID, 1), (wintypes.PLPVOID, 1))
+_IUtil.CoGetInterfaceAndReleaseStream = _IUtil._wrap('CoGetInterfaceAndReleaseStream', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2))
+_IUtil.CoGetInterfaceIntoAndReleaseStream = _IUtil._wrap('CoGetInterfaceAndReleaseStream', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 1))
+_IUtil.CoMarshalInterface = _IUtil._wrap('CoMarshalInterface', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.LPVOID, 1), (COMMSHCTX, 1), (wintypes.LPVOID, 1), (COMMSHLFLAGS, 1))
+_IUtil.CoUnmarshalInterface = _IUtil._wrap('CoUnmarshalInterface', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2))
+_IUtil.CoReleaseMarshalData = _IUtil._wrap('CoReleaseMarshalData', (wintypes.LPVOID, 1))
 
 class _IMeta(type):
   @classmethod
@@ -328,6 +384,9 @@ class _IMeta(type):
             cls._protos[n].errcheck = _IUtil._errcheck_r
   def __mul__(bcls, size):
     return _IUtil._mul_cache.get((bcls, size)) or _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
+  @property
+  def _for_json(cls):
+    return getattr(sys.modules.get(cls.__module__), (n := '_COM_%s_impl' % cls.__name__), globals().get(n)).CLSID
 
 class _COMMeta(type):
   class _Offsetted(dict):
@@ -339,6 +398,7 @@ class _COMMeta(type):
   class _COMImplMeta(ctypes.Structure.__class__):
     _psize = ctypes.sizeof(wintypes.LPVOID)
     _refs = {}
+    _locks = [0]
     _clsids = {}
     class _COMThreadUnsafe:
       def __init__(self, obj=None):
@@ -388,7 +448,7 @@ class _COMMeta(type):
     def _is_mta():
       a_t = wintypes.INT()
       a_q = wintypes.INT()
-      return None if ISetLastError(ole32.CoGetApartmentType(ctypes.byref(a_t), ctypes.byref(a_q))) else a_t.value == 1 or (a_t.value == 2 and a_q.value in (2, 4))
+      return None if (atq := _IUtil.CoGetApartmentType()) is None else atq[0] == 1 or (atq[0] == 2 and atq[1] in (2, 4))
     @staticmethod
     def _new(cls, iid=0, isize=None, **kwargs):
       if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
@@ -407,6 +467,7 @@ class _COMMeta(type):
         cls._aggregatable = all(issubclass(interface, (_COM_IUnknown if i == 0 else  _COM_IUnknown_aggregatable)) for i, interface in enumerate(interfaces)) and hasattr(cls, 'pUnkOuter')
   _psize = _COMImplMeta._psize
   _refs = _COMImplMeta._refs
+  _locks = _COMImplMeta._locks
   _none = _COMImplMeta._COMThreadUnsafe()
   _iid_iunknown = GUID('00000000-0000-0000-c000-000000000046')
   _iid_iclassfactory = GUID('00000001-0000-0000-c000-000000000046')
@@ -423,7 +484,7 @@ class _COMMeta(type):
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       raise ValueError('an invalid or more than one base class has been provided in the declaration of %s' % name)
-    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_iids', '_siids', '_aggregatable', 'CLSID', '_pvtbls', '_fields_', '_destroy', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
+    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_locks', '_iids', '_siids', '_aggregatable', 'CLSID', '_pvtbls', '_fields_', '_destroy', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
       raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     return super().__new__(mcls, name, bases, namespace)
   @staticmethod
@@ -478,7 +539,7 @@ class _COM_IUnknown(metaclass=_COMMeta):
         return 0
       self.refs = max(self.refs - 1, 0)
       if not self.refs:
-        cls._refs.pop(ctypes.addressof(self), None)
+        cls.__class__._refs.pop(ctypes.addressof(self), None)
         if (d := getattr(self, '_destroy', None)):
           d()
       return self.refs
@@ -506,6 +567,8 @@ class IUnknown(metaclass=_IMeta):
       pI = wintypes.LPVOID(clsid_component)
     elif isinstance(clsid_component, wintypes.LPVOID):
       pI = clsid_component
+    elif isinstance(clsid_component, IUnknown):
+      return clsid_component.QueryInterface(cls, factory)
     else:
       if isinstance(clsid_component, str):
         try:
@@ -513,8 +576,7 @@ class IUnknown(metaclass=_IMeta):
         except:
           if (clsid_component := _IUtil.CLSIDFromProgID(clsid_component)) is None:
             return None
-      pI = wintypes.LPVOID()
-      if ISetLastError(ole32.CoCreateInstance(wintypes.LPCSTR(clsid_component), None, wintypes.DWORD(1), wintypes.LPCSTR(cls.IID), ctypes.byref(pI))) or not pI:
+      if not (pI := wintypes.LPVOID(_IUtil.CoCreateInstance(clsid_component, None, 1, cls.IID))):
         return None
     self = object.__new__(cls)
     self.pI = pI
@@ -724,8 +786,17 @@ class _COM_IClassFactory(_COM_IUnknown):
       return 0
   @classmethod
   def _LockServer(cls, pI, fLock):
-    return 0x80004001 if cls[pI] else 0x80004003
-
+    if cls[pI]:
+      if fLock:
+        _COMMeta._locks[0] += 1
+      elif _COMMeta._locks[0]:
+        _COMMeta._locks[0] -= 1
+      else:
+        return 0x8000ffff
+    else:
+      return 0x80004003
+    return 0
+    
 class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory,)):
   def __new__(cls, iid=0, *, _bnew=__new__, impl=0):
     return _bnew(cls, iid, constr=impl)
@@ -735,6 +806,7 @@ class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory
 class IClassFactory(IUnknown):
   IID = GUID('00000001-0000-0000-c000-000000000046')
   _protos['CreateInstance'] = 3, (wintypes.LPVOID, wintypes.LPCSTR), (wintypes.PLPVOID,)
+  _protos['LockServer'] = 4, (wintypes.BOOL,), ()
   def __new__(cls, clsid_component=False, factory=None):
     lw = None
     if not clsid_component:
@@ -752,6 +824,8 @@ class IClassFactory(IUnknown):
       pI = wintypes.LPVOID(clsid_component)
     elif isinstance(clsid_component, wintypes.LPVOID):
       pI = clsid_component
+    elif isinstance(clsid_component, IUnknown):
+      return clsid_component.QueryInterface(cls, factory)
     else:
       if isinstance(clsid_component, str):
         try:
@@ -759,8 +833,7 @@ class IClassFactory(IUnknown):
         except:
           if (clsid_component := _IUtil.CLSIDFromProgID(clsid_component)) is None:
             return None
-      pI = wintypes.LPVOID()
-      if ISetLastError(ole32.CoGetClassObject(wintypes.LPCSTR(clsid_component), wintypes.DWORD(1), None, wintypes.LPCSTR(cls.IID), ctypes.byref(pI))) or not pI:
+      if not (pI := wintypes.LPVOID(_IUtil.CoGetClassObject(clsid_component, 1, None, cls.IID)))  :
         return None
     self = object.__new__(cls)
     self.pI = pI
@@ -775,6 +848,8 @@ class IClassFactory(IUnknown):
     if getattr(self, '_lightweight', False):
       i._lightweight = True
     return i
+  def LockServer(self, fLock):
+    return self.__class__._protos['LockServer'](self.pI, fLock)
 
 class _COM_IPSFactoryBuffer(_COM_IUnknown):
   _iids.add(GUID(0xd5f569d0, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a))
@@ -837,16 +912,12 @@ class RPCOLEMESSAGE(ctypes.Structure):
   _fields_ = [('reserved1', wintypes.LPVOID), ('dataRepresentation', wintypes.ULONG), ('Buffer', wintypes.LPVOID), ('cbBuffer', wintypes.ULONG), ('iMethod', wintypes.ULONG), ('reserved2', wintypes.LPVOID * 5), ('rpcFlags', wintypes.ULONG)]
 PRPCOLEMESSAGE = ctypes.POINTER(RPCOLEMESSAGE)
 
-RPCMshCtx = {'Local': 0, 'NoSharedMem': 1, 'DifferentMachine': 2, 'InProc': 3, 'CrossCtx': 4}
-RPCMSHCTX = type('RPCMSHCTX', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in RPCMshCtx.items()}, '_tab_cn': {c: n for n, c in RPCMshCtx.items()}, '_def': 3})
-RPCPMSHCTX = ctypes.POINTER(RPCMSHCTX)
-
 class IRpcChannelBuffer(IUnknown):
   IID = GUID(0xd5f56b60, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a)
   _protos['GetBuffer'] = 3, (PRPCOLEMESSAGE, PUUID), ()
   _protos['SendReceive'] = 4, (PRPCOLEMESSAGE,), (wintypes.PULONG,)
   _protos['FreeBuffer'] = 5, (PRPCOLEMESSAGE,), ()
-  _protos['GetDestCtx'] = 6, (), (RPCPMSHCTX, wintypes.PLPVOID)
+  _protos['GetDestCtx'] = 6, (), (COMPMSHCTX, wintypes.PLPVOID)
   _protos['IsConnected'] = 7, (), (), True
 
 class PCOMRPCCHANNEL(PCOM):
@@ -935,13 +1006,16 @@ class _COM_IRpcProxyBuffer(_COM_IUnknown):
 class _COM_IRpcInProcProxyBuffer(_COM_IRpcProxyBuffer):
   @classmethod
   def _Connect(cls, pI, pRpcChannelBuffer):
-    if (r := super()._Connect(pI, pRpcChannelBuffer)):
-      return r
-    if getattr(pRpcChannelBuffer.GetDestCtx(), 'value', None) not in (3, 4):
-      pRpcChannelBuffer.Release()
-      self.pRpcChannelBuffer = None
-      return 0x80004001
-    return 0
+    with cls[pI] as self:
+      if not self or not pRpcChannelBuffer:
+        return 0x80004003
+      if self.pRpcChannelBuffer:
+        return 0x8000ffff
+      if getattr(pRpcChannelBuffer.GetDestCtx(), 'value', None) not in (3, 4):
+        return 0x80004001
+      pRpcChannelBuffer.AddRef()
+      self.pRpcChannelBuffer = pRpcChannelBuffer
+      return 0
 
 class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
   _vars['pRpcChannelBuffer'] = PCOMRPCCHANNEL
@@ -998,7 +1072,7 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
         if (n := arg.number) is None:
           pI = wintypes.LPVOID.from_address(message.Buffer + o)
           if p:
-            if COMSharing.CoMarshalInterThreadInterfaceIntoStream(arg, p, pI) is None:
+            if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, p, pI) is None:
               r = 0x8001000b
               break
             else:
@@ -1015,7 +1089,7 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
             add = wintypes.LPVOID.from_buffer(p).value
             for a in range(add, add + bs, s):
               if (ar := wintypes.LPVOID.from_address(a)):
-                if COMSharing.CoMarshalInterThreadInterfaceIntoStream(arg, ar.value, ar) is None:
+                if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, ar.value, ar) is None:
                   r = 0x8001000b
                   break
                 else:
@@ -1028,7 +1102,7 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
       r = r or IGetLastError() or 0x8001000a
       if message.Buffer:
         for pI in marsh:
-          COMSharing.CoReleaseMarshalData(pI)
+          _IUtil.CoReleaseMarshalData(pI)
           PCOM.Release(pI)
     elif restype is not None and message.cbBuffer < ctypes.sizeof(restype):
       r = 0x80010009
@@ -1043,7 +1117,7 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
             add = wintypes.LPVOID.from_buffer(p).value
             for a in range(add, add + arg.number * s, s):
               if (ar := wintypes.LPVOID.from_address(a)):
-                if COMSharing.CoGetInterfaceIntoAndReleaseStream(ar.value, arg, ar) is None:
+                if _IUtil.CoGetInterfaceIntoAndReleaseStream(ar.value, arg, ar) is None:
                   e = True
                 else:
                   marsh.append(ar)
@@ -1223,9 +1297,9 @@ class _COM_IRpcInProcStub(_COM_IRpcStubBuffer):
         if argtype.number is None:
           if (pI := wintypes.LPVOID.from_address(message.Buffer + o)):
             if e:
-              COMSharing.CoReleaseMarshalData(pI)
+              _IUtil.CoReleaseMarshalData(pI)
               PCOM.Release(pI)
-            elif COMSharing.CoGetInterfaceIntoAndReleaseStream(pI.value, argtype, pI) is None:
+            elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI.value, argtype, pI) is None:
               e = True
             else:
               marsh.append(pI)
@@ -1236,9 +1310,9 @@ class _COM_IRpcInProcStub(_COM_IRpcStubBuffer):
             for a in range(add, add + argtype.number * s, s):
               if (ar := wintypes.LPVOID.from_address(a)):
                 if e:
-                  COMSharing.CoReleaseMarshalData(ar)
+                  _IUtil.CoReleaseMarshalData(ar)
                   PCOM.Release(wintypes.LPVOID(ar))
-                elif COMSharing.CoGetInterfaceIntoAndReleaseStream(ar.value, argtype, ar) is None:
+                elif _IUtil.CoGetInterfaceIntoAndReleaseStream(ar.value, argtype, ar) is None:
                   e = True
                 else:
                   marsh.append(ar)
@@ -1274,14 +1348,14 @@ class _COM_IRpcInProcStub(_COM_IRpcStubBuffer):
         add = wintypes.LPVOID.from_buffer(arg).value
         for a in range(add, add + argtype.number * s, s):
           if (ar := wintypes.LPVOID.from_address(a)):
-            if e or COMSharing.CoMarshalInterThreadInterfaceIntoStream(argtype, (pI := ar.value), ar) is None:
+            if e or _IUtil.CoMarshalInterThreadInterfaceIntoStream(argtype, (pI := ar.value), ar) is None:
               e = True
             else:
               marsh.append(ar)
             PCOM.Release(wintypes.LPVOID(pI))
     if e:
       for pI in marsh:
-        COMSharing.CoReleaseMarshalData(pI)
+        _IUtil.CoReleaseMarshalData(pI)
         PCOM.Release(pI)
     return 0x8001000d if e else 0
 
@@ -1333,9 +1407,8 @@ class IEnumString(IUnknown):
     if (r := r.value) == 0:
       return ()
     ss = tuple(a[s] for s in range(r))
-    a = (wintypes.LPVOID * r).from_buffer(a)
-    for p in a:
-      ole32.CoTaskMemFree(wintypes.LPVOID(p))
+    for p in (wintypes.LPVOID * r).from_buffer(a):
+      _IUtil.CoTaskMemFree(p)
     return ss
   def Skip(self, number):
     try:
@@ -1571,8 +1644,8 @@ class IEnumInterfaceFactory(IUnknown):
       self.refs = 1
       self.factory = factory
       self._lightweight = True
-    elif (self := super().__new__(cls, clsid_component_items, factory)) is None:
-      return None
+    else:
+      self = super().__new__(cls, clsid_component_items, factory)
     return self
   def CreateInstance(self, icls):
     if (i := IEnumInterface(self.__class__._protos['CreateInstance'](self.pI, icls.IID), self.factory, icls)) is None:
@@ -1697,7 +1770,7 @@ class IStream(IUnknown):
     return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
   shl.SHCreateStreamOnFileEx.restype = wintypes.ULONG
   @classmethod
-  def CreateOnFile(cls, file_name, desired_access=0x20):
+  def CreateOnFile(cls, file_name, desired_access=0x20, factory=None):
     if isinstance(desired_access, str):
       desired_access = {'read': 0x20, 'write': 0x1021, 'readwrite': 0x12}.get(desired_access.lower(), 0x20)
     pIStream = wintypes.LPVOID()
@@ -1706,18 +1779,18 @@ class IStream(IUnknown):
       r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), True, None, ctypes.byref(pIStream))
     if ISetLastError(r):
       return None
-    return cls(pIStream)
+    return cls(pIStream, factory)
   shl.SHCreateMemStream.restype = wintypes.LPVOID
   @classmethod
-  def CreateInMemory(cls, initializer=None):
-    return cls(wintypes.LPVOID(shl.SHCreateMemStream(PBUFFER.from_param(initializer), wintypes.UINT(PBUFFER.length(initializer)))))
+  def CreateInMemory(cls, initializer=None, factory=None):
+    return cls(wintypes.LPVOID(shl.SHCreateMemStream(PBUFFER.from_param(initializer), wintypes.UINT(PBUFFER.length(initializer)))), factory)
   @classmethod
-  def CreateOnMemory(cls, handle, delete_on_release=False):
+  def CreateOnMemory(cls, handle, delete_on_release=False, factory=None):
     pIStream = wintypes.LPVOID()
     ole32.CreateStreamOnHGlobal(handle, wintypes.BOOL(delete_on_release), ctypes.byref(pIStream))
     if not pIStream:
       return None
-    return cls(pIStream)
+    return cls(pIStream, factory)
   def Get(self, number):
     b = bytearray(number)
     n = self.__class__._protos['Read'](self.pI, b, number)
@@ -3120,7 +3193,7 @@ class _PBUtil:
   def _adel(arr):
     if getattr(arr, '_needsclear', False):
       for s in arr:
-        ole32.CoTaskMemFree(wintypes.LPVOID.from_buffer(s, s.__class__.pstrName.offset))
+        _IUtil.CoTaskMemFree(wintypes.LPVOID.from_buffer(s, s.__class__.pstrName.offset))
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
 
 class _PBMeta(ctypes.Structure.__class__):
@@ -3153,7 +3226,7 @@ class PROPBAG2(ctypes.Structure, metaclass=_PBMeta):
     self._needsclear = needsclear
   def  __del__(self):
     if getattr(self, '_needsclear', False):
-      ole32.CoTaskMemFree(wintypes.LPVOID.from_buffer(self, self.__class__.pstrName.offset))
+      _IUtil.CoTaskMemFree(wintypes.LPVOID.from_buffer(self, self.__class__.pstrName.offset))
     getattr(self.__class__.__bases__[0], '__del__', id)(self)
   def __ctypes_from_outparam__(self):
     self._needsclear = True
@@ -6893,16 +6966,8 @@ IWMPCore3 = IWMPCore
 
 class _WShUtil:
   @staticmethod
-  def _wrap(n, *r_a, p=sh32):
-    r, *a = r_a if r_a and r_a[0][1] == 0 else (None, *r_a)
-    if r is None:
-      f = ctypes.WINFUNCTYPE(wintypes.ULONG, *(t[0] for t in a))(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((t[1],) for t in a))
-      f.errcheck = _IUtil._errcheck_o if 2 in (t[1] for t in a) else _IUtil._errcheck_no
-    else:
-      f = ctypes.WINFUNCTYPE(*(t[0] for t in r_a), use_last_error=True)(*((p, n) if isinstance(p, int) else ((n, p),)), tuple((t[1],) for t in a))
-      if 2 not in (t[1] for t in a):
-        f.errcheck = _IUtil._errcheck_r
-    return f
+  def _wrap(n, *a, p=sh32):
+    return _IUtil._wrap(n, *a, p=p)
   @staticmethod
   def _bind_pidls(pidl, pidl0):
     if pidl is not None:
@@ -6928,7 +6993,7 @@ class _WShUtil:
       return None
     pwstr = ctypes.cast(pwstr, wintypes.LPWSTR)
     s = pwstr.value
-    ole32.CoTaskMemFree(pwstr)
+    _IUtil.CoTaskMemFree(pwstr)
     return s
 
 WSBindFlags = {'MayBotherUser': 1, 'JustTestExistence': 2}
@@ -7349,7 +7414,7 @@ class IBindCtx(IUnknown, metaclass=_IBCMeta):
     self.RegisterObjectParam('File System Bind Data', IFileSystemBindData())
   def SetAllowNonExistingFolder(self):
     self.RegisterObjectParam('File System Bind Data', IFileSystemBindData(find_data=('Directory',)))
-  CreateBindCtx = classmethod(lambda cls, _cbc=_WShUtil._wrap('CreateBindCtx', (wintypes.DWORD, 1), (wintypes.PLPVOID, 2), p=ole32): cls(_cbc(0)))
+  CreateBindCtx = classmethod(lambda cls, _cbc=_IUtil._wrap('CreateBindCtx', (wintypes.DWORD, 1), (wintypes.PLPVOID, 2)): cls(_cbc(0)))
 
 class WSSHITEMID(ctypes.Structure):
   _fields_ = [('cb', wintypes.USHORT), ('abID', wintypes.BYTE * 0)]
@@ -7394,7 +7459,7 @@ class _WSPIIDLUtil:
     if getattr(arr, '_needsfree', False):
       for s in arr:
         if bool(s):
-          ole32.CoTaskMemFree(s)
+          _IUtil.CoTaskMemFree(s)
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
 
 class _WSPIIDLMeta(ctypes.POINTER(WSITEMIDLIST).__class__):
@@ -7425,7 +7490,7 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
     return self
   def  __del__(self):
     if self and getattr(self, '_needsfree', False):
-      ole32.CoTaskMemFree(self)
+      _IUtil.CoTaskMemFree(self)
     getattr(self.__class__.__bases__[0], '__del__', id)(self)
   @staticmethod
   def Expand(path):
@@ -8562,7 +8627,7 @@ class _WndMeta(type):
     while cls.GetMessage(lpMsg, hwnd, 0, 0) > 0:
       cls.TranslateMessage(lpMsg)
       cls.DispatchMessage(lpMsg)
-  def DefMessageLoopQuit(cls, hwnd):
+  def DefMessageLoopQuit(cls, hwnd=None):
     lpMsg = ctypes.byref(wintypes.MSG())
     while cls.GetMessage(lpMsg, None, 0, 0) > 0:
       cls.TranslateMessage(lpMsg)
@@ -8647,7 +8712,9 @@ class Window(metaclass=_WndMeta):
   PostMessage = _WndUtil._wrap('PostMessageW', wintypes.BOOLE, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
   SendMessage = _WndUtil._wrap('SendMessageW', wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
   SendNotifyMessage = _WndUtil._wrap('SendNotifyMessageW', wintypes.BOOLE, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  PostThreadMessage = _WndUtil._wrap('PostThreadMessageW', wintypes.BOOLE, wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
   PostQuitMessage = _WndUtil._wrap('PostQuitMessage', None, wintypes.INT)
+  MsgWaitForMultipleObjects = _WndUtil._wrap('MsgWaitForMultipleObjects', wintypes.DWORD, wintypes.DWORD, wintypes.PHANDLE, wintypes.BOOL, wintypes.DWORD, wintypes.DWORD)
   DefWindowProc = _WndUtil._wrap('DefWindowProcW', wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
   @WindowProc
   def DefWindowProcQuit(hWnd, Msg, wParam, lParam):
@@ -8658,7 +8725,7 @@ class Window(metaclass=_WndMeta):
 
 
 def Initialize(mode=6, ole=False):
-  if ISetLastError(ole32.OleInitialize(None) if ole else ole32.CoInitializeEx(None, wintypes.DWORD((mode := (4 if mode.lower() in ('mt', 'mta') else 6)) if isinstance(mode, str) else mode))):
+  if (_IUtil.OleInitialize(None) if ole else _IUtil.CoInitializeEx(None, ((mode := (4 if mode.lower() in ('mt', 'mta') else 6)) if isinstance(mode, str) else mode))) is None:
     return None
   if not hasattr(_IUtil._local, 'initialized'):
     _IUtil._local.initialized = [0, 0]
@@ -8668,10 +8735,10 @@ def Initialize(mode=6, ole=False):
 def Uninitialize():
   if hasattr(_IUtil._local, 'initialized'):
     while _IUtil._local.initialized[1] > 0:
-      ISetLastError(ole32.OleUninitialize())
+      _IUtil.OleUninitialize()
       _IUtil._local.initialized[1] -= 1
     while _IUtil._local.initialized[0] > 0:
-      ISetLastError(ole32.CoUninitialize())
+      _IUtil.CoUninitialize()
       _IUtil._local.initialized[0] -= 1
     del _IUtil._local.initialized
     if hasattr(_IUtil._local, 'multithreaded'):
@@ -8691,21 +8758,21 @@ def DllGetClassObject(rclsid, riid, ppv):
   return ctypes.get_last_error()
 def DllCanUnloadNow():
   ISetLastError(0)
-  return 1 if _COMMeta._refs else 0
+  return 1 if _COMMeta._refs or _COMMeta._locks[0] else 0
 
 class COMRegistration:
   @classmethod
-  def _RegisterFactory(cls, clsid, pUnk):
+  def _RegisterFactory(cls, clsid, pUnk, context=1):
     if clsid is None or pUnk is None:
       return None
-    token = cls.CoRegisterClassObject(clsid, pUnk, 1, 1)
+    token = _IUtil.CoRegisterClassObject(clsid, pUnk, context, 1)
     pUnk.Release()
     return token
   @classmethod
-  def RegisterCOMFactory(cls, icls_impl):
+  def RegisterCOMFactory(cls, icls_impl, context=1):
     if not isinstance((impl := getattr(sys.modules.get(icls_impl.__module__), (n := '_COM_%s_impl' % icls_impl.__name__), globals().get(n)) if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
       return None
-    return cls._RegisterFactory(getattr(impl, 'CLSID', None), PCOM(_COM_IClassFactory_impl(_COMMeta._iid_iunknown, impl=impl)))
+    return cls._RegisterFactory(getattr(impl, 'CLSID', None), PCOM(_COM_IClassFactory_impl(_COMMeta._iid_iunknown, impl=impl)), context)
   @classmethod
   def RegisterPSFactory(cls, icls_ps_impl):
     if not isinstance((ps_impl := getattr(sys.modules.get(icls_ps_impl.__module__), (n := '_PS_%s_impl' % icls_ps_impl.__name__), globals().get(n)) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
@@ -8713,39 +8780,41 @@ class COMRegistration:
     return cls._RegisterFactory(getattr(ps_impl, 'CLSID', None), PCOM(_COM_IPSFactoryBuffer_impl(_COMMeta._iid_iunknown, ps_impl=ps_impl)))
   @classmethod
   def RevokeFactory(cls, token):
-    return cls.CoRevokeClassObject(token)
+    return _IUtil.CoRevokeClassObject(token)
   @classmethod
   def RegisterProxyStub(cls, icls_ps_impl, iid=None):
     if not isinstance((ps_impl := getattr(sys.modules.get(icls_ps_impl.__module__), (n := '_PS_%s_impl' % icls_ps_impl.__name__), globals().get(n)) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
       return None
-    return {iid: cls.CoRegisterPSClsid(iid, clsid) for iid in ps_impl.stub_impl._siids[0]} if iid is None else cls.CoRegisterPSClsid(iid, clsid)
+    return {iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in ps_impl.stub_impl._siids[0]} if iid is None else _IUtil.CoRegisterPSClsid(iid, clsid)
   @staticmethod
-  def _RegistryAddFactory(clsid, name, user, server):
+  def _RegistryAddFactory(clsid, name, user, server, local=False):
     if clsid is None:
       return False
     clsid = ('{%s}' % GUID(clsid)).upper()
-    name = 'WICPy.' + name
+    qname = 'WICPy.' + name
     try:
       key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\CLSID\%s' % clsid)
-      winreg.SetValue(key, '', winreg.REG_SZ, name)
+      winreg.SetValue(key, '', winreg.REG_SZ, qname)
       skey = winreg.CreateKey(key, 'InprocServer32')
       winreg.SetValue(skey, '', winreg.REG_SZ, (server or os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', ' '))), "comserver.dll")))
       winreg.SetValueEx(skey, 'ThreadingModel', 0, winreg.REG_SZ, 'Both')
       winreg.CloseKey(skey)
-      winreg.SetValue(key, 'ProgID', winreg.REG_SZ, name)
+      winreg.SetValue(key, 'ProgID', winreg.REG_SZ, qname)
+      if local:
+        winreg.SetValue(key, 'LocalServer32', winreg.REG_SZ, 'pythonw.exe "%s" %s' % (os.path.abspath(globals().get('__file__', ' ')), name))
       winreg.CloseKey(key)
-      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % name)
-      winreg.SetValue(key, '', winreg.REG_SZ, name)
+      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % qname)
+      winreg.SetValue(key, '', winreg.REG_SZ, qname)
       winreg.SetValue(key, 'CLSID', winreg.REG_SZ, clsid)
       winreg.CloseKey(key)
       return True
     except:
       return False
   @classmethod
-  def RegistryAddCOMFactory(cls, icls_impl, name=None, *, user=True, server=None):
+  def RegistryAddCOMFactory(cls, icls_impl, name=None, *, user=True, server=None, local=False):
     if not isinstance((impl := getattr(sys.modules.get(icls_impl.__module__), (n := '_COM_%s_impl' % icls_impl.__name__), globals().get(n)) if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), (impl.__name__[slice((5 if impl.__name__.upper().startswith('_COM_') else 0), (-5 if impl.__name__.lower().endswith('_impl') else None))] if name is None else name), user, server)
+    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), (impl.__name__[slice((5 if impl.__name__.upper().startswith('_COM_') else 0), (-5 if impl.__name__.lower().endswith('_impl') else None))] if name is None else name), user, server, local)
   @classmethod
   def RegistryAddPSFactory(cls, icls_ps_impl, name=None, *, user=True, server=None):
     if not isinstance((ps_impl := getattr(sys.modules.get(icls_ps_impl.__module__), (n := '_PS_%s_impl' % icls_ps_impl.__name__), globals().get(n)) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
@@ -8761,6 +8830,10 @@ class COMRegistration:
       if not (name := winreg.QueryValue(key, '')):
         raise
       winreg.DeleteKey(key, 'InprocServer32')
+      try:
+        winreg.DeleteKey(key, 'LocalServer32')
+      except:
+        pass
       winreg.DeleteKey(key, 'ProgID')
       winreg.CloseKey(key)
       winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\CLSID\%s' % clsid)
@@ -8810,31 +8883,50 @@ class COMRegistration:
       return True
     except:
       return False
-  CoRegisterClassObject = _WShUtil._wrap('CoRegisterClassObject', (PUUID, 1), (wintypes.LPVOID, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.PDWORD, 2), p=ole32)
-  CoRevokeClassObject = _WShUtil._wrap('CoRevokeClassObject', (wintypes.DWORD, 1), p=ole32)
-  CoRegisterPSClsid = _WShUtil._wrap('CoRegisterPSClsid', (PUUID, 1), (PUUID, 1), p=ole32)
 
 class COMSharing:
+  SHAREDMEMORY_MINSIZE = 4096
+  SHAREDMEMORY_MAXSIZE = 1048576
+  SHAREDMEMORY_TIMEOUT = 5
   def __init__(self, ole=False):
     self._ole = ole
     self._request = None
     self._response = [threading.Event(), None, None]
     self._lock = threading.Lock()
     self._thread = None
+    self._code_dir = {}
+    self._sm_pnd = {}
+  @property
+  def tid(self):
+    return getattr(self._thread, 'native_id', None)
   @classmethod
-  def Marshal(cls, iinstance):
+  def Marshal(cls, iinstance, context=3):
     if iinstance:
-      if (istream := IStream(cls.CoMarshalInterThreadInterfaceInStream(iinstance.IID, iinstance), factory=iinstance)) is not None:
+      if context in (3, 4):
+        istream = IStream(_IUtil.CoMarshalInterThreadInterfaceInStream(iinstance.IID, iinstance), factory=iinstance)
+      else:
+        if (istream := IStream.CreateInMemory()) is not None:
+          if _IUtil.CoMarshalInterface(istream, iinstance.IID, iinstance, context, None, 0) is None:
+            istream.Release()
+            istream = None
+          else:
+            istream.factory = iinstance
+            istream.Seek(0, 0)
+      if istream is not None:
         istream._pI = iinstance.pI
       return istream
     else:
       return None
   @classmethod
-  def Unmarshal(cls, istream):
+  def Unmarshal(cls, istream, context=3):
     if istream:
-      istream.AddRef(False)
-      if (iinstance := ((f := istream.factory).__class__)(cls.CoGetInterfaceAndReleaseStream(istream, f.__class__.IID), factory=f.factory)) is not None:
-        iinstance._pI = istream._pI
+      if context in (3, 4):
+        istream.AddRef(False)
+        iinstance = ((f := istream.factory).__class__)(_IUtil.CoGetInterfaceAndReleaseStream(istream, f.__class__.IID), factory=f.factory)
+        if iinstance is not None:
+          iinstance._pI = istream._pI
+      else:
+        iinstance = ((f := istream.factory))(_IUtil.CoUnmarshalInterface(istream, f.IID))
       e = IGetLastError()
       istream.Release()
       ISetLastError(e)
@@ -8847,32 +8939,89 @@ class COMSharing:
       iinstance.AddRef(False)
     return iinstance
   def _message_loop(self):
+    cls = self.__class__
     Initialize(ole=self._ole)
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
     Window.PeekMessage(lpMsg, None, 0x8000, 0x8000, 0)
     (r := self._response)[0].set()
     while Window.GetMessage(lpMsg, None, 0, 0) > 0:
-      if not msg.hWnd and msg.message == 0x8000:
-        if self._request:
-          if (l := len(self._request)) == 3:
-            interface_iinstance, args, kwargs = self._request
-            self._request = None
-            iinstance = interface_iinstance(*args, **kwargs) if callable(interface_iinstance) else (self.__class__.Source(interface_iinstance) if isinstance(interface_iinstance, IUnknown) and not (args or kwargs) else None)
-            interface_iinstance = args = kwargs = None
-            r[1] = self.__class__.Marshal(iinstance), (tuple((k, v) for k, v in vars(iinstance).items() if k not in {'pI', 'refs', 'factory', '_lightweight'}) if iinstance else ())
-            r[2] = IGetLastError()
-            if iinstance:
-              iinstance.Release()
-            iinstance = None
-            r[0].set()
-          elif l == 2:
-            r[1] = (COMRegistration.RegisterCOMFactory if self._request[1][1] else COMRegistration.RegisterPSFactory)(self._request[1][0]) if self._request[0] else COMRegistration.RevokeFactory(self._request[1])
-            self._request = None
-            r[2] = IGetLastError()
-            r[0].set()
+      if not msg.hWnd:
+        if (m := msg.message) == 0x8000:
+          if self._request:
+            if (l := len(self._request)) == 3:
+              gen_iinstance, args, kwargs = self._request
+              self._request = None
+              try:
+                iinstance = gen_iinstance(*args, **kwargs) if callable(gen_iinstance) else (cls.Source(gen_iinstance) if isinstance(gen_iinstance, IUnknown) and not (args or kwargs) else None)
+              except:
+                iinstance = None
+                ISetLastError(0x80070057)
+              gen_iinstance = args = kwargs = None
+              r[1] = cls.Marshal(iinstance), (tuple((k, v) for k, v in vars(iinstance).items() if k not in {'pI', 'refs', 'factory', '_lightweight'}) if iinstance else ())
+              r[2] = IGetLastError()
+              if iinstance:
+                iinstance.Release()
+              iinstance = None
+              r[0].set()
+            elif l == 2:
+              r[1] = (COMRegistration.RegisterCOMFactory if self._request[1][1] else COMRegistration.RegisterPSFactory)(self._request[1][0]) if self._request[0] else COMRegistration.RevokeFactory(self._request[1])
+              self._request = None
+              r[2] = IGetLastError()
+              r[0].set()
+        elif m == 0x8001:
+          while self._sm_pnd:
+            n, istream_t = next(iter(self._sm_pnd.items()))
+            if istream_t[1] < time.time() - cls.SHAREDMEMORY_TIMEOUT:
+              _IUtil.CoReleaseMarshalData(istream_t[0])
+              istream_t[0].Release()
+              del self._sm_pnd[n]
+            else:
+              break
+          istream_t = None
+          if (gen := self._code_dir.get(code := msg.wParam & 0xffffffff)):
+            n = '%08x%08x' % (code, (msg.wParam >> 32))
+            if msg.lParam == 0x10000:
+              if (istream_t := self._sm_pnd.pop(n, None)):
+                istream_t[0].Release()
+                istream_t = None
+            else:
+              if n not in self._sm_pnd:
+                if (h := cls.OpenFileMapping(0xf001f, False, n)):
+                  if (p := cls.MapViewOfFile(h, 0xf001f, 0, 0, 0)):
+                    try:
+                      args, kwargs = json.loads(ctypes.string_at(p))
+                      iinstance = gen(*args, **kwargs)
+                    except:
+                      pass
+                    else:
+                      if iinstance:
+                        istream = cls.Marshal(iinstance, 0)
+                        iinstance.Release()
+                        iinstance = None
+                        if istream:
+                          l = istream.Seek(0, 2)
+                          istream.Seek(0, 0)
+                          if l <= cls.SHAREDMEMORY_MINSIZE and IStream._protos['Read'](istream.pI, wintypes.LPVOID(p), l) and Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, l):
+                            self._sm_pnd[n] = istream, time.time()
+                            continue
+                          _IUtil.CoReleaseMarshalData(istream)
+                          istream.Release()
+                    finally:
+                      gen = args = kwargs = None
+                      istream = None
+                      cls.UnmapViewOfFile(p)
+                      cls.CloseHandle(h)
+                  else:
+                    cls.CloseHandle(h)
+              Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, 0)
         continue
       Window.TranslateMessage(lpMsg)
       Window.DispatchMessage(lpMsg)
+    for istream_t in self._sm_pnd.values():
+      _IUtil.CoReleaseMarshalData(istream_t[0])
+      istream_t[0].Release()
+    istream_t = None
+    self._sm_pnd.clear()
     Uninitialize()
   def Start(self):
     with self._lock:
@@ -8885,18 +9034,18 @@ class COMSharing:
     return True
   def Stop(self):
     with self._lock:
-      if not self._thread or (nid := self._thread.native_id) is None:
+      if (tid := self.tid) is None:
         return False
-      self.__class__.PostThreadMessage(nid, 0x12, 0, 0)
+      Window.PostThreadMessage(tid, 0x12, 0, 0)
       self._thread.join()
       self._thread = None
     return True
   def _RegisterFactory(self, icls_impl, ps):
     with self._lock:
-      if not self._thread or (nid := self._thread.native_id) is None:
+      if (tid := self.tid) is None:
         return None
       self._request = (True, (icls_impl, ps))
-      self.__class__.PostThreadMessage(nid, 0x8000, 0, 0)
+      Window.PostThreadMessage(tid, 0x8000, 0, 0)
       (r := self._response)[0].wait()
       r[0].clear()
       ISetLastError(r[2])
@@ -8909,22 +9058,33 @@ class COMSharing:
     return self._RegisterFactory(icls_ps_impl, False)
   def RevokeFactory(self, token):
     with self._lock:
-      if not self._thread or (nid := self._thread.native_id) is None:
+      if (tid := self.tid) is None:
         return None
       self._request = (False, token)
-      self.__class__.PostThreadMessage(nid, 0x8000, 0, 0)
+      Window.PostThreadMessage(tid, 0x8000, 0, 0)
       (r := self._response)[0].wait()
       r[0].clear()
       ISetLastError(r[2])
       c = r[1]
       r[1] = r[2] = None
     return c
-  def Get(self, interface_iinstance, *args, **kwargs):
-    with self._lock:
-      if not self._thread or (nid := self._thread.native_id) is None:
+  def RecordCode(self, code, gen=None):
+    if code < 0 or code >= 0xffffffff:
+      return False
+    if gen is None:
+      return bool(self._code_dir.pop(code, None))
+    return self._code_dir.setdefault(code, gen) == gen
+  def GetInProc(self, gen_iinstance, *args, **kwargs):
+    if isinstance(gen_iinstance, int):
+      if (gen_iinstance := self._code_dir.get(gen_iinstance)) is None:
+        ISetLastError(0x80070057)
         return None
-      self._request = (interface_iinstance, args, kwargs)
-      self.__class__.PostThreadMessage(nid, 0x8000, 0, 0)
+    with self._lock:
+      if (tid := self.tid) is None:
+        ISetLastError(0x8000ffff)
+        return None
+      self._request = (gen_iinstance, args, kwargs)
+      Window.PostThreadMessage(tid, 0x8000, 0, 0)
       (r := self._response)[0].wait()
       r[0].clear()
       ISetLastError(r[2])
@@ -8933,12 +9093,97 @@ class COMSharing:
           setattr(iinstance, k, v)
       r[1] = r[2] = None
     return iinstance
-  __call__ = Get
-  CoMarshalInterThreadInterfaceInStream = _WShUtil._wrap('CoMarshalInterThreadInterfaceInStream', (PUUID, 1), (wintypes.LPVOID, 1), (wintypes.PLPVOID, 2), p=ole32)
-  CoMarshalInterThreadInterfaceIntoStream = _WShUtil._wrap('CoMarshalInterThreadInterfaceInStream', (PUUID, 1), (wintypes.LPVOID, 1), (wintypes.PLPVOID, 1), p=ole32)
-  CoGetInterfaceAndReleaseStream = _WShUtil._wrap('CoGetInterfaceAndReleaseStream', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), p=ole32)
-  CoGetInterfaceIntoAndReleaseStream = _WShUtil._wrap('CoGetInterfaceAndReleaseStream', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 1), p=ole32)
-  CoMarshalInterface = _WShUtil._wrap('CoMarshalInterface', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.LPVOID, 1), (RPCMSHCTX, 1), (wintypes.LPVOID, 1), (wintypes.DWORD, 1), p=ole32)
-  CoUnmarshalInterface = _WShUtil._wrap('CoUnmarshalInterface', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2), p=ole32)
-  CoReleaseMarshalData = _WShUtil._wrap('CoReleaseMarshalData', (wintypes.LPVOID, 1), p=ole32)
-  PostThreadMessage = _WndUtil._wrap('PostThreadMessageW', wintypes.BOOLE, wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+  __call__ = GetInProc
+  @classmethod
+  def GetInterProc(cls, icls, tid=None, code=None, /, *args, **kwargs):
+    if tid is None:
+      if code is not None or args or kwargs:
+        ISetLastError(0x80070057)
+        return None
+      try:
+        clsid = icls._for_json
+      except:
+        ISetLastError(0x80040154)
+        return None
+      return icls(_IUtil.CoCreateInstance(clsid, None, 4, icls.IID))
+    if code < 0 or code > 0xffffffff:
+      ISetLastError(0x80070057)
+      return None
+    try:
+      if (l := len(b := json.dumps((args, kwargs), default=_IUtil._json_def).encode())) >= cls.SHAREDMEMORY_MAXSIZE:
+        ISetLastError(0x8007000e)
+        return None
+    except:
+      ISetLastError(0x80070057)
+      return None
+    iinstance = None
+    wParam = code | ((i := int.from_bytes(os.urandom(4), 'little')) << 32)
+    if (h := cls.CreateFileMapping(0xffffffffffffffff, None, 0x4, 0, max(l + 1, cls.SHAREDMEMORY_MINSIZE), '%08x%08x' % (code, i))):
+      if (p := cls.MapViewOfFile(h, 0xf001f, 0, 0, 0)):
+        ctypes.memmove(p, b, l)
+        if Window.PostThreadMessage(tid, 0x8001, wParam, threading.current_thread().native_id):
+          lpMsg = ctypes.byref((msg := wintypes.MSG()))
+          t = time.time() + cls.SHAREDMEMORY_TIMEOUT
+          while True:
+            while Window.PeekMessage(lpMsg, None, 0, 0, 1):
+              if msg.message == 0x8001 and msg.wParam == wParam:
+                t = None
+                if (l := msg.lParam):
+                  iinstance = cls.Unmarshal(IStream(shl.SHCreateMemStream(wintypes.LPVOID(p), l), icls), 0)
+                  Window.PostThreadMessage(tid, 0x8001, wParam, 0x10000)
+                else:
+                  ISetLastError(0x80010105)
+                break
+            if t is None or Window.MsgWaitForMultipleObjects(0, None, False, math.ceil(1000 * max(t - time.time(), 0)), 8) == 258:
+              break
+          if t is not None:
+            ISetLastError(0x8001011f)
+        else:
+          ISetLastError(0x80010104)
+        cls.UnmapViewOfFile(p)
+      else:
+        ISetLastError(0x8007000e)
+      cls.CloseHandle(h)
+    else:
+      ISetLastError(0x8007000e)
+    return iinstance
+  class _get:
+    def __get__(self, instance, owner=None):
+      return owner.GetInterProc if instance is None else instance.GetInProc
+  Get = _get()
+  @classmethod
+  def GetOutProcFactory(cls, icls):
+    try:
+      clsid = icls._for_json
+    except:
+      ISetLastError(0x80040154)
+      return None
+    return IClassFactory(_IUtil.CoGetClassObject(clsid, 4, None, IClassFactory.IID))
+  class _get_factory:
+    def __get__(self, instance, owner=None):
+      if instance:
+        raise AttributeError('\'%s\' object has no attribute \'GetOutProcFactory\'' % owner.__name__)
+      return owner.GetOutProcFactory
+  GetFactory = _get_factory()
+  ThreadId = tid
+  CreateFileMapping = _IUtil._wrap('CreateFileMappingW', (wintypes.HANDLE, 0), (wintypes.HANDLE, 1), (wintypes.LPVOID, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.LPCWSTR, 1), p=kernel32)
+  OpenFileMapping = _IUtil._wrap('OpenFileMappingW', (wintypes.HANDLE, 0), (wintypes.DWORD, 1), (wintypes.BOOL, 1), (wintypes.LPCWSTR, 1), p=kernel32)
+  CloseHandle = _IUtil._wrap('CloseHandle', (wintypes.BOOLE, 0), (wintypes.HANDLE, 1), p=kernel32)
+  MapViewOfFile = _IUtil._wrap('MapViewOfFile', (wintypes.LPVOID, 0), (wintypes.HANDLE, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.SIZE_T, 1), p=kernel32)
+  UnmapViewOfFile = _IUtil._wrap('UnmapViewOfFile', (wintypes.BOOLE, 0), (wintypes.LPVOID, 1), p=kernel32)
+
+if __name__ == '__main__' and len(sys.argv) == 3 and sys.argv[-1] == '-Embedding':
+  Initialize()
+  if (icls := globals().get(sys.argv[1])) is None or not isinstance(icls, _IMeta):
+    exit(1)
+  lpMsg = ctypes.byref(wintypes.MSG())
+  Window.PeekMessage(lpMsg, None, 0, 0, 0)
+  if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
+    exit(1)
+  while Window.GetMessage(lpMsg, None, 0, 0) > 0:
+    Window.TranslateMessage(lpMsg)
+    Window.DispatchMessage(lpMsg)
+    if not _COMMeta._locks[0] and len(_COMMeta._refs) == 1:
+      break
+  COMRegistration.RevokeFactory(to)
+  Uninitialize()
