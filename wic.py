@@ -300,13 +300,13 @@ COMMSHCTX = type('COMMSHCTX', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): 
 COMPMSHCTX = ctypes.POINTER(COMMSHCTX)
 
 COMClsCtx = {'InProcServer': 0x1, 'InProcHandler': 0x2, 'LocalServer': 0x4, 'RemoteServer': 0x10, 'DisableAaA': 0x8000, 'EnableAaA': 0x10000, 'FromDefaultContext': 0x20000, 'EnableCloaking': 0x100000, 'PSDll': 0x80000000}
-COMCLSCTX = type('COMCLSCTX', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMClsCtx.items()}, '_tab_cn': {c: n for n, c in COMClsCtx.items()}, '_def': 3})
+COMCLSCTX = type('COMCLSCTX', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMClsCtx.items()}, '_tab_cn': {c: n for n, c in COMClsCtx.items()}, '_def': 1})
 
 COMRegCls = {'SingleUse': 0, 'MultipleUse': 1, 'MultiSeparate': 2, 'Suspended': 4, 'Surrogate': 8, 'Agile': 16}
-COMREGCLS = type('COMREGCLS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMRegCls.items()}, '_tab_cn': {c: n for n, c in COMRegCls.items()}, '_def': 3})
+COMREGCLS = type('COMREGCLS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMRegCls.items()}, '_tab_cn': {c: n for n, c in COMRegCls.items()}, '_def': 1})
 
 COMMshlFlags = {'Normal': 0, 'TableStrong': 1, 'TableWeak': 2, 'NoPing': 4}
-COMMSHLFLAGS = type('COMMSHLFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMMshlFlags.items()}, '_tab_cn': {c: n for n, c in COMMshlFlags.items()}, '_def': 3})
+COMMSHLFLAGS = type('COMMSHLFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMMshlFlags.items()}, '_tab_cn': {c: n for n, c in COMMshlFlags.items()}, '_def': 0})
 
 class _IUtil:
   _local = threading.local()
@@ -385,8 +385,11 @@ class _IMeta(type):
   def __mul__(bcls, size):
     return _IUtil._mul_cache.get((bcls, size)) or _IUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (PCOM * size, wintypes.LPVOID * size), {'_ibase': bcls}))
   @property
-  def _for_json(cls):
-    return getattr(sys.modules.get(cls.__module__), (n := '_COM_%s_impl' % cls.__name__), globals().get(n)).CLSID
+  def _impl(cls):
+    return getattr(getattr(sys.modules.get(cls.__module__), (n := '_COM_' + cls.__name__), globals().get(n)), '_impl', None)
+  @property
+  def _ps_impl(cls):
+    return getattr(getattr(sys.modules.get(cls.__module__), (n := '_COM_' + cls.__name__), globals().get(n)), '_ps_impl', None)
 
 class _COMMeta(type):
   class _Offsetted(dict):
@@ -474,6 +477,24 @@ class _COMMeta(type):
   _iid_ipsfactorybuffer = GUID(0xd5f569d0, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a)
   _iid_irpcproxybuffer = GUID(0xd5f56a34, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a)
   _iid_irpcstubbuffer = GUID(0xd5f56afc, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a)
+  class _impl:
+    def __get__(self, cls, mcls=None):
+      if (impl := vars(cls).get('_impl_') or getattr(sys.modules.get(cls.__module__), (n := cls.__name__ + '_impl'), globals().get(n))) is None:
+        cls._impl_ = impl = _COMMeta._COMImplMeta(n, (), _COMMeta._COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
+      return impl
+    def __set__(self, cls, value):
+      if not isinstance(value, _COMMeta._COMImplMeta):
+        raise ValueError('value must be a COM implementation class')
+      cls._impl_ = value
+  _impl = _impl()
+  class _ps_impl:
+    def __get__(self, cls, mcls=None):
+      return vars(cls).get('_ps_impl_') or getattr(sys.modules.get(cls.__module__), (n := '_PS%s_impl' % cls.__name__[4:]), globals().get(n))
+    def __set__(self, cls, value):
+      if not isinstance(value, _PSImplMeta):
+        raise ValueError('value must be a PS implementation class')
+      cls._ps_impl_ = value
+  _ps_impl = _ps_impl()
   @classmethod
   def __prepare__(mcls, name, bases, interfaces=None):
     if interfaces:
@@ -494,9 +515,7 @@ class _COMMeta(type):
     if (GUID(iid) not in cls._iids):
       ISetLastError(0x80004002)
       return None
-    if (impl := vars(cls).get('_impl') or getattr(sys.modules.get(cls.__module__), (n := cls.__name__ + '_impl'), globals().get(n))) is None:
-      cls._impl = impl = _COMMeta._COMImplMeta(n, (), _COMMeta._COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
-    return impl(iid, **kwargs)
+    return cls._impl(iid, **kwargs)
   def __init__(cls, *args, interfaces=None):
     super().__init__(*args)
     cls.vtbl = v = (wintypes.LPVOID * len(cls._vtbl))()
@@ -557,7 +576,7 @@ class IUnknown(metaclass=_IMeta):
     if not clsid_component:
       if clsid_component is not False:
         return None
-      if (clsid_component := getattr(cls, 'CLSID', getattr(sys.modules.get(cls.__module__), (n := '_COM_' + cls.__name__), globals().get(n)))) is None:
+      if (clsid_component := getattr(cls, 'CLSID', cls._impl)) is None:
         raise TypeError('%s does not have an implicit constructor' % cls.__name__)
     if isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
       if not (pI := wintypes.LPVOID(clsid_component(cls.IID))):
@@ -814,7 +833,7 @@ class IClassFactory(IUnknown):
         clsid_component = 0
       else:
         return None
-    elif isinstance(clsid_component, _IMeta) and (clsid_component := getattr((icls := clsid_component), 'CLSID', getattr(sys.modules.get(icls.__module__), (n := '_COM_' + icls.__name__), globals().get(n)))) is None:
+    elif isinstance(clsid_component, _IMeta) and (clsid_component := getattr((icls := clsid_component), 'CLSID', icls._impl)) is None:
         raise TypeError('%s does not have an implicit constructor' % icls.__name__)
     if clsid_component == 0 or isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
       if not (pI := wintypes.LPVOID(_COM_IClassFactory(cls.IID, impl=clsid_component))):
@@ -1738,6 +1757,7 @@ class _COM_IEnumInterfaceFactory_Stub(_COM_IRpcInProcStub):
 
 class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IEnumInterface_Proxy, _COM_IEnumInterface_Stub), (_COM_IEnumInterfaceFactory_Proxy, _COM_IEnumInterfaceFactory_Stub))):
   CLSID = True
+_COM_IEnumInterface._ps_impl = _PS_IEnumInterfaceFactory_impl
 
 class IStream(IUnknown):
   IID = GUID(0x0000000c, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
@@ -7369,6 +7389,7 @@ class _COM_IFileSystemBindData_Stub(_COM_IRpcStub):
 
 class _PS_IFileSystemBindData_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IFileSystemBindData_Proxy, _COM_IFileSystemBindData_Stub),)):
   CLSID = True
+_COM_IFileSystemBindData._ps_impl = _PS_IFileSystemBindData_impl
 
 class _IBCMeta(_IMeta):
   @property
@@ -8770,12 +8791,12 @@ class COMRegistration:
     return token
   @classmethod
   def RegisterCOMFactory(cls, icls_impl, context=1):
-    if not isinstance((impl := getattr(sys.modules.get(icls_impl.__module__), (n := '_COM_%s_impl' % icls_impl.__name__), globals().get(n)) if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
       return None
     return cls._RegisterFactory(getattr(impl, 'CLSID', None), PCOM(_COM_IClassFactory_impl(_COMMeta._iid_iunknown, impl=impl)), context)
   @classmethod
   def RegisterPSFactory(cls, icls_ps_impl):
-    if not isinstance((ps_impl := getattr(sys.modules.get(icls_ps_impl.__module__), (n := '_PS_%s_impl' % icls_ps_impl.__name__), globals().get(n)) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
       return None
     return cls._RegisterFactory(getattr(ps_impl, 'CLSID', None), PCOM(_COM_IPSFactoryBuffer_impl(_COMMeta._iid_iunknown, ps_impl=ps_impl)))
   @classmethod
@@ -8783,7 +8804,7 @@ class COMRegistration:
     return _IUtil.CoRevokeClassObject(token)
   @classmethod
   def RegisterProxyStub(cls, icls_ps_impl, iid=None):
-    if not isinstance((ps_impl := getattr(sys.modules.get(icls_ps_impl.__module__), (n := '_PS_%s_impl' % icls_ps_impl.__name__), globals().get(n)) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
       return None
     return {iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in ps_impl.stub_impl._siids[0]} if iid is None else _IUtil.CoRegisterPSClsid(iid, clsid)
   @staticmethod
@@ -8812,12 +8833,12 @@ class COMRegistration:
       return False
   @classmethod
   def RegistryAddCOMFactory(cls, icls_impl, name=None, *, user=True, server=None, local=False):
-    if not isinstance((impl := getattr(sys.modules.get(icls_impl.__module__), (n := '_COM_%s_impl' % icls_impl.__name__), globals().get(n)) if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
       return False
     return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), (impl.__name__[slice((5 if impl.__name__.upper().startswith('_COM_') else 0), (-5 if impl.__name__.lower().endswith('_impl') else None))] if name is None else name), user, server, local)
   @classmethod
   def RegistryAddPSFactory(cls, icls_ps_impl, name=None, *, user=True, server=None):
-    if not isinstance((ps_impl := getattr(sys.modules.get(icls_ps_impl.__module__), (n := '_PS_%s_impl' % icls_ps_impl.__name__), globals().get(n)) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
       return False
     return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ((ps_impl.__name__[slice((4 if ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if ps_impl.__name__.lower().endswith('_impl') else None))] + 'ProxyStub') if name is None else name), user, server)
   @staticmethod
@@ -8844,12 +8865,12 @@ class COMRegistration:
       return False
   @classmethod
   def RegistryRemoveCOMFactory(cls, icls_impl, *, user=True):
-    if not isinstance((impl := getattr(sys.modules.get(icls_impl.__module__), (n := '_COM_%s_impl' % icls_impl.__name__), globals().get(n)) if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
       return False
     return cls._RegistryRemoveFactory(getattr(impl, 'CLSID', None), user)
   @classmethod
   def RegistryRemovePSFactory(cls, icls_ps_impl, *, user=True):
-    if not isinstance((ps_impl := getattr(sys.modules.get(icls_ps_impl.__module__), (n := '_PS_%s_impl' % icls_ps_impl.__name__), globals().get(n)) if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
       return False
     return cls._RegistryRemoveFactory(getattr(ps_impl, 'CLSID', None), user)
   @classmethod
@@ -8858,11 +8879,11 @@ class COMRegistration:
       if name is not None:
         ps_impl = getattr(sys.modules.get(cls.__module__), (n := '_PS_%s_impl' % name), globals().get(n))
       elif isinstance(iid_icls, _IMeta):
-        ps_impl = getattr(sys.modules.get(iid_icls.__module__), (n := '_PS_%s_impl' % iid_icls.__name__), globals().get(n))
+        ps_impl = iid_icls._ps_impl
     if ps_impl is None or not isinstance(ps_impl, _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
       return False
     if name is None:
-      name = iid_icls.__name__ if isinstance(iid_icls, _COMMeta) else ps_impl.__name__[slice((4 if ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if ps_impl.__name__.lower().endswith('_impl') else None))]
+      name = iid_icls.__name__ if isinstance(iid_icls, _IMeta) else ps_impl.__name__[slice((4 if ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if ps_impl.__name__.lower().endswith('_impl') else None))]
     clsid = ('{%s}' % GUID(clsid)).upper()
     iid = ('{%s}' % GUID(getattr(iid_icls, 'IID', iid_icls))).upper()
     name = 'WICPy.' + name
@@ -8875,8 +8896,8 @@ class COMRegistration:
     except:
       return False
   @classmethod
-  def RegistryRemoveProxyStub(cls, iid_name, *, user=True):
-    iid = ('{%s}' % GUID(getattr(iid_name, 'IID', iid_name))).upper()
+  def RegistryRemoveProxyStub(cls, iid_icls, *, user=True):
+    iid = ('{%s}' % GUID(getattr(iid_icls, 'IID', iid_icls))).upper()
     try:
       winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\Interface\%s\ProxyStubClsid32' % iid)
       winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\Interface\%s' % iid)
@@ -9147,10 +9168,10 @@ class COMSharing:
     else:
       ISetLastError(0x8007000e)
     return iinstance
-  class _get:
-    def __get__(self, instance, owner=None):
-      return owner.GetInterProc if instance is None else instance.GetInProc
-  Get = _get()
+  class Get:
+    def __get__(self, obj, cls=None):
+      return cls.GetInterProc if obj is None else obj.GetInProc
+  Get = Get()
   @classmethod
   def GetOutProcFactory(cls, icls):
     try:
@@ -9159,12 +9180,12 @@ class COMSharing:
       ISetLastError(0x80040154)
       return None
     return IClassFactory(_IUtil.CoGetClassObject(clsid, 4, None, IClassFactory.IID))
-  class _get_factory:
-    def __get__(self, instance, owner=None):
-      if instance:
-        raise AttributeError('\'%s\' object has no attribute \'GetOutProcFactory\'' % owner.__name__)
-      return owner.GetOutProcFactory
-  GetFactory = _get_factory()
+  class GetFactory:
+    def __get__(self, obj, cls=None):
+      if obj:
+        raise AttributeError('\'%s\' object has no attribute \'GetOutProcFactory\'' % cls.__name__)
+      return cls.GetOutProcFactory
+  GetFactory = GetFactory()
   ThreadId = tid
   CreateFileMapping = _IUtil._wrap('CreateFileMappingW', (wintypes.HANDLE, 0), (wintypes.HANDLE, 1), (wintypes.LPVOID, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.LPCWSTR, 1), p=kernel32)
   OpenFileMapping = _IUtil._wrap('OpenFileMappingW', (wintypes.HANDLE, 0), (wintypes.DWORD, 1), (wintypes.BOOL, 1), (wintypes.LPCWSTR, 1), p=kernel32)
