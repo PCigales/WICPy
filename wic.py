@@ -8784,27 +8784,31 @@ def DllCanUnloadNow():
 class COMRegistration:
   @classmethod
   def _RegisterFactory(cls, clsid, pUnk, context=1):
-    if clsid is None or pUnk is None:
+    if clsid is None or not pUnk:
+      ISetLastError(0x80004003)
       return None
     token = _IUtil.CoRegisterClassObject(clsid, pUnk, context, 1)
     pUnk.Release()
     return token
   @classmethod
   def RegisterCOMFactory(cls, icls_impl, context=1):
-    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta) or (clsid := getattr(impl, 'CLSID', None)) is None:
+      ISetLastError(0x80040154)
       return None
-    return cls._RegisterFactory(getattr(impl, 'CLSID', None), PCOM(_COM_IClassFactory_impl(_COMMeta._iid_iunknown, impl=impl)), context)
+    return cls._RegisterFactory(clsid, PCOM(_COM_IClassFactory_impl(_COMMeta._iid_iunknown, impl=impl)), context)
   @classmethod
   def RegisterPSFactory(cls, icls_ps_impl):
-    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
+      ISetLastError(0x80040154)
       return None
-    return cls._RegisterFactory(getattr(ps_impl, 'CLSID', None), PCOM(_COM_IPSFactoryBuffer_impl(_COMMeta._iid_iunknown, ps_impl=ps_impl)))
+    return cls._RegisterFactory(clsid, PCOM(_COM_IPSFactoryBuffer_impl(_COMMeta._iid_iunknown, ps_impl=ps_impl)))
   @classmethod
   def RevokeFactory(cls, token):
     return _IUtil.CoRevokeClassObject(token)
   @classmethod
   def RegisterProxyStub(cls, icls_ps_impl, iid=None):
     if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
+      ISetLastError(0x80040154)
       return None
     return {iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in ps_impl.stub_impl._siids[0]} if iid is None else _IUtil.CoRegisterPSClsid(iid, clsid)
   @staticmethod
@@ -8964,7 +8968,9 @@ class COMSharing:
     Initialize(ole=self._ole)
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
     Window.PeekMessage(lpMsg, None, 0x8000, 0x8000, 0)
-    (r := self._response)[0].set()
+    (r := self._response)[1] = None
+    r[2] = 0
+    r[0].set()
     while Window.GetMessage(lpMsg, None, 0, 0) > 0:
       if not msg.hWnd:
         if (m := msg.message) == 0x8000:
@@ -9044,15 +9050,34 @@ class COMSharing:
     istream_t = None
     self._sm_pnd.clear()
     Uninitialize()
-  def Start(self):
+  def _message_loop_server(self, icls):
+    Initialize(ole=self._ole)
+    lpMsg = ctypes.byref((msg := wintypes.MSG()))
+    Window.PeekMessage(lpMsg, None, 0, 0, 0)
+    to = COMRegistration.RegisterCOMFactory(icls, 4)
+    (r := self._response)[1] = None
+    r[2] = IGetLastError() | 0x80040154 if to is None else IGetLastError()
+    r[0].set()
+    if r[2] == 0:
+      while Window.GetMessage(lpMsg, None, 0, 0) > 0:
+        Window.TranslateMessage(lpMsg)
+        Window.DispatchMessage(lpMsg)
+      COMRegistration.RevokeFactory(to)
+    Uninitialize()
+  def Start(self, icls=None):
     with self._lock:
+      (r := self._response)[0].clear()
       if self._thread:
         return False
-      self._thread = threading.Thread(target=self._message_loop, daemon=True)
+      self._thread = threading.Thread(target=self._message_loop, daemon=True) if icls is None else threading.Thread(target=self._message_loop_server, args=(icls,), daemon=True)
       self._thread.start()
-      self._response[0].wait()
-      self._response[0].clear()
-    return True
+      r[0].wait()
+      r[0].clear()
+      if ISetLastError(r[2]):
+        self._thread.join()
+        self._thread = None
+        return False
+      return True
   def Stop(self):
     with self._lock:
       if (tid := self.tid) is None:
@@ -9121,9 +9146,7 @@ class COMSharing:
       if code is not None or args or kwargs:
         ISetLastError(0x80070057)
         return None
-      try:
-        clsid = icls._for_json
-      except:
+      if (clsid := getattr(icls._impl, 'CLSID', getattr(icls, 'CLSID', None))) is None:
         ISetLastError(0x80040154)
         return None
       return icls(_IUtil.CoCreateInstance(clsid, None, 4, icls.IID))
@@ -9174,9 +9197,7 @@ class COMSharing:
   Get = Get()
   @classmethod
   def GetOutProcFactory(cls, icls):
-    try:
-      clsid = icls._for_json
-    except:
+    if (clsid := getattr(icls._impl, 'CLSID', getattr(icls, 'CLSID', None))) is None:
       ISetLastError(0x80040154)
       return None
     return IClassFactory(_IUtil.CoGetClassObject(clsid, 4, None, IClassFactory.IID))
