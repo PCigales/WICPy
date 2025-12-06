@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include <windows.h>
 #include <Python.h>
+#define DLLEXPORT __declspec(dllexport)
 
 PyObject *py_mod = NULL;
 INT py_ini = 1;
 
-HRESULT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
+HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
   PyGILState_STATE state = PyGILState_Ensure();
   PyObject *py_func;
   if (! py_mod || ! (py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject"))) {
@@ -34,7 +35,7 @@ HRESULT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOI
   return res;
 }
 
-HRESULT WINAPI DllCanUnloadNow(void) {
+HRESULT DLLEXPORT WINAPI DllCanUnloadNow(void) {
   PyGILState_STATE state = PyGILState_Ensure();
   PyObject *py_func;
   if (! py_mod || ! (py_func = PyObject_GetAttrString(py_mod, "DllCanUnloadNow"))) {
