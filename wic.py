@@ -9069,6 +9069,7 @@ class COMSharing:
     Initialize(ole=self._ole)
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
     Window.PeekMessage(lpMsg, None, 0, 0, 0)
+    (r := self._response)[1] = None
     if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
       r[2] = IGetLastError() | 0x80040154
     elif (psto := COMRegistration.RegisterPSFactory(icls)) is None:
@@ -9080,7 +9081,6 @@ class COMSharing:
       COMRegistration.RevokeFactory(to)
     else:
       r[2] = 0
-    (r := self._response)[1] = None
     r[0].set()
     if r[2] == 0:
       while Window.GetMessage(lpMsg, None, 0, 0) > 0:
