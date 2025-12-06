@@ -161,9 +161,7 @@ class _BGUID:
     return '<%s: %s>' % (self.guid, self.name)
   def __repr__(self):
     return str(self)
-  @property
-  def _for_json(self):
-    return self.guid
+  _for_json = guid
 
 class _BPGUID:
   @classmethod
@@ -241,9 +239,7 @@ class _BCode:
     return str(self)
   def __hash__(self):
     return int.__hash__(self.code)
-  @property
-  def _for_json(self):
-    return self.code
+  _for_json = code
 
 class _BCodeOr(_BCode):
   @classmethod
@@ -815,7 +811,7 @@ class _COM_IClassFactory(_COM_IUnknown):
     else:
       return 0x80004003
     return 0
-    
+
 class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory,)):
   def __new__(cls, iid=0, *, _bnew=__new__, impl=0):
     return _bnew(cls, iid, constr=impl)
@@ -1898,6 +1894,7 @@ class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
     self._needsfree = True
     self.bstr = ctypes.cast(self, ctypes.c_void_p)
     return self
+  _for_json = content
 PBSTR = ctypes.POINTER(BSTR)
 class BSTRING(BSTR):
   _type_ = wintypes.WCHAR
@@ -1983,6 +1980,7 @@ class DATE(wintypes.DOUBLE, metaclass=_DATEMeta):
   @content.setter
   def content(self, data):
     self.value = FDate(data)
+  _for_json = content
 
 class IFileTime(_DT, int):
   _origin = (1601, 1, 1, 0, 0, 0, 0)
@@ -2012,7 +2010,7 @@ class FILETIME(wintypes.FILETIME, metaclass=_FILETIMEMeta):
   @content.setter
   def content(self, data):
     self.__init__(data)
-  value = content
+  _for_json = value = content
 
 class COMPONENTS(wintypes.DWORD):
   def __init__(self, val=0):
@@ -2032,6 +2030,7 @@ class COMPONENTS(wintypes.DWORD):
     return '<%d: %s>' % (self.value, self.components)
   def __repr__(self):
     return str(self)
+  _for_json = code
 
 class _WSUtil:
   _mul_cache = {}
@@ -2074,6 +2073,7 @@ class _BDStruct:
     return self.to_dict()
   def __ctypes_from_outparam__(self):
     return self.to_dict()
+  _for_json = value
 
 class _BTStruct:
   @classmethod
@@ -2086,6 +2086,7 @@ class _BTStruct:
     return self.to_tuple()
   def __ctypes_from_outparam__(self):
     return self.to_tuple()
+  _for_json = value
 
 class _BPStruct:
   @classmethod
@@ -2094,6 +2095,7 @@ class _BPStruct:
   @property
   def value(self):
     return getattr((s := self.contents), 'value', s) if self else None
+  _for_json = value
 
 class _BPAStruct:
   @classmethod
@@ -2101,6 +2103,7 @@ class _BPAStruct:
     return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else (cls._type_ * len(obj))(*obj))
   def value(self, count):
     return getattr((a := ctypes.cast(self, ctypes.POINTER(self.__class__._type_ * count)).contents), 'value', a) if self else None
+  _for_json = value
 
 class _BLOBUtil:
   _mul_cache = {}
@@ -2133,6 +2136,9 @@ class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   @classmethod
   def from_param(cls, obj):
     return obj if isinstance(obj, BLOB) else cls(obj)
+  @property
+  def _for_json(self):
+    return None if (c := self.content) is None else tuple(c)
 
 class PCOMSTREAM(PCOM):
   icls = IStream
@@ -3543,6 +3549,9 @@ class _BMFraction(Fraction):
     return tuple(map(cls.to_srational, f)) if isinstance(f, (tuple, list, ctypes.Array)) else struct.unpack('=Q', struct.pack('=ll', *(f if isinstance(f, _BMFraction) else cls(f)).limit()))[0]
   def __repr__(self):
     return str(self)
+  @property
+  def _for_json(self):
+    return super().__str__()
 
 class MetadataFloatFraction(_BMFraction):
   def __str__(self):
@@ -5315,6 +5324,9 @@ class D2D1MATRIX3X2F(wintypes.FLOAT * 6):
     return m
   def __eq__(self, other):
     return all(self[i] == other[i] for i in range(6))
+  @property
+  def _for_json(self):
+    return tuple(self)
 class D2D1PMATRIX3X2F(ctypes.POINTER(D2D1MATRIX3X2F)):
   _type_ = D2D1MATRIX3X2F
   @classmethod
@@ -5352,6 +5364,9 @@ class D2D1MATRIX4X4F(wintypes.FLOAT * 16):
     return self
   def __eq__(self, other):
     return all(self[i] == other[i] for i in range(16))
+  @property
+  def _for_json(self):
+    return tuple(self)
 class D2D1PMATRIX4X4F(ctypes.POINTER(D2D1MATRIX4X4F)):
   _type_ = D2D1MATRIX4X4F
   @classmethod
