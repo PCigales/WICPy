@@ -9069,14 +9069,24 @@ class COMSharing:
     Initialize(ole=self._ole)
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
     Window.PeekMessage(lpMsg, None, 0, 0, 0)
-    to = COMRegistration.RegisterCOMFactory(icls, 4)
+    if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
+      r[2] = IGetLastError() | 0x80040154
+    elif (psto := COMRegistration.RegisterPSFactory(icls)) is None:
+      r[2] = IGetLastError() | 0x80040154
+      COMRegistration.RevokeFactory(to)
+    elif (ps := COMRegistration.RegisterProxyStub(icls)) is None or not all(ps.values()):
+      r[2] = IGetLastError() | 0x80040154
+      COMRegistration.RevokeFactory(psto)
+      COMRegistration.RevokeFactory(to)
+    else:
+      r[2] = 0
     (r := self._response)[1] = None
-    r[2] = IGetLastError() | 0x80040154 if to is None else IGetLastError()
     r[0].set()
     if r[2] == 0:
       while Window.GetMessage(lpMsg, None, 0, 0) > 0:
         Window.TranslateMessage(lpMsg)
         Window.DispatchMessage(lpMsg)
+      COMRegistration.RevokeFactory(psto)
       COMRegistration.RevokeFactory(to)
     Uninitialize()
   def Start(self, icls=None):
@@ -9235,12 +9245,13 @@ if __name__ == '__main__' and len(sys.argv) == 3 and sys.argv[-1] == '-Embedding
     exit(1)
   lpMsg = ctypes.byref(wintypes.MSG())
   Window.PeekMessage(lpMsg, None, 0, 0, 0)
-  if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
+  if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None or (psto := COMRegistration.RegisterPSFactory(icls)) is None or (ps := COMRegistration.RegisterProxyStub(icls)) is None or not all(ps.values()):
     exit(1)
   while Window.GetMessage(lpMsg, None, 0, 0) > 0:
     Window.TranslateMessage(lpMsg)
     Window.DispatchMessage(lpMsg)
-    if not _COMMeta._locks[0] and len(_COMMeta._refs) == 1:
+    if not _COMMeta._locks[0] and len(_COMMeta._refs) == 2:
       break
+  COMRegistration.RevokeFactory(psto)
   COMRegistration.RevokeFactory(to)
   Uninitialize()
