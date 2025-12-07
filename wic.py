@@ -1490,6 +1490,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
       return 0
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
+  CLSID = True
   def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
     return _bnew(cls, iid, cls._items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
   def __init__(self, *, items, index, container):
@@ -8978,14 +8979,17 @@ class COMSharing:
     if (iinstance := iinstance.__class__(getattr(iinstance, '_pI', iinstance.pI), factory=iinstance.factory) if iinstance else None):
       iinstance.AddRef(False)
     return iinstance
-  def _message_loop(self):
+  def _message_loop(self, icls=None):
     cls = self.__class__
     Initialize(ole=self._ole)
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
     Window.PeekMessage(lpMsg, None, 0x8000, 0x8000, 0)
     (r := self._response)[1] = None
-    r[2] = 0
+    r[2] = 0 if icls is None or (to := COMRegistration.RegisterCOMFactory(icls, 4)) is not None else IGetLastError() | 0x80040154
     r[0].set()
+    if r[2]:
+      Uninitialize()
+      return
     while Window.GetMessage(lpMsg, None, 0, 0) > 0:
       if not msg.hWnd:
         if (m := msg.message) == 0x8000:
@@ -9064,29 +9068,7 @@ class COMSharing:
       istream_t[0].Release()
     istream_t = None
     self._sm_pnd.clear()
-    Uninitialize()
-  def _message_loop_server(self, icls):
-    Initialize(ole=self._ole)
-    lpMsg = ctypes.byref((msg := wintypes.MSG()))
-    Window.PeekMessage(lpMsg, None, 0, 0, 0)
-    (r := self._response)[1] = None
-    if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
-      r[2] = IGetLastError() | 0x80040154
-    elif (psto := COMRegistration.RegisterPSFactory(icls)) is None:
-      r[2] = IGetLastError() | 0x80040154
-      COMRegistration.RevokeFactory(to)
-    elif (ps := COMRegistration.RegisterProxyStub(icls)) is None or not all(ps.values()):
-      r[2] = IGetLastError() | 0x80040154
-      COMRegistration.RevokeFactory(psto)
-      COMRegistration.RevokeFactory(to)
-    else:
-      r[2] = 0
-    r[0].set()
-    if r[2] == 0:
-      while Window.GetMessage(lpMsg, None, 0, 0) > 0:
-        Window.TranslateMessage(lpMsg)
-        Window.DispatchMessage(lpMsg)
-      COMRegistration.RevokeFactory(psto)
+    if icls is not None:
       COMRegistration.RevokeFactory(to)
     Uninitialize()
   def Start(self, icls=None):
@@ -9094,7 +9076,7 @@ class COMSharing:
       (r := self._response)[0].clear()
       if self._thread:
         return False
-      self._thread = threading.Thread(target=self._message_loop, daemon=True) if icls is None else threading.Thread(target=self._message_loop_server, args=(icls,), daemon=True)
+      self._thread = threading.Thread(target=self._message_loop, args=(() if icls is None else (icls,)), daemon=True)
       self._thread.start()
       r[0].wait()
       r[0].clear()
@@ -9245,13 +9227,16 @@ if __name__ == '__main__' and len(sys.argv) == 3 and sys.argv[-1] == '-Embedding
     exit(1)
   lpMsg = ctypes.byref(wintypes.MSG())
   Window.PeekMessage(lpMsg, None, 0, 0, 0)
-  if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None or (psto := COMRegistration.RegisterPSFactory(icls)) is None or (ps := COMRegistration.RegisterProxyStub(icls)) is None or not all(ps.values()):
+  if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
     exit(1)
+  COMRegistration.RegisterProxyStub(icls)
+  psto = COMRegistration.RegisterPSFactory(icls)
   while Window.GetMessage(lpMsg, None, 0, 0) > 0:
     Window.TranslateMessage(lpMsg)
     Window.DispatchMessage(lpMsg)
-    if not _COMMeta._locks[0] and len(_COMMeta._refs) == 2:
+    if not _COMMeta._locks[0] and len(_COMMeta._refs) == (1 if psto is None else 2):
       break
-  COMRegistration.RevokeFactory(psto)
+  if psto is not None:
+    COMRegistration.RevokeFactory(psto)
   COMRegistration.RevokeFactory(to)
   Uninitialize()
