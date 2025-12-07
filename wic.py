@@ -9023,42 +9023,40 @@ class COMSharing:
             else:
               break
           istream_t = None
-          if (gen := self._code_dir.get(code := msg.wParam & 0xffffffff)):
-            n = '%08x%08x' % (code, (msg.wParam >> 32))
-            if msg.lParam == 0x10000:
-              if (istream_t := self._sm_pnd.pop(n, None)):
-                istream_t[0].Release()
-                istream_t = None
-            else:
-              if n not in self._sm_pnd:
-                if (h := cls.OpenFileMapping(0xf001f, False, n)):
-                  if (p := cls.MapViewOfFile(h, 0xf001f, 0, 0, 0)):
-                    try:
-                      args, kwargs = json.loads(ctypes.string_at(p))
-                      iinstance = gen(*args, **kwargs)
-                    except:
-                      pass
-                    else:
-                      if iinstance:
-                        istream = cls.Marshal(iinstance, 0)
-                        iinstance.Release()
-                        iinstance = None
-                        if istream:
-                          l = istream.Seek(0, 2)
-                          istream.Seek(0, 0)
-                          if l <= cls.SHAREDMEMORY_MINSIZE and IStream._protos['Read'](istream.pI, wintypes.LPVOID(p), l) and Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, l):
-                            self._sm_pnd[n] = istream, time.time()
-                            continue
-                          _IUtil.CoReleaseMarshalData(istream)
-                          istream.Release()
-                    finally:
-                      gen = args = kwargs = None
-                      istream = None
-                      cls.UnmapViewOfFile(p)
-                      cls.CloseHandle(h)
+          n = '%08x%08x' % ((code := msg.wParam & 0xffffffff), (msg.wParam >> 32))
+          if msg.lParam == 0x10000:
+            if (istream_t := self._sm_pnd.pop(n, None)):
+              istream_t[0].Release()
+              istream_t = None
+          else:
+            if n not in self._sm_pnd and (gen := self._code_dir.get(code)):
+              if (h := cls.OpenFileMapping(0xf001f, False, n)):
+                if (p := cls.MapViewOfFile(h, 0xf001f, 0, 0, 0)):
+                  try:
+                    args, kwargs = json.loads(ctypes.string_at(p))
+                    iinstance = gen(*args, **kwargs)
+                  except:
+                    pass
                   else:
+                    if iinstance:
+                      istream = cls.Marshal(iinstance, 0)
+                      iinstance.Release()
+                      iinstance = None
+                      if istream:
+                        l = istream.Seek(0, 2)
+                        istream.Seek(0, 0)
+                        if l <= cls.SHAREDMEMORY_MINSIZE and IStream._protos['Read'](istream.pI, wintypes.LPVOID(p), l) and Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, l):
+                          self._sm_pnd[n] = istream, time.time()
+                          continue
+                        _IUtil.CoReleaseMarshalData(istream)
+                        istream.Release()
+                  finally:
+                    gen = args = kwargs = None
+                    istream = None
+                    cls.UnmapViewOfFile(p)
                     cls.CloseHandle(h)
-              Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, 0)
+                  cls.CloseHandle(h)
+            Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, 0)
         continue
       Window.TranslateMessage(lpMsg)
       Window.DispatchMessage(lpMsg)
@@ -9075,7 +9073,8 @@ class COMSharing:
       (r := self._response)[0].clear()
       if self._thread:
         return False
-      self._thread = threading.Thread(target=self._message_loop, args=(() if icls is None else (icls,)), daemon=True)
+      self._code_dir[0] = icls
+      self._thread = threading.Thread(target=self._message_loop, args=(icls,), daemon=True)
       self._thread.start()
       r[0].wait()
       r[0].clear()
@@ -9091,6 +9090,7 @@ class COMSharing:
       Window.PostThreadMessage(tid, 0x12, 0, 0)
       self._thread.join()
       self._thread = None
+      self._code_dir[0] = None
     return True
   def _RegisterFactory(self, icls_impl, ps):
     with self._lock:
@@ -9121,7 +9121,7 @@ class COMSharing:
       r[1] = r[2] = None
     return c
   def RecordCode(self, code, gen=None):
-    if code < 0 or code >= 0xffffffff:
+    if code <= 0 or code >= 0xffffffff:
       return False
     if gen is None:
       return bool(self._code_dir.pop(code, None))
@@ -9147,9 +9147,9 @@ class COMSharing:
     return iinstance
   __call__ = GetInProc
   @classmethod
-  def GetInterProc(cls, icls, tid=None, code=None, /, *args, **kwargs):
+  def GetInterProc(cls, icls, tid=None, code=0, /, *args, **kwargs):
     if tid is None:
-      if code is not None or args or kwargs:
+      if code or args or kwargs:
         ISetLastError(0x80070057)
         return None
       if (clsid := getattr(icls._impl, 'CLSID', getattr(icls, 'CLSID', None))) is None:
