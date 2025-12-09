@@ -17,8 +17,12 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
   wcscat(rpath, L"\\InprocServer32");
   WCHAR *mpath = NULL;
   DWORD msize = 0;
-  if (! RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, NULL, &msize) && msize) {
-    if (! (mpath = (WCHAR*) malloc(msize)) || RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, mpath, &msize)) {return E_FAIL;}
+  if (! RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, NULL, &msize) && msize && (! (mpath = (WCHAR*) malloc(msize)) || RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, mpath, &msize))) {
+    free(rpath);
+    if (mpath) {
+      free(mpath);
+    }
+    return E_FAIL;
   }
   free(rpath);
   PyGILState_STATE state = PyGILState_Ensure();
@@ -30,10 +34,10 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
       *mname = 0;
       PyObject *py_path = PySys_GetObject("path");
       PyObject *py_mpath = PyUnicode_FromWideChar(mpath, -1);
+      free(mpath);
       if (! py_path || ! py_mpath) {
         Py_XDECREF(py_mpath);
         PyGILState_Release(state);
-        free(mpath);
         return E_FAIL;
       }
       PyList_Append(py_path, py_mpath);
@@ -45,8 +49,8 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
       py_mname = PyUnicode_FromWideChar(mname, -1);
     } else {
       py_mname = PyUnicode_FromWideChar(mpath, -1);
+      free(mpath);
     }
-    free(mpath);
     if (! py_mname) {
       PyGILState_Release(state);
       return E_FAIL;
@@ -59,12 +63,12 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
     }
     Py_XDECREF(py_mname);
   }
-  PyObject *py_func;
-  if (! (py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject"))) {
+  PyObject *py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject");
+  Py_XDECREF(py_mod);
+  if (! (py_func )) {
     PyGILState_Release(state);
     return E_FAIL;
   }
-  Py_XDECREF(py_mod);
   long res = E_FAIL;
   PyObject *py_rclsid = PyLong_FromVoidPtr((void*) rclsid);
   PyObject *py_riid = PyLong_FromVoidPtr((void*) riid);
