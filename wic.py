@@ -8799,7 +8799,7 @@ def DllCanUnloadNow():
 class COMRegistration:
   @classmethod
   def _RegisterFactory(cls, clsid, pUnk, context=1):
-    if clsid is None or not pUnk:
+    if not pUnk or clsid is None:
       ISetLastError(0x80004003)
       return None
     token = _IUtil.CoRegisterClassObject(clsid, pUnk, context, 1)
@@ -8807,13 +8807,13 @@ class COMRegistration:
     return token
   @classmethod
   def RegisterCOMFactory(cls, icls_impl, context=1):
-    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta) or (clsid := getattr(impl, 'CLSID', None)) is None:
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta) or (clsid := getattr(impl, 'CLSID', None)) is None:
       ISetLastError(0x80040154)
       return None
     return cls._RegisterFactory(clsid, PCOM(_COM_IClassFactory_impl(_COMMeta._iid_iunknown, impl=impl)), context)
   @classmethod
   def RegisterPSFactory(cls, icls_ps_impl):
-    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
       ISetLastError(0x80040154)
       return None
     return cls._RegisterFactory(clsid, PCOM(_COM_IPSFactoryBuffer_impl(_COMMeta._iid_iunknown, ps_impl=ps_impl)))
@@ -8821,13 +8821,13 @@ class COMRegistration:
   def RevokeFactory(cls, token):
     return _IUtil.CoRevokeClassObject(token)
   @classmethod
-  def RegisterProxyStub(cls, icls_ps_impl, iid=None):
-    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
+  def RegisterProxyStub(cls, icls_ps_impl):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
       ISetLastError(0x80040154)
       return None
-    return {iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in ps_impl.stub_impl._siids[0]} if iid is None else _IUtil.CoRegisterPSClsid(iid, clsid)
+    return _IUtil.CoRegisterPSClsid(icls_ps_impl.IID, clsid) if isinstance(icls_ps_impl, _IMeta) else ({iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in icls_ps_impl._iids if iid != _COMMeta._iid_iunknown} if isinstance(icls_ps_impl, _COMMeta) else {iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in icls_ps_impl.stub_impl._siids[0]})
   @staticmethod
-  def _RegistryAddFactory(clsid, name, user, server, local=False):
+  def _RegistryAddFactory(clsid, name, user, file, local=False):
     if clsid is None:
       return False
     clsid = ('{%s}' % GUID(clsid)).upper()
@@ -8836,12 +8836,14 @@ class COMRegistration:
       key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\CLSID\%s' % clsid)
       winreg.SetValue(key, '', winreg.REG_SZ, qname)
       skey = winreg.CreateKey(key, 'InprocServer32')
-      winreg.SetValue(skey, '', winreg.REG_SZ, (server or os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', ' '))), "comserver.dll")))
+      winreg.SetValue(skey, '', winreg.REG_SZ, os.path.join(os.path.dirname(os.path.abspath(wfile := globals().get('__file__', 'wic.py'))), "comserver.dll"))
       winreg.SetValueEx(skey, 'ThreadingModel', 0, winreg.REG_SZ, 'Both')
+      if file != wfile:
+        winreg.SetValueEx(skey, 'PyModule', 0, winreg.REG_SZ, os.path.abspath(file))
       winreg.CloseKey(skey)
       winreg.SetValue(key, 'ProgID', winreg.REG_SZ, qname)
       if local:
-        winreg.SetValue(key, 'LocalServer32', winreg.REG_SZ, 'pythonw.exe "%s" %s' % (os.path.abspath(globals().get('__file__', ' ')), name))
+        winreg.SetValue(key, 'LocalServer32', winreg.REG_SZ, 'pythonw.exe "%s" %s' % (os.path.abspath(file), name))
       winreg.CloseKey(key)
       key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % qname)
       winreg.SetValue(key, '', winreg.REG_SZ, qname)
@@ -8851,15 +8853,15 @@ class COMRegistration:
     except:
       return False
   @classmethod
-  def RegistryAddCOMFactory(cls, icls_impl, name=None, *, user=True, server=None, local=False):
-    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
+  def RegistryAddCOMFactory(cls, icls_impl, user=True, local=False):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), (impl.__name__[slice((5 if impl.__name__.upper().startswith('_COM_') else 0), (-5 if impl.__name__.lower().endswith('_impl') else None))] if name is None else name), user, server, local)
+    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), (icls_impl.__name__ if isinstance(icls_impl, _IMeta) else (icls_impl.__name__[(5 if icls_impl.__name__.upper().startswith('_COM_') else 0):] if isinstance(icls_impl, _COMMeta) else icls_impl.__name__[slice((5 if icls_impl.__name__.upper().startswith('_COM_') else 0), (-5 if icls_impl.__name__.lower().endswith('_impl') else None))])), user, getattr(sys.modules.get(icls_impl.__module__), '__file__', 'wic.py'), local)
   @classmethod
-  def RegistryAddPSFactory(cls, icls_ps_impl, name=None, *, user=True, server=None):
-    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
+  def RegistryAddPSFactory(cls, icls_ps_impl, user=True):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl), _PSImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ((ps_impl.__name__[slice((4 if ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if ps_impl.__name__.lower().endswith('_impl') else None))] + 'ProxyStub') if name is None else name), user, server)
+    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), (icls_ps_impl.__name__ if isinstance(icls_ps_impl, _IMeta) else (icls_ps_impl.__name__[(5 if icls_ps_impl.__name__.upper().startswith('_COM_') else 0):] if isinstance(icls_ps_impl, _COMMeta) else icls_ps_impl.__name__[slice((4 if icls_ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if icls_ps_impl.__name__.lower().endswith('_impl') else None))])) + 'ProxyStub', user, getattr(sys.modules.get(icls_ps_impl.__module__), '__file__', 'wic.py'))
   @staticmethod
   def _RegistryRemoveFactory(clsid, user):
     if clsid is None:
@@ -8883,46 +8885,44 @@ class COMRegistration:
     except:
       return False
   @classmethod
-  def RegistryRemoveCOMFactory(cls, icls_impl, *, user=True):
-    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, _IMeta) else icls_impl), _COMMeta._COMImplMeta):
+  def RegistryRemoveCOMFactory(cls, icls_impl, user=True):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta):
       return False
     return cls._RegistryRemoveFactory(getattr(impl, 'CLSID', None), user)
   @classmethod
-  def RegistryRemovePSFactory(cls, icls_ps_impl, *, user=True):
-    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, _IMeta) else icls_ps_impl), _PSImplMeta):
+  def RegistryRemovePSFactory(cls, icls_ps_impl, user=True):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl), _PSImplMeta):
       return False
     return cls._RegistryRemoveFactory(getattr(ps_impl, 'CLSID', None), user)
   @classmethod
-  def RegistryAddProxyStub(cls, iid_icls, name=None, ps_impl=None, *, user=True):
-    if ps_impl is None:
-      if name is not None:
-        ps_impl = getattr(sys.modules.get(cls.__module__), (n := '_PS_%s_impl' % name), globals().get(n))
-      elif isinstance(iid_icls, _IMeta):
-        ps_impl = iid_icls._ps_impl
-    if ps_impl is None or not isinstance(ps_impl, _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
+  def RegistryAddProxyStub(cls, icls_ps_impl, user=True):
+    if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl), _PSImplMeta) or (clsid := getattr(ps_impl, 'CLSID', None)) is None:
       return False
-    if name is None:
-      name = iid_icls.__name__ if isinstance(iid_icls, _IMeta) else ps_impl.__name__[slice((4 if ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if ps_impl.__name__.lower().endswith('_impl') else None))]
-    clsid = ('{%s}' % GUID(clsid)).upper()
-    iid = ('{%s}' % GUID(getattr(iid_icls, 'IID', iid_icls))).upper()
-    name = 'WICPy.' + name
-    try:
-      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\Interface\%s' % iid)
-      winreg.SetValue(key, '', winreg.REG_SZ, name)
-      winreg.SetValue(key, 'ProxyStubClsid32', winreg.REG_SZ, clsid)
-      winreg.CloseKey(key)
-      return True
-    except:
-      return False
+    clsid = ('{%s}' % clsid).upper()
+    qname = 'WICPy.' + (icls_ps_impl.__name__ if isinstance(icls_ps_impl, _IMeta) else (icls_ps_impl.__name__[(5 if icls_ps_impl.__name__.upper().startswith('_COM_') else 0):] if isinstance(icls_ps_impl, _COMMeta) else icls_ps_impl.__name__[slice((4 if icls_ps_impl.__name__.upper().startswith('_PS_') else 0), (-5 if icls_ps_impl.__name__.lower().endswith('_impl') else None))]))
+    r = {}
+    for iid in ((icls_ps_impl.IID,) if isinstance(icls_ps_impl, _IMeta) else ((iid for iid in icls_ps_impl._iids if iid != _COMMeta._iid_iunknown) if isinstance(icls_ps_impl, _COMMeta) else icls_ps_impl.stub_impl._siids[0])):
+      try:
+        key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), (r'SOFTWARE\Classes\Interface\{%s}' % iid).upper())
+        winreg.SetValue(key, '', winreg.REG_SZ, qname)
+        winreg.SetValue(key, 'ProxyStubClsid32', winreg.REG_SZ, clsid)
+        winreg.CloseKey(key)
+        r[iid] = True
+      except:
+        r[iid] = False
+    return r[iid] if isinstance(icls_ps_impl, _IMeta) else r
   @classmethod
-  def RegistryRemoveProxyStub(cls, iid_icls, *, user=True):
-    iid = ('{%s}' % GUID(getattr(iid_icls, 'IID', iid_icls))).upper()
-    try:
-      winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\Interface\%s\ProxyStubClsid32' % iid)
-      winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\Interface\%s' % iid)
-      return True
-    except:
-      return False
+  def RegistryRemoveProxyStub(cls, icls_ps_impl, user=True):
+    r = {}
+    for iid in ((icls_ps_impl.IID,) if isinstance(icls_ps_impl, _IMeta) else ((iid for iid in icls_ps_impl._iids if iid != _COMMeta._iid_iunknown) if isinstance(icls_ps_impl, _COMMeta) else icls_ps_impl.stub_impl._siids[0])):
+      p = (r'SOFTWARE\Classes\Interface\{%s}' % iid).upper()
+      try:
+        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), p + r'\ProxyStubClsid32')
+        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), p)
+        r[iid] = True
+      except:
+        r[iid] = False
+    return r[iid] if isinstance(icls_ps_impl, _IMeta) else r
 
 class COMSharing:
   SHAREDMEMORY_MINSIZE = 4096
@@ -9214,6 +9214,24 @@ class COMSharing:
       return cls.GetOutProcFactory
   GetFactory = GetFactory()
   ThreadId = tid
+  @staticmethod
+  def LocalServer(icls):
+    Initialize()
+    lpMsg = ctypes.byref(wintypes.MSG())
+    Window.PeekMessage(lpMsg, None, 0, 0, 0)
+    if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
+      exit(1)
+    COMRegistration.RegisterProxyStub(icls)
+    psto = COMRegistration.RegisterPSFactory(icls)
+    while Window.GetMessage(lpMsg, None, 0, 0) > 0:
+      Window.TranslateMessage(lpMsg)
+      Window.DispatchMessage(lpMsg)
+      if not _COMMeta._locks[0] and len(_COMMeta._refs) == (1 if psto is None else 2):
+        break
+    if psto is not None:
+      COMRegistration.RevokeFactory(psto)
+    COMRegistration.RevokeFactory(to)
+    Uninitialize()
   CreateFileMapping = _IUtil._wrap('CreateFileMappingW', (wintypes.HANDLE, 0), (wintypes.HANDLE, 1), (wintypes.LPVOID, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.LPCWSTR, 1), p=kernel32)
   OpenFileMapping = _IUtil._wrap('OpenFileMappingW', (wintypes.HANDLE, 0), (wintypes.DWORD, 1), (wintypes.BOOL, 1), (wintypes.LPCWSTR, 1), p=kernel32)
   CloseHandle = _IUtil._wrap('CloseHandle', (wintypes.BOOLE, 0), (wintypes.HANDLE, 1), p=kernel32)
@@ -9221,21 +9239,6 @@ class COMSharing:
   UnmapViewOfFile = _IUtil._wrap('UnmapViewOfFile', (wintypes.BOOLE, 0), (wintypes.LPVOID, 1), p=kernel32)
 
 if __name__ == '__main__' and len(sys.argv) == 3 and sys.argv[-1] == '-Embedding':
-  Initialize()
-  if (icls := globals().get(sys.argv[1])) is None or not isinstance(icls, _IMeta):
+  if not isinstance((icls := globals().get(sys.argv[1])), (_IMeta, _COMMeta)):
     exit(1)
-  lpMsg = ctypes.byref(wintypes.MSG())
-  Window.PeekMessage(lpMsg, None, 0, 0, 0)
-  if (to := COMRegistration.RegisterCOMFactory(icls, 4)) is None:
-    exit(1)
-  COMRegistration.RegisterProxyStub(icls)
-  psto = COMRegistration.RegisterPSFactory(icls)
-  while Window.GetMessage(lpMsg, None, 0, 0) > 0:
-    Window.TranslateMessage(lpMsg)
-    Window.DispatchMessage(lpMsg)
-    if not _COMMeta._locks[0] and len(_COMMeta._refs) == (1 if psto is None else 2):
-      break
-  if psto is not None:
-    COMRegistration.RevokeFactory(psto)
-  COMRegistration.RevokeFactory(to)
-  Uninitialize()
+  COMSharing.LocalServer(icls)

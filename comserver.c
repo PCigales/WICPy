@@ -1,18 +1,70 @@
 #include <stdio.h>
-#include <windows.h>
+#include <Windows.h>
+#include <Objbase.h>
 #include <Python.h>
 #define DLLEXPORT __declspec(dllexport)
 
-PyObject *py_mod = NULL;
+PyObject *py_wmod = NULL;
 INT py_ini = 1;
 
 HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
+  LPOLESTR pclsid;
+  if (! py_wmod || StringFromCLSID(rclsid, &pclsid)) {return E_FAIL;}
+  WCHAR *rpath = (WCHAR *) malloc(sizeof(WCHAR) * (wcslen(pclsid) + 22));
+  wcscpy(rpath, L"CLSID\\");
+  wcscat(rpath, pclsid);
+  CoTaskMemFree(pclsid);
+  wcscat(rpath, L"\\InprocServer32");
+  WCHAR *mpath = NULL;
+  DWORD msize = 0;
+  if (! RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, NULL, &msize) && msize) {
+    if (! (mpath = (WCHAR*) malloc(msize)) || RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, mpath, &msize)) {return E_FAIL;}
+  }
+  free(rpath);
   PyGILState_STATE state = PyGILState_Ensure();
+  PyObject *py_mod = py_wmod;
+  if (mpath) {
+    PyObject *py_mname = NULL;
+    WCHAR *mname = wcsrchr(mpath, L'\\');
+    if (mname) {
+      *mname = 0;
+      PyObject *py_path = PySys_GetObject("path");
+      PyObject *py_mpath = PyUnicode_FromWideChar(mpath, -1);
+      if (! py_path || ! py_mpath) {
+        Py_XDECREF(py_mpath);
+        PyGILState_Release(state);
+        free(mpath);
+        return E_FAIL;
+      }
+      PyList_Append(py_path, py_mpath);
+      Py_XDECREF(py_mpath);
+      WCHAR *mext = wcsrchr(++mname, L'.');
+      if (mext && ! wcscmp(mext, L".py")) {
+        *mext = 0;
+      }
+      py_mname = PyUnicode_FromWideChar(mname, -1);
+    } else {
+      py_mname = PyUnicode_FromWideChar(mpath, -1);
+    }
+    free(mpath);
+    if (! py_mname) {
+      PyGILState_Release(state);
+      return E_FAIL;
+    }
+    if (! (py_mod = PyImport_GetModule(py_mname)) && (PyErr_Occurred() || ! (py_mod = PyImport_Import(py_mname)))) {
+      PyErr_Clear();
+      Py_XDECREF(py_mname);
+      PyGILState_Release(state);
+      return E_FAIL;
+    }
+    Py_XDECREF(py_mname);
+  }
   PyObject *py_func;
-  if (! py_mod || ! (py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject"))) {
+  if (! (py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject"))) {
     PyGILState_Release(state);
     return E_FAIL;
   }
+  Py_XDECREF(py_mod);
   long res = E_FAIL;
   PyObject *py_rclsid = PyLong_FromVoidPtr((void*) rclsid);
   PyObject *py_riid = PyLong_FromVoidPtr((void*) riid);
@@ -38,7 +90,7 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
 HRESULT DLLEXPORT WINAPI DllCanUnloadNow(void) {
   PyGILState_STATE state = PyGILState_Ensure();
   PyObject *py_func;
-  if (! py_mod || ! (py_func = PyObject_GetAttrString(py_mod, "DllCanUnloadNow"))) {
+  if (! py_wmod || ! (py_func = PyObject_GetAttrString(py_wmod, "DllCanUnloadNow"))) {
     PyGILState_Release(state);
     return E_FAIL;
   }
@@ -72,19 +124,20 @@ BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOI
         alen *= 2;
       } while (alen <= 66560);
       if (! dllpath) {return FALSE;}
-      WCHAR *e = wcsrchr(dllpath, '\\');
+      WCHAR *e = wcsrchr(dllpath, L'\\');
       if (e) {*e = 0;}
       PyGILState_STATE state = PyGILState_Ensure();
       PyObject *py_path = PySys_GetObject("path");
       PyObject *py_mpath = PyUnicode_FromWideChar(dllpath, -1);
       if (! py_path || ! py_mpath) {
+        Py_XDECREF(py_mpath);
         PyGILState_Release(state);
         return FALSE;
       }
       PyList_Append(py_path, py_mpath);
       Py_XDECREF(py_mpath);
       free(dllpath);
-      if (! (py_mod = PyImport_ImportModule("wic"))) {
+      if (! (py_wmod = PyImport_ImportModule("wic"))) {
         PyErr_Clear();
         PyGILState_Release(state);
         return FALSE;
@@ -94,8 +147,8 @@ BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOI
     case DLL_PROCESS_DETACH:
       if (! lpvReserved) {
         PyGILState_STATE state = PyGILState_Ensure();
-        Py_XDECREF(py_mod);
-        py_mod = NULL;
+        Py_XDECREF(py_wmod);
+        py_wmod = NULL;
         PyGILState_Release(state);
         if (! py_ini) {
           py_ini = 1;
