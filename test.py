@@ -1440,6 +1440,7 @@ print(CS.Source(FileSystemBindData), FileSystemBindData, FileSystemBindData.GetF
 FileSystemBindData.Release()
 #Registering the ProxyStub CLSID for IEnumInterfaceFactory and IEnumInterface
 COMRegistration.RegisterProxyStub(IEnumInterfaceFactory)
+COMRegistration.RegisterProxyStub(IEnumInterface)
 #Registering a factory for this CLSID
 toe = COMRegistration.RegisterPSFactory(IEnumInterfaceFactory)
 #Registering a factory for this CLSID in the provider thread
