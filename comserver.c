@@ -39,7 +39,9 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
         PyGILState_Release(state);
         return E_FAIL;
       }
-      PyList_Append(py_path, py_mpath);
+      if (! PySequence_Contains(py_path, py_mpath)) {
+        PyList_Append(py_path, py_mpath);
+      }
       Py_XDECREF(py_mpath);
     } else {
       mname = mpath;
