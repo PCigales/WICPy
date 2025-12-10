@@ -24,7 +24,7 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
     } else {return E_FAIL;}
   }
   PyGILState_STATE state = PyGILState_Ensure();
-  PyObject *py_mod = py_wmod;
+  PyObject *py_mod = NULL;
   if (mpath) {
     PyObject *py_mname = NULL;
     WCHAR *mname = wcsrchr(mpath, L'\\');
@@ -67,7 +67,7 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
       return E_FAIL;
     }
   }
-  PyObject *py_func = PyObject_GetAttrString(py_mod, "DllGetClassObject");
+  PyObject *py_func = PyObject_GetAttrString(py_mod ? py_mod : py_wmod, "DllGetClassObject");
   Py_XDECREF(py_mod);
   if (! (py_func )) {
     PyErr_Clear();
