@@ -110,6 +110,8 @@ class PBUFFER(wintypes.LPVOID):
         return (ctypes.pointer if pointer else ctypes.byref)(obj)
     elif isinstance(obj, bytes):
       return ctypes.c_char_p(obj)
+    elif isinstance(obj, int):
+      return (ctypes.c_void_p if pointer else ctypes.c_void_p.from_param)(obj)
     else:
       return (ctypes.pointer if pointer else ctypes.byref)((ctypes.c_char * PBUFFER.length(obj)).from_buffer(obj))
 
@@ -356,6 +358,7 @@ _IUtil.CoGetInterfaceAndReleaseStream = _IUtil._wrap('CoGetInterfaceAndReleaseSt
 _IUtil.CoGetInterfaceIntoAndReleaseStream = _IUtil._wrap('CoGetInterfaceAndReleaseStream', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 1))
 _IUtil.CoMarshalInterface = _IUtil._wrap('CoMarshalInterface', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.LPVOID, 1), (COMMSHCTX, 1), (wintypes.LPVOID, 1), (COMMSHLFLAGS, 1))
 _IUtil.CoUnmarshalInterface = _IUtil._wrap('CoUnmarshalInterface', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 2))
+_IUtil.CoUnmarshalInterfaceInto = _IUtil._wrap('CoUnmarshalInterface', (wintypes.LPVOID, 1), (PUUID, 1), (wintypes.PLPVOID, 1))
 _IUtil.CoReleaseMarshalData = _IUtil._wrap('CoReleaseMarshalData', (wintypes.LPVOID, 1))
 
 class _IMeta(type):
@@ -959,6 +962,7 @@ class PCOMRPCCHANNEL(PCOM):
 class RIID_PI(PUUID):
   _type_ = UUID
   number = None
+  inarg = True
   p = None
   def __new__(cls, iid=_COMMeta._iid_iunknown):
     self = cls.from_buffer(wintypes.LPVOID(iid) if isinstance(iid, int) else (ctypes.cast(self, wintypes.LPVOID) if isinstance((self := PUUID.from_param(iid)), ctypes.CArgObject) else self))
@@ -966,34 +970,34 @@ class RIID_PI(PUUID):
   def __init__(self, iid=_COMMeta._iid_iunknown):
     pass
   def __call__(self, p):
-    self.p = p
+    self.p = p if self.number is None else ctypes.cast(p, wintypes.PLPVOID)
     return self
   @classmethod
-  def array(cls, number, iid=_COMMeta._iid_iunknown, address=None):
+  def array(cls, number, iid=_COMMeta._iid_iunknown):
     self = cls(iid)
     self.number = number
-    return self(ctypes.cast(address, wintypes.PLPVOID))
+    return self
 
 class RIID_PPI(PUUID):
   _type_ = UUID
   number = 1
   inarg = False
   p = None
-  def __new__(cls, iid=_COMMeta._iid_iunknown, inoutarg=False):
+  def __new__(cls, iid=_COMMeta._iid_iunknown, inout=False):
     self = cls.from_buffer(wintypes.LPVOID(iid) if isinstance(iid, int) else (ctypes.cast(self, wintypes.LPVOID) if isinstance((self := PUUID.from_param(iid)), ctypes.CArgObject) else self))
-    if inoutarg:
+    if inout:
       self.inarg = True
     return self
-  def __init__(self, iid=_COMMeta._iid_iunknown, inoutarg=False):
+  def __init__(self, iid=_COMMeta._iid_iunknown, inout=False):
     pass
   def __call__(self, p):
-    self.p = p
+    self.p = ctypes.cast(p, wintypes.PLPVOID)
     return self
   @classmethod
-  def array(cls, number, iid=_COMMeta._iid_iunknown, address=None, inoutarg=False):
-    self = cls(iid, inoutarg)
+  def array(cls, number, iid=_COMMeta._iid_iunknown, inout=False):
+    self = cls(iid, inout)
     self.number = number
-    return self(ctypes.cast(address, wintypes.PLPVOID))
+    return self
 
 class _COM_IRpcProxyBuffer(_COM_IUnknown):
   _iids.add(GUID(0xd5f56a34, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a))
@@ -1026,7 +1030,7 @@ class _COM_IRpcInProcProxyBuffer(_COM_IRpcProxyBuffer):
         return 0x80004003
       if self.pRpcChannelBuffer:
         return 0x8000ffff
-      if getattr(pRpcChannelBuffer.GetDestCtx(), 'value', None) not in (3, 4):
+      if getattr(pRpcChannelBuffer.GetDestCtx(), 'code', None) not in (3, 4):
         return 0x80004001
       pRpcChannelBuffer.AddRef()
       self.pRpcChannelBuffer = pRpcChannelBuffer
@@ -1035,122 +1039,300 @@ class _COM_IRpcInProcProxyBuffer(_COM_IRpcProxyBuffer):
 class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
   _vars['pRpcChannelBuffer'] = PCOMRPCCHANNEL
   @classmethod
-  def _call(cls, self, method, iargs, oargs, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
+  def _send_message(cls, self, method, args):
     if not (channel := self.pRpcChannelBuffer):
-      return 0x80004003
-    if (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], sum(map(ctypes.sizeof, iargs)), method)) is None:
-      return IGetLastError() or 0x80004005
-    r = 0
-    o = 0
-    for arg in iargs:
-      s = ctypes.sizeof(arg)
-      ctypes.memmove(message.Buffer + o, ctypes.addressof(arg), s)
-      o += s
-    if not channel.SendReceive(message):
-      r = IGetLastError() or 0x8001000a
-    elif message.cbBuffer < (o := (0 if restype is None else ctypes.sizeof(restype))) + sum(map(ctypes.sizeof, oargs)):
-      r = 0x80010009
+      r = 0x80004003
+    elif (context := channel.GetDestCtx()) is None:
+      r = IGetLastError().code or 0x80004005
     else:
-      r = None if restype is None else getattr((r := restype.from_address(message.Buffer)), 'value', r)
-      if not (errcheck and errcheck(r)):
-        for arg in oargs:
-          s = ctypes.sizeof(arg)
-          ctypes.memmove(ctypes.addressof(arg), message.Buffer + o, s)
-          o += s
-    channel.FreeBuffer(message)
-    return r
-  @classmethod
-  def _invoke(cls, pI, method, iargs, oargs, epargs=(), restype=wintypes.ULONG, errcheck=0x80000000.__and__):
-    with cls[pI] as self:
-      if not (self and all(arg for args in (iargs, oargs) for arg in args if isinstance(arg, ctypes._Pointer))):
-        for eparg in epargs:
-          if eparg:
-            eparg.contents.value = None
-        return 0x80004003
-      return cls._call(self, method, *(tuple(arg.contents if isinstance(arg, ctypes._Pointer) else arg for arg in args) for args in (iargs, oargs)), restype, errcheck)
-
-class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
-  _vars['pRpcChannelBuffer'] = PCOMRPCCHANNEL
-  @classmethod
-  def _call(cls, self, method, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
-    if not (channel := self.pRpcChannelBuffer):
-      return 0x80004003
-    if (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], sum(map(ctypes.sizeof, args)), method)) is None:
-      return IGetLastError() or 0x80004005
-    r = 0
-    marsh = []
-    o = 0
-    for arg in args:
-      s = ctypes.sizeof(arg)
-      if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
-        p = arg.p
-        if (n := arg.number) is None:
-          pI = wintypes.LPVOID.from_address(message.Buffer + o)
-          if p:
-            if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, p, pI) is None:
-              r = 0x8001000b
-              break
-            else:
-              marsh.append(pI)
+      r = 0
+      marsh = []
+      s = 0
+      for arg in args:
+        if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
+          p = arg.p
+          if (n := arg.number) is None:
+            pIs = (p,)
           else:
-            pI.value = None
-        else:
-          if p:
-            bs = n * s
-            if isinstance(arg, RIID_PI):
-              b = ctypes.cast(ctypes.create_string_buffer(bs), wintypes.PLPVOID)
-              ctypes.memmove(b, p, bs)
-              arg.p = p = b
-            add = wintypes.LPVOID.from_buffer(p).value
-            for a in range(add, add + bs, s):
-              if (ar := wintypes.LPVOID.from_address(a)):
-                if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, ar.value, ar) is None:
+            s += 1
+            if n > 0 and p:
+              add = wintypes.LPVOID.from_buffer(p).value
+              pIs = map(wintypes.LPVOID.from_address, range(add, add + n * _COMMeta._psize, _COMMeta._psize))
+            else:
+              pIs = ()
+          for pI in pIs:
+            s += 2
+            if pI:
+              if (istream := PCOMSTREAM.MarshalInterface(arg, pI, context)) is None:
+                r = 0x8001000b
+                break
+              else:
+                marsh.append(istream)
+                if (o := istream.Seek(0, 1)) > 65535:
                   r = 0x8001000b
                   break
-                else:
-                  marsh.append(ar)
-          ctypes.memmove(message.Buffer + o, ctypes.addressof(p), s)
+                s += o
+          else:
+            continue
+          break
+        elif isinstance(arg, RIID_PPI):
+          s += 1
+        elif isinstance(arg, ctypes._Pointer):
+          s += 1
+          if arg:
+            s += ctypes.sizeof(arg._type_)
+        else:
+          s += ctypes.sizeof(arg)
       else:
-        ctypes.memmove(message.Buffer + o, ctypes.addressof(arg.p if isinstance(arg, RIID_PPI) else arg), s)
-      o += s
-    if r or not channel.SendReceive(message):
-      r = r or IGetLastError() or 0x8001000a
-      if message.Buffer:
-        for pI in marsh:
-          _IUtil.CoReleaseMarshalData(pI)
-          PCOM.Release(pI)
-    elif restype is not None and message.cbBuffer < ctypes.sizeof(restype):
-      r = 0x80010009
-    else:
-      r = None if restype is None else getattr((r := restype.from_address(message.Buffer)), 'value', r)
-      if not (errcheck and errcheck(r)):
-        marsh = []
-        e = False
+        if (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, method)) is None:
+          r = IGetLastError().code or 0x80004005
+      if r:
+        for istream in marsh:
+          _IUtil.CoReleaseMarshalData(istream)
+      else:
+        imarsh = iter(marsh)
+        o = message.Buffer
         for arg in args:
-          if isinstance(arg, RIID_PPI) and (p := arg.p):
-            s = ctypes.sizeof(arg)
-            add = wintypes.LPVOID.from_buffer(p).value
-            for a in range(add, add + arg.number * s, s):
-              if (ar := wintypes.LPVOID.from_address(a)):
-                if _IUtil.CoGetInterfaceIntoAndReleaseStream(ar.value, arg, ar) is None:
-                  e = True
+          if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
+            p = arg.p
+            if (n := arg.number) is None:
+              pIs = (p,)
+            else:
+              if n > 0 and p:
+                ctypes.memmove(o, b'\x01', 1)
+                add = wintypes.LPVOID.from_buffer(p).value
+                pIs = map(wintypes.LPVOID.from_address, range(add, add + n * _COMMeta._psize, _COMMeta._psize))
+              else:
+                ctypes.memmove(o, b'\x00', 1)
+                pIs = ()
+              o += 1
+            for pI in pIs:
+              if pI:
+                istream = next(imarsh)
+                ctypes.memmove(o, (s := istream.Seek(0, 1)).to_bytes(2, 'little'), 2)
+                o += 2
+                istream.Seek(0, 0)
+                istream.Read(o, s)
+                o += s
+              else:
+                ctypes.memmove(o, b'\x00\x00', 2)
+                o += 2
+          elif isinstance(arg, RIID_PPI):
+            ctypes.memmove(o, (b'\x01' if arg.p else b'\x00'), 1)
+            o += 1
+          elif isinstance(arg, ctypes._Pointer):
+            if arg:
+              ctypes.memmove(o, b'\x01', 1)
+              o += 1
+              ctypes.memmove(o, arg, (s := ctypes.sizeof(arg._type_)))
+              o += s
+            else:
+              ctypes.memmove(o, b'\x00', 1)
+              o += 1
+          else:
+            ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
+            o += s
+        if not channel.SendReceive(message):
+          r = IGetLastError().code or 0x8001000a
+          if message.Buffer:
+            for istream in marsh:
+              _IUtil.CoReleaseMarshalData(istream)
+          channel.FreeBuffer(message)
+      for istream in marsh:
+        istream.Release()
+    return channel, (r or message)
+  @classmethod
+  def _process_message(cls, channel, message, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
+    if isinstance(message, int):
+      r = message
+    else:
+      l = (o := message.Buffer) + message.cbBuffer
+      if l < o + (s := (0 if restype is None else ctypes.sizeof(restype))):
+        r = 0x80010009
+      else:
+        e = False
+        r = None if restype is None else getattr((r := restype.from_address(o)), 'value', r)
+        o += s
+        if restype is None or not (errcheck and errcheck(r)):
+          marsh = []
+          for arg in args:
+            if isinstance(arg, RIID_PPI):
+              if (n := arg.number) > 0 and (p := arg.p):
+                add = wintypes.LPVOID.from_buffer(p).value
+                for a in range(add, add + arg.number * _COMMeta._psize, _COMMeta._psize):
+                  if o + 2 > l:
+                    break
+                  s = int.from_bytes(ctypes.string_at(o, 2), 'little')
+                  o += 2
+                  pI = wintypes.LPVOID.from_address(a)
+                  if s:
+                    if o + s > l:
+                      break
+                    if e:
+                      PCOMSTREAM.ReleaseMarshalData(o, s)
+                    elif PCOMSTREAM.UnmarshalInterface(o, s, arg, pI):
+                      marsh.append(pI)
+                    else:
+                      e = True
+                    o += s
+                  else:
+                    pI.value = None
                 else:
-                  marsh.append(ar)
-        if e:
-          r = 0x8001000c
+                  continue
+                break
+            elif not isinstance(arg, RIID_PI) and isinstance(arg, ctypes._Pointer):
+              if arg:
+                if o + (s := ctypes.sizeof(arg._type_)) > l:
+                  break
+                ctypes.memmove(arg, o, s)
+                o += s
+          else:
+            if not e:
+              channel.FreeBuffer(message)
+              if errres != IGetLastError:
+                ISetLastError(0)
+              return r
+          r = 0x8001000c if e else 0x80010009
           for pI in marsh:
             PCOM.Release(pI)
-    channel.FreeBuffer(message)
-    return r
+      channel.FreeBuffer(message)
+    if errres == IGetLastError:
+      return r
+    else:
+      ISetLastError(r)
+      return errres
   @classmethod
-  def _invoke(cls, pI, method, args, epargs=(), restype=wintypes.ULONG, errcheck=0x80000000.__and__):
+  def _call(cls, self, method, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
+    if (inproc := getattr(cls, '_inproc', None)) and getattr(self.pRpcChannelBuffer.GetDestCtx(), 'code', None) in (3, 4):
+      return inproc._offsetted[getattr(cls, '_ovtbl', 0) // cls.__class__._psize]._call(self, method, args, restype, errcheck, errres)
+    return cls._process_message(*cls._send_message(self, method, args), args, restype, errcheck, errres)
+  @classmethod
+  def _invoke(cls, pI, method, args, epargs=(), restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
     with cls[pI] as self:
       if not self:
         for eparg in epargs:
           if eparg:
             eparg.contents.value = None
-        return 0x80004003
-      return cls._call(self, method, args, restype, errcheck)
+        if errres == IGetLastError:
+          return 0x80004003
+        else:
+          ISetLastError(0x80004003)
+          return errres
+      return cls._call(self, method, args, restype, errcheck, errres)
+
+class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
+  _vars['pRpcChannelBuffer'] = PCOMRPCCHANNEL
+  @classmethod
+  def _send_message(cls, self, method, args):
+    if not (channel := self.pRpcChannelBuffer):
+      r = 0x80004003
+    elif (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], sum(map(ctypes.sizeof, args)), method)) is None:
+      r =  IGetLastError().code or 0x80004005
+    else:
+      r = 0
+      o = message.Buffer
+      marsh = []
+      for arg in args:
+        s = ctypes.sizeof(arg)
+        if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
+          p = arg.p
+          if (n := arg.number) is None:
+            pI = wintypes.LPVOID.from_address(o)
+            if p:
+              if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, p, pI) is None:
+                r = 0x8001000b
+                break
+              else:
+                marsh.append(pI)
+            else:
+              pI.value = None
+          else:
+            if n > 0 and p:
+              bs = n * s
+              if isinstance(arg, RIID_PI):
+                b = ctypes.cast(ctypes.create_string_buffer(bs), wintypes.PLPVOID)
+                ctypes.memmove(b, p, bs)
+                arg.p = p = b
+              add = wintypes.LPVOID.from_buffer(p).value
+              for a in range(add, add + bs, s):
+                if (pI := wintypes.LPVOID.from_address(a)):
+                  if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, pI, pI) is None:
+                    r = 0x8001000b
+                    break
+                  else:
+                    marsh.append(pI)
+              if r:
+                break
+            ctypes.memmove(o, ctypes.addressof(p), s)
+        else:
+          ctypes.memmove(o, ctypes.addressof(arg.p if isinstance(arg, RIID_PPI) else arg), s)
+        o += s
+      else:
+        if not channel.SendReceive(message):
+          r = IGetLastError().code or 0x8001000a
+      if r:
+        if message.Buffer:
+          for pI in marsh:
+            _IUtil.CoReleaseMarshalData(pI)
+            PCOM.Release(pI)
+        channel.FreeBuffer(message)
+    return channel, (r or message)
+  @classmethod
+  def _process_message(cls, channel, message, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
+    if isinstance(message, int):
+      e = True
+      r = message
+    else:
+      if restype is not None and message.cbBuffer < ctypes.sizeof(restype):
+        e = True
+        r = 0x80010009
+      else:
+        e = False
+        r = None if restype is None else getattr((r := restype.from_address(message.Buffer)), 'value', r)
+        if restype is None or not (errcheck and errcheck(r)):
+          marsh = []
+          for arg in args:
+            if isinstance(arg, RIID_PPI) and (n := arg.number) > 0 and (p := arg.p):
+              s = ctypes.sizeof(arg)
+              add = wintypes.LPVOID.from_buffer(p).value
+              for a in range(add, add + n * s, s):
+                if (pI := wintypes.LPVOID.from_address(a)):
+                  if e:
+                    _IUtil.CoReleaseMarshalData(pI)
+                    PCOM.Release(pI)
+                  elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI, arg, pI) is None:
+                    e = True
+                  else:
+                    marsh.append(pI)
+          if e:
+            r = 0x8001000c
+            for pI in marsh:
+              PCOM.Release(pI)
+      channel.FreeBuffer(message)
+    if errres == IGetLastError:
+      return r
+    elif e:
+      ISetLastError(r)
+      return errres
+    else:
+      ISetLastError(0)
+      return r
+  @classmethod
+  def _call(cls, self, method, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
+    return cls._process_message(*cls._send_message(self, method, args), args, restype, errcheck, errres)
+  @classmethod
+  def _invoke(cls, pI, method, args, epargs=(), restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
+    with cls[pI] as self:
+      if not self:
+        for eparg in epargs:
+          if eparg:
+            eparg.contents.value = None
+        if errres == IGetLastError:
+          return 0x80004003
+        else:
+          ISetLastError(0x80004003)
+          return errres
+      return cls._call(self, method, args, restype, errcheck, errres)
 
 class _COM_IRpcStubBuffer(_COM_IUnknown):
   _iids.add(GUID(0xd5f56afc, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a))
@@ -1234,57 +1416,6 @@ class _COM_IRpcStubBuffer(_COM_IUnknown):
   @classmethod
   def _DebugServerRelease(cls, pI, ppObj):
     pass
-
-class _COM_IRpcStub(_COM_IRpcStubBuffer):
-  class _svtbl(tuple):
-    def __new__(cls, com_interface, *args):
-      return super().__new__(cls, zip((ctypes.WINFUNCTYPE(a[0], *a[2:])(i, n) for i, (n, a) in enumerate(com_interface._vtbl.items()) if i >= 3), args))
-    def __getitem__(self, key):
-      key -= 3
-      if key < 0 or key >= len(self):
-        return (lambda *args, **kwargs: 0x80004001), (), ()
-      func, (iargs, oargs) = super().__getitem__(key)
-      return func, iargs, oargs
-  @classmethod
-  def _invoke(cls, self, pI, channel, message):
-    func, iargs, oargs = cls._svtbl[message.iMethod]
-    iargs, oargs = cls._gen_args(self, channel, message, iargs, oargs)
-    return oargs if iargs is None else cls._fin_message(message, iargs, oargs, func(pI, *iargs, *oargs))
-  @classmethod
-  def _gen_iargs(cls, channel, message, iargtypes):
-    if message.cbBuffer < sum(map(ctypes.sizeof, iargtypes)):
-      return 0x80010009
-    o = 0
-    iargs = []
-    for argtype in iargtypes:
-      iargs.append(argtype.from_address(message.Buffer + o))
-      o += ctypes.sizeof(argtype)
-    return iargs
-  @classmethod
-  def _gen_oargs(cls, self, channel, message, iargs, oargtypes, restype=wintypes.ULONG):
-    if channel.GetBuffer(self.__class__._siids[1][getattr(cls, '_ovtbl', 0) // cls.__class__._psize], (o := (0 if restype is None else ctypes.sizeof(restype))) + sum(map(ctypes.sizeof, oargtypes)), message.iMethod, message) is None:
-      return IGetLastError() or 0x80004005
-    oargs = []
-    for argtype in oargtypes:
-      oargs.append(argtype.from_address(message.Buffer + o))
-      o += ctypes.sizeof(argtype)
-    return oargs
-  @classmethod
-  def _fin_message(cls, message, iargs, oargs, res, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
-    if restype is None:
-      o = 0
-    else:
-      ctypes.memmove(message.Buffer, ctypes.addressof(res if isinstance(res, restype) else (r := restype(res))), (o := ctypes.sizeof(restype)))
-    return 0
-  @classmethod
-  def _gen_args(cls, self, channel, message, iargtypes, oargtypes):
-    if isinstance((iargs := cls._gen_iargs(channel, message, iargtypes)), int):
-      return None, iargs
-    if isinstance((oargs := cls._gen_oargs(self, channel, message, iargs, oargtypes)), int):
-      return None, oargs
-    return (iargs, oargs)
-
-class _COM_IRpcInProcStub(_COM_IRpcStubBuffer):
   class _svtbl(tuple):
     def __new__(cls, com_interface, *argtypes):
       return super().__new__(cls, zip((ctypes.WINFUNCTYPE(a[0], *a[2:])(i, n) for i, (n, a) in enumerate(com_interface._vtbl.items()) if i >= 3), argtypes))
@@ -1293,86 +1424,260 @@ class _COM_IRpcInProcStub(_COM_IRpcStubBuffer):
       if key < 0 or key >= len(self):
         return (lambda pI: 0x80004001), ()
       return super().__getitem__(key)
+  class _args(list):
+    def __init__(self):
+      self.marsh = []
+    def release(self):
+      for pI in self.marsh:
+        PCOM.Release(pI)
+      self.marsh.clear()
+
+class _COM_IRpcStub(_COM_IRpcStubBuffer):
+  @classmethod
+  def _process_message(cls, channel, message, argtypes):
+    l = (o := message.Buffer) + message.cbBuffer
+    args = cls._args()
+    parg = None
+    e = False
+    for argtype in argtypes:
+      if isinstance(argtype, RIID_PI) or (isinstance(argtype, RIID_PPI) and argtype.inarg):
+        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
+          e = True
+          break
+        else:
+          if n is None:
+            n = 1
+            p = wintypes.LPVOID()
+            add = ctypes.addressof(p)
+          else:
+            if o + 1 > l:
+              break
+            p = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if int.from_bytes(ctypes.string_at(o, 1), 'little') and n > 0 else wintypes.PLPVOID()
+            o += 1
+            add = wintypes.LPVOID.from_buffer(p).value if p else None
+          parg = p
+          if add:
+            for a in range(add, add + n * _COMMeta._psize, _COMMeta._psize):
+              if o + 2 > l:
+                break
+              s = int.from_bytes(ctypes.string_at(o, 2), 'little')
+              o += 2
+              pI = wintypes.LPVOID.from_address(a)
+              if s:
+                if o + s > l:
+                  break
+                if e:
+                  PCOMSTREAM.ReleaseMarshalData(o, s)
+                elif PCOMSTREAM.UnmarshalInterface(o, s, argtype, pI):
+                  args.marsh.append(pI)
+                else:
+                  e = True
+                o += s
+              else:
+                pI.value = None
+            else:
+              args.append(parg)
+              continue
+            break
+      elif isinstance(argtype, RIID_PPI):
+        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
+          e = True
+          break
+        else:
+          if o + 1 > l:
+            break
+          parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if int.from_bytes(ctypes.string_at(o, 1), 'little') else wintypes.PLPVOID()
+          o += 1
+      elif issubclass(argtype, ctypes._Pointer):
+        if o + 1 > l:
+          break
+        if int.from_bytes(ctypes.string_at(o, 1), 'little'):
+          o += 1
+          if o + (s := ctypes.sizeof(argtype._type_)) > l:
+            break
+          parg = ctypes.pointer(argtype._type_())
+          ctypes.memmove(parg, o, s)
+          o += s
+        else:
+          parg = None
+          o += 1
+      else:
+        if o + (s := ctypes.sizeof(argtype)) > l:
+          break
+        parg = argtype()
+        ctypes.memmove(ctypes.addressof(parg), o, s)
+        o += s
+      args.append(parg)
+    else:
+      if not e:
+        return args
+    args.release()
+    return 0x8001000e if e else 0x80010009
+  @classmethod
+  def _send_message(cls, self, channel, message, args, argtypes, res, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
+    args.release()
+    if restype is None:
+      s = 0
+    else:
+      s = ctypes.sizeof(restype)
+      if errcheck and errcheck(res):
+        if channel.GetBuffer(self.__class__._siids[1][getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, message.iMethod, message) is None:
+          return IGetLastError().code or 0x80004005
+        ctypes.memmove(message.Buffer, ctypes.addressof(res if isinstance(res, restype) else (r := restype(res))), s)
+        return 0
+    if (context := channel.GetDestCtx()) is None:
+      return 0x80004005
+    marsh = []
+    parg = None
+    e = False
+    for arg, argtype in zip(args, argtypes):
+      if isinstance(argtype, RIID_PPI):
+        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
+          e = True
+        elif n > 0 and arg:
+          add = wintypes.LPVOID.from_buffer(arg).value
+          for a in range(add, add + n * _COMMeta._psize, _COMMeta._psize):
+            s += 2
+            if (pI := wintypes.LPVOID.from_address(a)):
+              if not e:
+                if (istream := PCOMSTREAM.MarshalInterface(argtype, pI, context)) is None:
+                  e = True
+                  if istream:
+                    istream.Release()
+                else:
+                  marsh.append(istream)
+                  if (o := istream.Seek(0, 1)) > 65535:
+                    e = True
+                  else:
+                    s += o
+              PCOM.Release(pI)
+      elif not isinstance(argtype, RIID_PI) and issubclass(argtype, ctypes._Pointer):
+        if arg:
+          s += ctypes.sizeof(argtype._type_)
+      parg = arg
+    if e or channel.GetBuffer(self.__class__._siids[1][getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, message.iMethod, message) is None:
+      for istream in marsh:
+        _IUtil.CoReleaseMarshalData(istream)
+        istream.Release()
+      return 0x8001000d if e else (IGetLastError().code or 0x80004005)
+    imarsh = iter(marsh)
+    o = message.Buffer
+    if restype is None:
+      s = 0
+    else:
+      ctypes.memmove(o, ctypes.addressof(res if isinstance(res, restype) else (r := restype(res))), (s := ctypes.sizeof(restype)))
+    o += s
+    for arg, argtype in zip(args, argtypes):
+      if isinstance(argtype, RIID_PPI):
+        if (n := argtype.number) is True:
+          n = parg.value
+        if n > 0 and arg:
+          add = wintypes.LPVOID.from_buffer(arg).value
+          for a in range(add, add + n * _COMMeta._psize, _COMMeta._psize):
+            if wintypes.LPVOID.from_address(a):
+              istream = next(imarsh)
+              ctypes.memmove(o, (s := istream.Seek(0, 1)).to_bytes(2, 'little'), 2)
+              o += 2
+              istream.Seek(0, 0)
+              istream.Read(o, s)
+              istream.Release()
+              o += s
+            else:
+              ctypes.memmove(o, b'\x00\x00', 2)
+              o += 2
+      elif not isinstance(argtype, RIID_PI) and issubclass(argtype, ctypes._Pointer):
+        if arg:
+          ctypes.memmove(o, arg, (s := ctypes.sizeof(argtype._type_)))
+          o += s
+      parg = arg
+    return 0
+  @classmethod
+  def _call(cls, self, pI, channel, message, func, argtypes, errcheck=0x80000000.__and__):
+    if (inproc := getattr(cls, '_inproc', None)) and getattr(channel.GetDestCtx(), 'code', None) in (3, 4):
+      return inproc._offsetted[getattr(cls, '_ovtbl', 0) // cls.__class__._psize]._call(self, pI, channel, message, func, argtypes, errcheck)
+    restype = getattr(func, 'restype', None)
+    return args if isinstance((args := cls._process_message(channel, message, argtypes)), int) else cls._send_message(self, channel, message, args, argtypes, func(pI, *args), restype, errcheck)
   @classmethod
   def _invoke(cls, self, pI, channel, message):
-    func, argtypes = cls._svtbl[message.iMethod]
-    restype = getattr(func, 'restype', None)
-    return args if isinstance((args := cls._gen_args(self, channel, message, restype, argtypes)), int) else cls._fin_message(message, args, argtypes, func(pI, *args), restype)
+    return cls._call(self, pI, channel, message, *cls._svtbl[message.iMethod])
+
+class _COM_IRpcInProcStub(_COM_IRpcStubBuffer):
   @classmethod
-  def _gen_args(cls, self, channel, message, restype, argtypes):
+  def _process_message(cls, self, channel, message, restype, argtypes):
     if message.cbBuffer < sum(map(ctypes.sizeof, argtypes)):
       return 0x80010009
-    o = 0
-    args = []
-    marsh = []
+    o = message.Buffer
+    args = cls._args()
+    parg = None
     e = False
     for argtype in argtypes:
       s = ctypes.sizeof(argtype)
       if isinstance(argtype, RIID_PI) or (isinstance(argtype, RIID_PPI) and argtype.inarg):
-        if argtype.number is None:
-          if (pI := wintypes.LPVOID.from_address(message.Buffer + o)):
-            if e:
-              _IUtil.CoReleaseMarshalData(pI)
-              PCOM.Release(pI)
-            elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI.value, argtype, pI) is None:
-              e = True
-            else:
-              marsh.append(pI)
-          args.append(pI)
+        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
+          e = True
         else:
-          if (p := wintypes.PLPVOID.from_address(message.Buffer + o)):
-            add = wintypes.LPVOID.from_buffer(p).value
-            for a in range(add, add + argtype.number * s, s):
-              if (ar := wintypes.LPVOID.from_address(a)):
+          if n is None:
+            n = 1
+            p = wintypes.LPVOID.from_address(add := o)
+          else:
+            add = wintypes.LPVOID.from_buffer(p).value if (p := wintypes.PLPVOID.from_address(o)) else None
+          if n > 0 and add is not None:
+            for a in range(add, add + n * s, s):
+              if (pI := wintypes.LPVOID.from_address(a)):
                 if e:
-                  _IUtil.CoReleaseMarshalData(ar)
-                  PCOM.Release(wintypes.LPVOID(ar))
-                elif _IUtil.CoGetInterfaceIntoAndReleaseStream(ar.value, argtype, ar) is None:
+                  _IUtil.CoReleaseMarshalData(pI)
+                  PCOM.Release(pI)
+                elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI, argtype, pI) is None:
                   e = True
                 else:
-                  marsh.append(ar)
-          args.append(p)
+                  args.marsh.append(pI)
+        parg = p
       else:
-        args.append((wintypes.PLPVOID if isinstance(argtype, RIID_PPI) else argtype).from_address(message.Buffer + o))
+        parg = (wintypes.PLPVOID if isinstance(argtype, RIID_PPI) else argtype).from_address(o)
+      args.append(parg)
       o += s
     if e or channel.GetBuffer(self.__class__._siids[1][getattr(cls, '_ovtbl', 0) // cls.__class__._psize], (0 if restype is None else ctypes.sizeof(restype)), message.iMethod, message) is None:
-      for arg in marsh:
-        PCOM.Release(arg)
-      return 0x8001000e if e else (IGetLastError() or 0x80004005)
+      args.release()
+      return 0x8001000e if e else (IGetLastError().code or 0x80004005)
     return args
   @classmethod
-  def _fin_message(cls, message, args, argtypes, res, restype, errcheck=0x80000000.__and__):
-    for arg, argtype in zip(args, argtypes):
-      if arg and isinstance(argtype, RIID_PI) or (isinstance(argtype, RIID_PPI) and argtype.inarg):
-        if argtype.number is None:
-          PCOM.Release(arg)
-        else:
-          s = ctypes.sizeof(argtype)
-          add = wintypes.LPVOID.from_buffer(arg).value
-          for a in range(add, add + argtype.number * s, s):
-            PCOM.Release(wintypes.LPVOID.from_address(a))
+  def _send_message(cls, message, args, argtypes, res, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
+    args.release()
     if restype is not None:
       ctypes.memmove(message.Buffer, ctypes.addressof(res if isinstance(res, restype) else (r := restype(res))), ctypes.sizeof(restype))
-    if errcheck and errcheck(res):
-      return 0
+      if errcheck and errcheck(res):
+        return 0
     marsh = []
+    parg = None
     e = False
     for arg, argtype in zip(args, argtypes):
-      if isinstance(argtype, RIID_PPI) and arg:
-        s = ctypes.sizeof(argtype)
-        add = wintypes.LPVOID.from_buffer(arg).value
-        for a in range(add, add + argtype.number * s, s):
-          if (ar := wintypes.LPVOID.from_address(a)):
-            if e or _IUtil.CoMarshalInterThreadInterfaceIntoStream(argtype, (pI := ar.value), ar) is None:
-              e = True
-            else:
-              marsh.append(ar)
-            PCOM.Release(wintypes.LPVOID(pI))
+      if isinstance(argtype, RIID_PPI):
+        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
+          e = True
+        elif n > 0 and arg:
+          s = ctypes.sizeof(argtype)
+          add = wintypes.LPVOID.from_buffer(arg).value
+          for a in range(add, add + n * s, s):
+            if (ar := (pI := wintypes.LPVOID.from_address(a)).value):
+              if not e:
+                if _IUtil.CoMarshalInterThreadInterfaceIntoStream(argtype, ar, pI) is None:
+                  e = True
+                else:
+                  marsh.append(pI)
+              PCOM.Release(wintypes.LPVOID(ar))
+      parg = arg
     if e:
       for pI in marsh:
         _IUtil.CoReleaseMarshalData(pI)
         PCOM.Release(pI)
     return 0x8001000d if e else 0
+  @classmethod
+  def _call(cls, self, pI, channel, message, func, argtypes, errcheck=0x80000000.__and__):
+    restype = getattr(func, 'restype', None)
+    return args if isinstance((args := cls._process_message(self, channel, message, restype, argtypes)), int) else cls._send_message(message, args, argtypes, func(pI, *args), restype, errcheck)
+  @classmethod
+  def _invoke(cls, self, pI, channel, message):
+    return cls._call(self, pI, channel, message, *cls._svtbl[message.iMethod])
 
 class _PSImplMeta(type):
   @staticmethod
@@ -1669,15 +1974,19 @@ class IEnumInterfaceFactory(IUnknown):
       i._lightweight = True
     return i
 
-class _COM_IEnumInterface_Proxy(_COM_IRpcInProcProxy):
+class _COM_IEnumInterface_Proxy(_COM_IRpcProxy):
   _iids.update(_COM_IEnumInterface._iids)
   _vtbl.update(_COM_IEnumInterface._vtbl)
   _vars['iiid'] = wintypes.BYTES16
   @classmethod
-  def _call(cls, self, method, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
-    if method != 7 and not any(self.iiid) and cls._call(self, 7, (ctypes.pointer(self.iiid),)):
-      return 0x8000ffff
-    return super()._call(self, method, args, restype, errcheck)
+  def _call(cls, self, method, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
+    if method != 7 and not any(self.iiid) and super()._call(self, 7, (ctypes.pointer(self.iiid),)):
+      if errres == IGetLastError:
+        return 0x8000ffff
+      else:
+        ISetLastError(0x8000ffff)
+        return errres
+    return super()._call(self, method, args, restype, errcheck, errres)
   @classmethod
   def _Next(cls, pI, celt, rgelt, pceltFetched):
     with cls[pI] as self:
@@ -1687,7 +1996,7 @@ class _COM_IEnumInterface_Proxy(_COM_IRpcInProcProxy):
         if rgelt:
           (wintypes.LPVOID * celt).from_address(rgelt)[:] = (None,) * celt
         return 0x80004003
-      return cls._call(self, 3, (wintypes.ULONG(celt), RIID_PPI.array(celt, self.iiid, rgelt), pceltFetched))
+      return cls._call(self, 3, (wintypes.ULONG(celt), RIID_PPI.array(celt, self.iiid)(rgelt), pceltFetched))
   @classmethod
   def _Skip(cls, pI, celt):
     return cls._invoke(pI, 4, (wintypes.ULONG(celt),))
@@ -1706,8 +2015,9 @@ class _COM_IEnumInterface_Proxy(_COM_IRpcInProcProxy):
       if not self:
         return 0x80004003
       return cls._call(self, 8, (RIID_PI(self.iiid)(pobj),))
+_COM_IEnumInterface_Proxy._inproc = _COM_IRpcInProcProxy
 
-class _COM_IEnumInterface_Stub(_COM_IRpcInProcStub):
+class _COM_IEnumInterface_Stub(_COM_IRpcStub):
   _vars['iiid'] = wintypes.BYTES16
   _svtbl = _COM_IRpcInProcStub._svtbl(_COM_IEnumInterface, (), (wintypes.ULONG,), (), (RIID_PPI(_COM_IEnumInterface._iid),), (wintypes.PBYTES16,), ())
   @classmethod
@@ -1724,21 +2034,14 @@ class _COM_IEnumInterface_Stub(_COM_IRpcInProcStub):
   @classmethod
   def _invoke(cls, self, pI, channel, message):
     func, argtypes = cls._svtbl[method := message.iMethod]
-    restype = getattr(func, 'restype', None)
     if (method) == 3:
-      argtypes = (wintypes.ULONG, RIID_PPI(self.iiid), wintypes.PULONG)
-      if isinstance(args := cls._gen_args(self, channel, message, restype, argtypes), int):
-        return args
-      res = func(pI, *args)
-      argtypes[1].number = celtFetched = celt if (celt := args[0].value) <= 1 else (p.contents.value if (p := args[2]) else 0)
-      if (p := args[1]):
-        ctypes.memset(wintypes.LPVOID.from_buffer(p).value + celtFetched * (s := ctypes.sizeof(p)), 0, max(celt - celtFetched, 0) * s)
-      return cls._fin_message(message, args, argtypes, res, restype)
-    if method == 8:
+      argtypes = (wintypes.ULONG, RIID_PPI.array(True, self.iiid), wintypes.PULONG)
+    elif method == 8:
       argtypes = (RIID_PI(self.iiid),)
-    return args if isinstance((args := cls._gen_args(self, channel, message, restype, argtypes)), int) else cls._fin_message(message, args, argtypes, func(pI, *args), restype)
+    return cls._call(self, pI, channel, message, func, argtypes)
+_COM_IEnumInterface_Stub._inproc = _COM_IRpcInProcStub
 
-class _COM_IEnumInterfaceFactory_Proxy(_COM_IRpcInProcProxy):
+class _COM_IEnumInterfaceFactory_Proxy(_COM_IRpcProxy):
   _iids.update(_COM_IEnumInterfaceFactory._iids)
   _vtbl.update(_COM_IEnumInterfaceFactory._vtbl)
   @classmethod
@@ -1747,9 +2050,11 @@ class _COM_IEnumInterfaceFactory_Proxy(_COM_IRpcInProcProxy):
   @classmethod
   def _LockServer(cls, pI, fLock):
     return cls._invoke(pI, 4, (wintypes.BOOL(fLock),))
+_COM_IEnumInterfaceFactory_Proxy._inproc = _COM_IRpcInProcProxy
 
-class _COM_IEnumInterfaceFactory_Stub(_COM_IRpcInProcStub):
+class _COM_IEnumInterfaceFactory_Stub(_COM_IRpcStub):
   _svtbl = _COM_IRpcInProcStub._svtbl(_COM_IEnumInterfaceFactory, (wintypes.PBYTES16, RIID_PPI(_COM_IEnumInterface._iid)), (wintypes.BOOL,))
+_COM_IEnumInterfaceFactory_Stub._inproc = _COM_IRpcInProcStub
 
 class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IEnumInterface_Proxy, _COM_IEnumInterface_Stub), (_COM_IEnumInterfaceFactory_Proxy, _COM_IEnumInterfaceFactory_Stub))):
   CLSID = True
@@ -1777,7 +2082,7 @@ class IStream(IUnknown):
       origin = {'b': 0, 'beginning': 0, 'c': 1, 'current': 1, 'e': 2, 'end': 2}.get(origin.lower(), 1)
     return self.__class__._protos['Seek'](self.pI, move, origin)
   def SetSize(self, size):
-    return None if self.__class__._protos['SetSize'](self.pI, size) else size
+    return self.__class__._protos['SetSize'](self.pI, size) and size
   def CopyTo(self, istream, number):
     return self.__class__._protos['CopyTo'](self.pI, istream, number)
   def Commit(self):
@@ -1822,6 +2127,42 @@ class IStream(IUnknown):
     self.Seek(p, 'beginning')
     return b
 
+class PCOMSTREAM(PCOM):
+  icls = IStream
+  def Read(self, buffer, number=None):
+    return IStream._protos['Read'](self, buffer, (PBUFFER.length(buffer) if number is None else number)) if self else None
+  def Write(self, buffer, number=None):
+    return IStream._protos['Write'](self, buffer, (PBUFFER.length(buffer) if number is None else number)) if self else None
+  def Seek(self, move=0, origin=1):
+    return IStream._protos['Seek'](self, move, ({'b': 0, 'beginning': 0, 'c': 1, 'current': 1, 'e': 2, 'end': 2}.get(origin.lower(), 1) if isinstance(origin, str) else origin)) if self else None
+  def SetSize(self, size):
+    return IStream._protos['SetSize'](self, size) and size if self else None
+  @staticmethod
+  def CreateInMemory(initializer=None, size=None):
+    return PCOMSTREAM(shl.SHCreateMemStream(PBUFFER.from_param(initializer), wintypes.UINT(PBUFFER.length(initializer) if size is None else size)))
+  @staticmethod
+  def MarshalInterface(riid, pI, context=0):
+    if not pI or not (istream := PCOMSTREAM.CreateInMemory()):
+      return None
+    if _IUtil.CoMarshalInterface(istream, riid, pI, context, None, 0) is None:
+      istream.Release()
+      return None
+    return istream
+  @staticmethod
+  def UnmarshalInterface(buffer, size, riid, pI=None):
+    if not (istream := PCOMSTREAM.CreateInMemory(buffer, size)):
+      return None
+    pI = _IUtil.CoUnmarshalInterfaceInto(istream, riid, ((pI := wintypes.LPVOID()) if pI is None else pI)) and pI
+    istream.Release()
+    return pI
+  @staticmethod
+  def ReleaseMarshalData(buffer, size):
+    if not (istream := PCOMSTREAM.CreateInMemory(buffer, size)):
+      return False
+    r = _IUtil.CoReleaseMarshalData(istream)
+    istream.Release()
+    return bool(r)
+
 class _BSTRUtil:
   _mul_cache = {}
   @staticmethod
@@ -1836,12 +2177,12 @@ class _BSTRMeta(ctypes._Pointer.__class__):
   def __mul__(bcls, size):
     return _BSTRUtil._mul_cache.get((bcls, size)) or _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
 
-class BSTR(ctypes.POINTER(wintypes.WCHAR), metaclass=_BSTRMeta):
+class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
   _type_ = wintypes.WCHAR
   oleauto32.SysAllocString.restype = wintypes.LPVOID
   oleauto32.SysAllocStringByteLen.restype = wintypes.LPVOID
   def __new__(cls, data=None):
-    self = ctypes.POINTER(wintypes.WCHAR).__new__(cls)
+    self = wintypes.PWCHAR.__new__(cls)
     if data is None:
       self._needsfree = False
       return self
@@ -2139,9 +2480,6 @@ class BLOB(ctypes.Structure, metaclass=_BLOBMeta):
   @property
   def _for_json(self):
     return None if (c := self.content) is None else tuple(c)
-
-class PCOMSTREAM(PCOM):
-  icls = IStream
 
 class VERSIONEDSTREAM(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('guidVersion', UUID), ('pStream', PCOMSTREAM)]
@@ -7382,25 +7720,27 @@ class _COM_IFileSystemBindData_Proxy(_COM_IRpcProxy):
   _vtbl.update(_COM_IFileSystemBindData._vtbl)
   @classmethod
   def _SetFindData(cls, pI, pfd):
-    return cls._invoke(pI, 3, (pfd,), ())
+    return cls._invoke(pI, 3, (pfd,))
   @classmethod
   def _GetFindData(cls, pI, pfd):
-    return cls._invoke(pI, 4, (), (pfd,))
+    return cls._invoke(pI, 4, (pfd,))
   @classmethod
   def _SetFileID(cls, pI, fid):
-    return cls._invoke(pI, 5, (wintypes.LARGE_INTEGER(fid),), ())
+    return cls._invoke(pI, 5, (wintypes.LARGE_INTEGER(fid),))
   @classmethod
   def _GetFileID(cls, pI, pfid):
-    return cls._invoke(pI, 6, (), (pfid,))
+    return cls._invoke(pI, 6, (pfid,))
   @classmethod
   def _SetJunctionCLSID(cls, pI, pjclsid):
-    return cls._invoke(pI, 7, (pjclsid,), ())
+    return cls._invoke(pI, 7, (pjclsid,))
   @classmethod
   def _GetJunctionCLSID(cls, pI, pjclsid):
-    return cls._invoke(pI, 8, (), (pjclsid,))
+    return cls._invoke(pI, 8, (pjclsid,))
+_COM_IFileSystemBindData_Proxy._inproc = _COM_IRpcInProcProxy
 
 class _COM_IFileSystemBindData_Stub(_COM_IRpcStub):
-  _svtbl = _COM_IRpcStub._svtbl(_COM_IFileSystemBindData, ((WSFINDDATA,), ()), ((), (WSFINDDATA,)), ((wintypes.LARGE_INTEGER,), ()), ((), (wintypes.LARGE_INTEGER,)), ((wintypes.BYTES16,), ()), ((), (wintypes.BYTES16,)))
+  _svtbl = _COM_IRpcStub._svtbl(_COM_IFileSystemBindData, (WSPFINDDATA,), (WSPFINDDATA,), (wintypes.LARGE_INTEGER,), (wintypes.PLARGE_INTEGER,), (wintypes.PBYTES16,), (wintypes.PBYTES16,))
+_COM_IFileSystemBindData_Stub._inproc = _COM_IRpcInProcStub
 
 class _PS_IFileSystemBindData_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IFileSystemBindData_Proxy, _COM_IFileSystemBindData_Stub),)):
   CLSID = True
@@ -9039,13 +9379,13 @@ class COMSharing:
                     pass
                   else:
                     if iinstance:
-                      istream = cls.Marshal(iinstance, 0)
+                      istream = PCOMSTREAM.MarshalInterface(iinstance.IID, iinstance.pI)
                       iinstance.Release()
                       iinstance = None
                       if istream:
                         l = istream.Seek(0, 2)
                         istream.Seek(0, 0)
-                        if l <= cls.SHAREDMEMORY_MINSIZE and IStream._protos['Read'](istream.pI, wintypes.LPVOID(p), l) and Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, l):
+                        if l <= cls.SHAREDMEMORY_MINSIZE and istream.Read(p, l) and Window.PostThreadMessage(msg.lParam & 0xffff, 0x8001, msg.wParam, l):
                           self._sm_pnd[n] = istream, time.time()
                           continue
                         _IUtil.CoReleaseMarshalData(istream)
@@ -9179,10 +9519,11 @@ class COMSharing:
               if msg.message == 0x8001 and msg.wParam == wParam:
                 t = None
                 if (l := msg.lParam):
-                  iinstance = cls.Unmarshal(IStream(shl.SHCreateMemStream(wintypes.LPVOID(p), l), icls), 0)
+                  if not (iinstance := icls(PCOMSTREAM.UnmarshalInterface(p, l, icls.IID))):
+                    ISetLastError(0x80010105)
                   Window.PostThreadMessage(tid, 0x8001, wParam, 0x10000)
                 else:
-                  ISetLastError(0x80010105)
+                  ISetLastError(0x8001000c)
                 break
             if t is None or Window.MsgWaitForMultipleObjects(0, None, False, math.ceil(1000 * max(t - time.time(), 0)), 8) == 258:
               break
