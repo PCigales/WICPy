@@ -1447,15 +1447,13 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
         else:
           if n is None:
             n = 1
-            p = wintypes.LPVOID()
-            add = ctypes.addressof(p)
+            add = ctypes.addressof(parg := wintypes.LPVOID())
           else:
             if o + 1 > l:
               break
-            p = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if int.from_bytes(ctypes.string_at(o, 1), 'little') and n > 0 else wintypes.PLPVOID()
+            parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if int.from_bytes(ctypes.string_at(o, 1), 'little') and n > 0 else wintypes.PLPVOID()
             o += 1
-            add = wintypes.LPVOID.from_buffer(p).value if p else None
-          parg = p
+            add = wintypes.LPVOID.from_buffer(parg).value if parg else None
           if add:
             for a in range(add, add + n * _COMMeta._psize, _COMMeta._psize):
               if o + 2 > l:
@@ -1542,8 +1540,6 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               if not e:
                 if (istream := PCOMSTREAM.MarshalInterface(argtype, pI, context)) is None:
                   e = True
-                  if istream:
-                    istream.Release()
                 else:
                   marsh.append(istream)
                   if (o := istream.Seek(0, 1)) > 65535:
