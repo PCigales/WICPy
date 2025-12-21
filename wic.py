@@ -1095,11 +1095,8 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
         elif isinstance(arg, BSTR):
           s += 1
           if arg:
-            l = oleauto32.SysStringLen(arg)
-            b = ctypes.create_unicode_buffer(l + 1)
-            b[l] = '\x00'
-            ctypes.memmove(b, arg, l * ctypes.sizeof(wintypes.WCHAR))
-            smarsh.append(b)
+            s += 4
+            smarsh.append(b := arg.ubuffer)
             s += ctypes.sizeof(b)
         elif isinstance(arg, ctypes._Pointer):
           s += 1
@@ -1145,12 +1142,24 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           elif isinstance(arg, RIID_PPI):
             ctypes.c_char.from_address(o).value = 1 if arg.p else 0
             o += 1
-          elif isinstance(arg, (wintypes.LPCWSTR, wintypes.LPCSTR, BSTR)):
+          elif isinstance(arg, (wintypes.LPCWSTR, wintypes.LPCSTR)):
             if arg:
               ctypes.c_char.from_address(o).value = 1
               o += 1
               b = next(smarsh)
               ctypes.memmove(o, b, (s := ctypes.sizeof(b)))
+              o += s
+            else:
+              ctypes.c_char.from_address(o).value = 0
+              o += 1
+          elif isinstance(arg, BSTR):
+            if arg:
+              ctypes.c_char.from_address(o).value = 1
+              o += 1
+              b = next(smarsh)
+              ctypes.memmove(o, (s := ctypes.sizeof(b)).to_bytes(4, 'little'), 4)
+              o += 4
+              ctypes.memmove(o, b, s)
               o += s
             else:
               ctypes.c_char.from_address(o).value = 0
@@ -1243,13 +1252,13 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                   break
                 if ctypes.c_char.from_address(o):
                   o += 1
-                  p = ctypes.cast(o, wintypes.PWCHAR)
-                  if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+                  if o + 4 > l:
                     break
-                  b = BSTR(wintypes.LPCWSTR.from_buffer(p))
-                  b._needsfree = False
+                  s = int.from_bytes(ctypes.string_at(o, 4), 'little')
+                  o += 4
+                  (b := BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR)))._needsfree = False
                   arg.contents.value = b.value
-                  o += (s + 1) * ctypes.sizeof(wintypes.WCHAR)
+                  o += s
                 else:
                   arg.contents.value = None
                   o += 1
@@ -1584,11 +1593,12 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
           break
         if ctypes.c_char.from_address(o):
           o += 1
-          p = ctypes.cast(o, wintypes.PWCHAR)
-          if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+          if o + 4 > l:
             break
-          parg = BSTR(wintypes.LPCWSTR.from_buffer(p))
-          o += s * ctypes.sizeof(wintypes.WCHAR)
+          s = int.from_bytes(ctypes.string_at(o, 4), 'little')
+          o += 4
+          parg = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR))
+          o += s
         else:
           parg = None
           o += 1
@@ -1680,8 +1690,8 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(wintypes.PWCHAR.from_buffer(p)) if c == '\x00') + 1)
             else:
               b = ctypes.create_string_buffer(next(i for i, c in enumerate(wintypes.PCHAR.from_buffer(p)) if c == '\x00') + 1)
-            _IUtil.CoTaskMemFree(p)
             ctypes.memmove(b, p, (o := ctypes.sizeof(b)))
+            _IUtil.CoTaskMemFree(p)
             smarsh.append(b)
             s += o
       elif issubclass(argtype, (PBSTR, PBSTRING)):
@@ -1689,11 +1699,8 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
         if arg:
           s += 1
           if (p := arg.contents):
-            l = oleauto32.SysStringLen(p)
-            b = ctypes.create_unicode_buffer(l + 1)
-            b[l] = '\x00'
-            ctypes.memmove(b, p, l * ctypes.sizeof(wintypes.WCHAR))
-            smarsh.append(b)
+            s += 4
+            smarsh.append(b := p.ubuffer)
             s += ctypes.sizeof(b)
       elif issubclass(argtype, wintypes.LPVOID):
         if arg:
@@ -1735,13 +1742,26 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               o += 2
       elif isinstance(argtype, RIID_PI):
         pass
-      elif issubclass(argtype, (wintypes.PLPWSTR, wintypes.PLPSTR, PBSTR, PBSTRING)):
+      elif issubclass(argtype, (wintypes.PLPWSTR, wintypes.PLPSTR)):
         if arg:
           if arg.contents:
             ctypes.c_char.from_address(o).value = 1
             o += 1
             b = next(smarsh)
             ctypes.memmove(o, b, (s := ctypes.sizeof(b)))
+            o += s
+          else:
+            ctypes.c_char.from_address(o).value = 0
+            o += 1
+      elif issubclass(argtype, (PBSTR, PBSTRING)):
+        if arg:
+          if arg.contents:
+            ctypes.c_char.from_address(o).value = 1
+            o += 1
+            b = next(smarsh)
+            ctypes.memmove(o, (s := ctypes.sizeof(b)).to_bytes(4, 'little'), 4)
+            o += 4
+            ctypes.memmove(o, b, s)
             o += s
           else:
             ctypes.c_char.from_address(o).value = 0
@@ -2345,8 +2365,15 @@ class _BSTRMeta(ctypes._Pointer.__class__):
 class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
   _type_ = wintypes.WCHAR
   oleauto32.SysAllocString.restype = wintypes.LPVOID
+  oleauto32.SysAllocString.argtypes = (wintypes.LPOLESTR,)
+  oleauto32.SysAllocStringLen.restype = wintypes.LPVOID
+  oleauto32.SysAllocStringLen.argtypes = (wintypes.LPVOID, wintypes.UINT)
   oleauto32.SysAllocStringByteLen.restype = wintypes.LPVOID
+  oleauto32.SysAllocStringByteLen.argtypes = (wintypes.LPVOID, wintypes.UINT)
   oleauto32.SysStringLen.restype = wintypes.UINT
+  oleauto32.SysStringLen.argtypes = (wintypes.LPVOID,)
+  oleauto32.SysStringByteLen.restype = wintypes.UINT
+  oleauto32.SysStringByteLen.argtypes = (wintypes.LPVOID,)
   def __new__(cls, data=None):
     self = wintypes.PWCHAR.__new__(cls)
     if data is None:
@@ -2354,26 +2381,23 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
       return self
     if isinstance(data, BSTR):
       self._needsfree = False
-      bstr = getattr(data, 'bstr', ctypes.cast(data, ctypes.c_void_p))
+      bstr = getattr(data, 'bstr', ctypes.cast(data, ctypes.c_void_p)).value
     elif isinstance(data, wintypes.LPVOID):
       self._needsfree = False
-      bstr = data
+      bstr = data.value
     elif isinstance(data, int):
       self._needsfree = False
-      bstr = wintypes.LPVOID(data)
-    elif isinstance(data, wintypes.LPCWSTR):
+      bstr = data
+    elif isinstance(data, (str, wintypes.LPCWSTR)):
       self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(data))
+      bstr = oleauto32.SysAllocString(data)
     elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
       self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(ctypes.byref(data)))
-    elif isinstance(data, str):
-      self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocString(wintypes.LPCWSTR(data)))
+      bstr = oleauto32.SysAllocStringLen(data, len(data))
     else:
       self._needsfree = True
-      bstr = wintypes.LPVOID(oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data),PBUFFER.length(data)))
-    self.value = bstr.value
+      bstr = oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data), PBUFFER.length(data))
+    self.value = bstr
     return self
   @property
   def value(self):
@@ -2389,6 +2413,23 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
     if not self.bstr:
       return None
     return ctypes.wstring_at(self.bstr, oleauto32.SysStringLen(self.bstr))
+  @property
+  def ubuffer(self):
+    if self:
+      b = ctypes.create_unicode_buffer(oleauto32.SysStringLen(self))
+      ctypes.memmove(b, self, ctypes.sizeof(b))
+      return b
+    else:
+      return None
+  @classmethod
+  def from_ubuffer(cls, b, l=None):
+    self = cls()
+    if b:
+      self._needsfree = True
+      self.value = oleauto32.SysAllocStringLen(b, (len(b) if l is None else l))
+      return self
+    else:
+      return self
   def __init__(self, data=None):
     super().__init__()
   def __del__(self):
