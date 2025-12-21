@@ -8,6 +8,8 @@ vars(ctypes).setdefault('_Pointer', ctypes.POINTER(ctypes.c_byte).__mro__[1])
 vars(ctypes).setdefault('_CData', ctypes.c_byte.__mro__[-2])
 wintypes.PLPVOID = ctypes.POINTER(wintypes.LPVOID)
 wintypes.PDOUBLE = ctypes.POINTER(wintypes.DOUBLE)
+wintypes.PLPSTR = ctypes.POINTER(wintypes.LPSTR)
+wintypes.PLPWSTR = ctypes.POINTER(wintypes.LPWSTR)
 wintypes.PLPOLESTR = ctypes.POINTER(wintypes.LPOLESTR)
 wintypes.BOOLE = type('BOOLE', (wintypes.BOOL,), {'value': property(lambda s: bool(wintypes.BOOL.value.__get__(s)), wintypes.BOOL.value.__set__), '__ctypes_from_outparam__': lambda s: s.value})
 wintypes.PBOOLE = ctypes.POINTER(wintypes.BOOLE)
@@ -348,6 +350,8 @@ _IUtil.CoUninitialize = _IUtil._wrap('CoUninitialize')
 _IUtil.CoGetApartmentType = _IUtil._wrap('CoGetApartmentType', (wintypes.PINT, 2), (wintypes.PINT, 2))
 _IUtil.CoCreateInstance = _IUtil._wrap('CoCreateInstance', (wintypes.LPCSTR, 1), (wintypes.LPVOID, 1), (COMCLSCTX, 1), (wintypes.LPCSTR, 1), (wintypes.PLPVOID, 2))
 _IUtil.CoGetClassObject = _IUtil._wrap('CoGetClassObject', (wintypes.LPCSTR, 1), (COMCLSCTX, 1), (wintypes.LPVOID, 1), (wintypes.LPCSTR, 1), (wintypes.PLPVOID, 2))
+_IUtil.CoTaskMemAlloc = _IUtil._wrap('CoTaskMemAlloc', (wintypes.LPVOID, 0), (wintypes.SIZE_T, 1))
+_IUtil.CoTaskMemRealloc = _IUtil._wrap('CoTaskMemRealloc', (wintypes.LPVOID, 0), (wintypes.LPVOID, 1), (wintypes.SIZE_T, 1))
 _IUtil.CoTaskMemFree = _IUtil._wrap('CoTaskMemFree', (None, 0), (wintypes.LPVOID, 1))
 _IUtil.CoRegisterClassObject = _IUtil._wrap('CoRegisterClassObject', (PUUID, 1), (wintypes.LPVOID, 1), (COMCLSCTX, 1), (COMREGCLS, 1), (wintypes.PDWORD, 2))
 _IUtil.CoRevokeClassObject = _IUtil._wrap('CoRevokeClassObject', (wintypes.DWORD, 1))
@@ -1047,6 +1051,7 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
     else:
       r = 0
       marsh = []
+      smarsh = []
       s = 0
       for arg in args:
         if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
@@ -1077,6 +1082,25 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           break
         elif isinstance(arg, RIID_PPI):
           s += 1
+        elif (w := isinstance(arg, wintypes.LPCWSTR)) or isinstance(arg, wintypes.LPCSTR):
+          s += 1
+          if arg:
+            if w:
+              b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(wintypes.PWCHAR.from_buffer(arg)) if c == '\x00') + 1)
+            else:
+              b = ctypes.create_string_buffer(next(i for i, c in enumerate(wintypes.PCHAR.from_buffer(arg)) if c == b'\x00') + 1)
+            ctypes.memmove(b, arg, (o := ctypes.sizeof(b)))
+            smarsh.append(b)
+            s += o
+        elif isinstance(arg, BSTR):
+          s += 1
+          if arg:
+            l = oleauto32.SysStringLen(arg)
+            b = ctypes.create_unicode_buffer(l + 1)
+            b[l] = '\x00'
+            ctypes.memmove(b, arg, l * ctypes.sizeof(wintypes.WCHAR))
+            smarsh.append(b)
+            s += ctypes.sizeof(b)
         elif isinstance(arg, ctypes._Pointer):
           s += 1
           if arg:
@@ -1091,6 +1115,7 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           _IUtil.CoReleaseMarshalData(istream)
       else:
         imarsh = iter(marsh)
+        smarsh = iter(smarsh)
         o = message.Buffer
         for arg in args:
           if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
@@ -1099,11 +1124,11 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               pIs = (p,)
             else:
               if n > 0 and p:
-                ctypes.memmove(o, b'\x01', 1)
+                ctypes.c_char.from_address(o).value = 1
                 add = wintypes.LPVOID.from_buffer(p).value
                 pIs = map(wintypes.LPVOID.from_address, range(add, add + n * _COMMeta._psize, _COMMeta._psize))
               else:
-                ctypes.memmove(o, b'\x00', 1)
+                ctypes.c_char.from_address(o).value = 0
                 pIs = ()
               o += 1
             for pI in pIs:
@@ -1118,16 +1143,26 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                 ctypes.memmove(o, b'\x00\x00', 2)
                 o += 2
           elif isinstance(arg, RIID_PPI):
-            ctypes.memmove(o, (b'\x01' if arg.p else b'\x00'), 1)
+            ctypes.c_char.from_address(o).value = 1 if arg.p else 0
             o += 1
+          elif isinstance(arg, (wintypes.LPCWSTR, wintypes.LPCSTR, BSTR)):
+            if arg:
+              ctypes.c_char.from_address(o).value = 1
+              o += 1
+              b = next(smarsh)
+              ctypes.memmove(o, b, (s := ctypes.sizeof(b)))
+              o += s
+            else:
+              ctypes.c_char.from_address(o).value = 0
+              o += 1
           elif isinstance(arg, ctypes._Pointer):
             if arg:
-              ctypes.memmove(o, b'\x01', 1)
+              ctypes.c_char.from_address(o).value = 1
               o += 1
               ctypes.memmove(o, arg, (s := ctypes.sizeof(arg._type_)))
               o += s
             else:
-              ctypes.memmove(o, b'\x00', 1)
+              ctypes.c_char.from_address(o).value = 0
               o += 1
           else:
             ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
@@ -1180,6 +1215,44 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                 else:
                   continue
                 break
+            elif (w := isinstance(arg, wintypes.PLPWSTR)) or isinstance(arg, wintypes.PLPSTR):
+              if arg:
+                if o + 1 > l:
+                  break
+                if ctypes.c_char.from_address(o):
+                  o += 1
+                  if w: 
+                    p = ctypes.cast(o, wintypes.PWCHAR)
+                    if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+                      break
+                    s = (s + 1) * ctypes.sizeof(wintypes.WCHAR)
+                  else:
+                    p = ctypes.cast(o, wintypes.PCHAR)
+                    if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
+                      break
+                    s = (s + 1) * ctypes.sizeof(wintypes.CHAR)
+                  arg.contents.value = _IUtil.CoTaskMemAlloc(s)
+                  ctypes.memmove(arg.contents, p, s)
+                  o += s
+                else:
+                  arg.contents.value = None
+                  o += 1
+            elif isinstance(arg, (PBSTR, PBSTRING)):
+              if arg:
+                if o + 1 > l:
+                  break
+                if ctypes.c_char.from_address(o):
+                  o += 1
+                  p = ctypes.cast(o, wintypes.PWCHAR)
+                  if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+                    break
+                  b = BSTR(wintypes.LPCWSTR.from_buffer(p))
+                  b._needsfree = False
+                  arg.contents.value = b.value
+                  o += (s + 1) * ctypes.sizeof(wintypes.WCHAR)
+                else:
+                  arg.contents.value = None
+                  o += 1
             elif not isinstance(arg, RIID_PI) and isinstance(arg, ctypes._Pointer):
               if arg:
                 if o + (s := ctypes.sizeof(arg._type_)) > l:
@@ -1451,7 +1524,7 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
           else:
             if o + 1 > l:
               break
-            parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if int.from_bytes(ctypes.string_at(o, 1), 'little') and n > 0 else wintypes.PLPVOID()
+            parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if ctypes.c_char.from_address(o) and n > 0 else wintypes.PLPVOID()
             o += 1
             add = wintypes.LPVOID.from_buffer(parg).value if parg else None
           if add:
@@ -1484,12 +1557,61 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
         else:
           if o + 1 > l:
             break
-          parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if int.from_bytes(ctypes.string_at(o, 1), 'little') else wintypes.PLPVOID()
+          parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if ctypes.c_char.from_address(o) else wintypes.PLPVOID()
+          o += 1
+      elif (w := issubclass(argtype, wintypes.LPCWSTR)) or issubclass(argtype, wintypes.LPCSTR):
+        if o + 1 > l:
+          break
+        if ctypes.c_char.from_address(o):
+          o += 1
+          if w:
+            p = ctypes.cast(o, wintypes.PWCHAR)
+            if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+              break
+            parg = ctypes.create_unicode_buffer(s + 1)
+          else:
+            p = ctypes.cast(o, wintypes.PCHAR)
+            if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
+              break
+            parg = ctypes.create_string_buffer(s + 1)
+          ctypes.memmove(parg, o, (s := ctypes.sizeof(parg)))
+          o += s
+        else:
+          parg = None
+          o += 1
+      elif issubclass(argtype, BSTR):
+        if o + 1 > l:
+          break
+        if ctypes.c_char.from_address(o):
+          o += 1
+          p = ctypes.cast(o, wintypes.PWCHAR)
+          if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+            break
+          parg = BSTR(wintypes.LPCWSTR.from_buffer(p))
+          o += s * ctypes.sizeof(wintypes.WCHAR)
+        else:
+          parg = None
+          o += 1
+      elif issubclass(argtype, wintypes.LPVOID):
+        if o + 1 > l:
+          break
+        if ctypes.c_char.from_address(o):
+          o += 1
+          if not isinstance((s := getattr(parg, 'value', None)), int):
+            e = True
+            break
+          if o + s > l:
+            break
+          parg = ctypes.create_string_buffer(s)
+          ctypes.memmove(parg, o, s)
+          o += s
+        else:
+          parg = None
           o += 1
       elif issubclass(argtype, ctypes._Pointer):
         if o + 1 > l:
           break
-        if int.from_bytes(ctypes.string_at(o, 1), 'little'):
+        if ctypes.c_char.from_address(o):
           o += 1
           if o + (s := ctypes.sizeof(argtype._type_)) > l:
             break
@@ -1526,6 +1648,7 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
     if (context := channel.GetDestCtx()) is None:
       return 0x80004005
     marsh = []
+    smarsh = []
     parg = None
     e = False
     for arg, argtype in zip(args, argtypes):
@@ -1547,7 +1670,35 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
                   else:
                     s += o
               PCOM.Release(pI)
-      elif not isinstance(argtype, RIID_PI) and issubclass(argtype, ctypes._Pointer):
+      elif isinstance(argtype, RIID_PI):
+        pass
+      elif (w := issubclass(argtype, wintypes.PLPWSTR)) or issubclass(argtype, wintypes.PLPSTR):
+        if arg:
+          s += 1
+          if (p := arg.contents):
+            if w:
+              b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(wintypes.PWCHAR.from_buffer(p)) if c == '\x00') + 1)
+            else:
+              b = ctypes.create_string_buffer(next(i for i, c in enumerate(wintypes.PCHAR.from_buffer(p)) if c == '\x00') + 1)
+            _IUtil.CoTaskMemFree(p)
+            ctypes.memmove(b, p, (o := ctypes.sizeof(b)))
+            smarsh.append(b)
+            s += o
+      elif issubclass(argtype, (PBSTR, PBSTRING)):
+        arg._needsfree = True
+        if arg:
+          s += 1
+          if (p := arg.contents):
+            l = oleauto32.SysStringLen(p)
+            b = ctypes.create_unicode_buffer(l + 1)
+            b[l] = '\x00'
+            ctypes.memmove(b, p, l * ctypes.sizeof(wintypes.WCHAR))
+            smarsh.append(b)
+            s += ctypes.sizeof(b)
+      elif issubclass(argtype, wintypes.LPVOID):
+        if arg:
+          s += ctypes.sizeof(arg)
+      elif issubclass(argtype, ctypes._Pointer):
         if arg:
           s += ctypes.sizeof(argtype._type_)
       parg = arg
@@ -1557,6 +1708,7 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
         istream.Release()
       return 0x8001000d if e else (IGetLastError().code or 0x80004005)
     imarsh = iter(marsh)
+    smarsh = iter(smarsh)
     o = message.Buffer
     if restype is None:
       s = 0
@@ -1581,9 +1733,26 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
             else:
               ctypes.memmove(o, b'\x00\x00', 2)
               o += 2
-      elif not isinstance(argtype, RIID_PI) and issubclass(argtype, ctypes._Pointer):
+      elif isinstance(argtype, RIID_PI):
+        pass
+      elif issubclass(argtype, (wintypes.PLPWSTR, wintypes.PLPSTR, PBSTR, PBSTRING)):
+        if arg:
+          if arg.contents:
+            ctypes.c_char.from_address(o).value = 1
+            o += 1
+            b = next(smarsh)
+            ctypes.memmove(o, b, (s := ctypes.sizeof(b)))
+            o += s
+          else:
+            ctypes.c_char.from_address(o).value = 0
+            o += 1
+      elif issubclass(argtype, ctypes._Pointer):
         if arg:
           ctypes.memmove(o, arg, (s := ctypes.sizeof(argtype._type_)))
+          o += s
+      elif issubclass(argtype, wintypes.LPVOID):
+        if arg:
+          ctypes.memmove(o, arg, (s := ctypes.sizeof(arg)))
           o += s
       parg = arg
     return 0
@@ -2177,6 +2346,7 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
   _type_ = wintypes.WCHAR
   oleauto32.SysAllocString.restype = wintypes.LPVOID
   oleauto32.SysAllocStringByteLen.restype = wintypes.LPVOID
+  oleauto32.SysStringLen.restype = wintypes.UINT
   def __new__(cls, data=None):
     self = wintypes.PWCHAR.__new__(cls)
     if data is None:
@@ -2218,8 +2388,7 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
       self.bstr = ctypes.cast(self, ctypes.c_void_p)
     if not self.bstr:
       return None
-    l = wintypes.UINT(oleauto32.SysStringLen(self.bstr))
-    return ctypes.wstring_at(self.bstr, l.value)
+    return ctypes.wstring_at(self.bstr, oleauto32.SysStringLen(self.bstr))
   def __init__(self, data=None):
     super().__init__()
   def __del__(self):
