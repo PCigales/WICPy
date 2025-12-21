@@ -2424,9 +2424,9 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
   @classmethod
   def from_ubuffer(cls, b, l=None):
     self = cls()
-    if b:
+    if (p := ctypes.cast(b, wintypes.LPVOID)):
       self._needsfree = True
-      self.value = oleauto32.SysAllocStringLen(b, (len(b) if l is None else l))
+      self.value = oleauto32.SysAllocStringLen(p, (len(b) if l is None else l))
       return self
     else:
       return self
