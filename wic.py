@@ -539,12 +539,12 @@ class _COM_IUnknown(metaclass=_COMMeta):
       return 0x80004003
     with cls[pI] as self:
       if not self or not riid:
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x80004003
       if (ind := self.__class__._iids.get(GUID(riid))) is None:
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x80004002
-      ppObj.contents.value = pI = ctypes.addressof(self) + ind * cls.__class__._psize
+      ppObj[0] = pI = ctypes.addressof(self) + ind * cls.__class__._psize
       PCOM.AddRef(wintypes.LPVOID(pI))
       return 0
   @classmethod
@@ -725,7 +725,7 @@ class _COM_IUnknown_aggregatable(_COM_IUnknown):
     with cls[pI] as self:
       if not (self and self.pUnkOuter and ppObj and riid):
         return super()._QueryInterface(pI, riid, ppObj)
-      ppObj.contents.value = self.pUnkOuter.QueryInterface(riid)
+      ppObj[0] = self.pUnkOuter.QueryInterface(riid)
       return IGetLastError()
   @classmethod
   def _AddRef(cls, pI):
@@ -745,9 +745,9 @@ class _COM_IUnknown_aggregator(_COM_IUnknown):
       if (r := super()._QueryInterface(pI, riid, ppObj)) != 0x80004002 or GUID(riid) == _COMMeta._iid_iunknown:
         return r
       if (ind := cls._aiids.get(GUID(riid))) is None or ind >= len(self.pUnkInners) or not (pUnkInner := self.pUnkInners[ind]):
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x80004002
-      ppObj.contents.value = PCOM.QueryInterface(wintypes.LPVOID(pUnkInner), riid)
+      ppObj[0] = PCOM.QueryInterface(wintypes.LPVOID(pUnkInner), riid)
       return IGetLastError()
   @classmethod
   def _Release(cls, pI):
@@ -790,19 +790,19 @@ class _COM_IClassFactory(_COM_IUnknown):
       return 0x80004003
     with cls[pI] as self:
       if not self or not riid:
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x80004003
       if pUnkOuter and GUID(riid) != _COMMeta._iid_iunknown:
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x80004002
-      ppObj.contents.value = pI = self.constr(riid) if self.constr else None
+      ppObj[0] = pI = self.constr(riid) if self.constr else None
       if not pI:
         return 0x80004002
       if pUnkOuter:
         with _COM_IUnknown[pI] as inner:
           if not inner or not inner.__class__._aggregatable:
             PCOM(pI).Release()
-            ppObj.contents.value = 0
+            ppObj[0] = None
             return 0x80040110
           inner.pUnkOuter = pUnkOuter
       return 0
@@ -884,25 +884,25 @@ class _COM_IPSFactoryBuffer(_COM_IUnknown):
     with cls[pI] as self:
       if not (self and riid and ppProxy and ppObj and pUnkOuter):
         if ppProxy:
-          ppProxy.contents.value = 0
+          ppProxy[0] = None
         if ppObj:
-          ppObj.contents.value = 0
+          ppObj[0] = None
         return 0x80004003
-      ppProxy.contents.value = pP = self.constr_p(wintypes.BYTES16(*_COMMeta._iid_irpcproxybuffer)) if self.constr_p else None
+      ppProxy[0] = pP = self.constr_p(wintypes.BYTES16(*_COMMeta._iid_irpcproxybuffer)) if self.constr_p else None
       if not pP:
-        ppObj.contents.value = None
+        ppObj[0] = None
         return 0x80004002
       with _COM_IUnknown[pP] as proxy:
         if not proxy or not proxy.__class__._aggregatable:
           PCOM.Release(wintypes.LPVOID(pP))
-          ppProxy.contents.value = ppObj.contents.value = None
+          ppProxy[0] = ppObj[0] = None
           return 0x80040110
         proxy.pUnkOuter = pUnkOuter
-      ppObj.contents.value = pI = PCOM.QueryInterface(wintypes.LPVOID(pP), riid)
+      ppObj[0] = pI = PCOM.QueryInterface(wintypes.LPVOID(pP), riid)
       if not pI or pI == pP:
         PCOM.Release(wintypes.LPVOID(pP))
         PCOM.Release(wintypes.LPVOID(pI))
-        ppProxy.contents.value = ppObj.contents.value = None
+        ppProxy[0] = ppObj[0] = None
         return 0x80004002
       return 0
   _connect_stub = ctypes.WINFUNCTYPE(wintypes.ULONG, wintypes.LPVOID)(3, 'Connect', ((1,),))
@@ -912,15 +912,15 @@ class _COM_IPSFactoryBuffer(_COM_IUnknown):
     with cls[pI] as self:
       if not (self and riid and ppStub):
         if ppStub:
-          ppStub.contents.value = 0
+          ppStub[0] = None
         return 0x80004003
-      ppStub.contents.value = pS = self.constr_s(riid) if self.constr_s else None
+      ppStub[0] = pS = self.constr_s(riid) if self.constr_s else None
       if not pS:
         return 0x80004002
       if pUnkServer and cls._connect_stub(wintypes.LPVOID(pS), pUnkServer) is None:
         e = IGetLastError()
         PCOM.Release(wintypes.LPVOID(pS))
-        ppStub.contents.value = 0
+        ppStub[0] = None
         return e
       return 0
 
@@ -1004,17 +1004,11 @@ class RIID_PPI(PUUID):
     return self
 
 class _ARRAY_STR:
-  p = None
   number = True
-  def __init__(self, inarg=True, outarg=False):
-    if not (inarg or outarg):
-      raise ValueError('neither inarg nor outarg')
-    self.inarg = inarg
-    self.outarg = outarg    
-  def __call__(self, number, p):
+  p = None
+  def __init__(self, number, p=False):
     self.number = number
-    self.p = ctypes.cast(p, wintypes.PLPVOID)
-    return self
+    self.p = ctypes.cast((ctypes.create_string_buffer(number * _COMMeta._psize) if p is False else p), wintypes.PLPVOID)
   def __bool__(self):
     return bool(self.p)
   @property
@@ -1028,10 +1022,8 @@ class _ARRAY_STR:
     if k < 0 or k >= self.number:
       raise IndexError('index out of range')
     self.p[k] = ctypes.cast(v, wintypes.LPVOID)
-class ARRAY_LPWSTR(_ARRAY_STR):
-  scls = wintypes.PWCHAR
-class ARRAY_LPSTR(_ARRAY_STR):
-  scls = wintypes.PCHAR
+globals().update({(n := '_ARRAY_%s' % t): type(n, (_ARRAY_STR,), {'scls': s}) for t, s in (('LPWSTR', wintypes.PWCHAR), ('LPSTR', wintypes.PCHAR))})
+globals().update({(n := 'ARRAY_%s_%s' % (t, d)): type(n, (b,), {'inarg': di, 'outarg': do}) for t, b in (('LPWSTR', _ARRAY_LPWSTR), ('LPSTR', _ARRAY_LPSTR)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _COM_IRpcProxyBuffer(_COM_IUnknown):
   _iids.add(GUID(0xd5f56a34, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a))
@@ -1112,9 +1104,9 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           break
         elif isinstance(arg, RIID_PPI):
           s += 1
-        elif ((w := isinstance(arg, (wintypes.LPCWSTR, ARRAY_LPWSTR))) or isinstance(arg, (wintypes.LPCSTR, ARRAY_LPSTR))):
+        elif (bs := isinstance(arg, (BSTR, _ARRAY_BSTR))) or ((w := isinstance(arg, (wintypes.LPCWSTR, _ARRAY_LPWSTR))) or isinstance(arg, (wintypes.LPCSTR, _ARRAY_LPSTR))):
           if (n := getattr(arg, 'number', None)) is None:
-            ar = ((wintypes.PWCHAR if w else wintypes.PCHAR).from_buffer(arg),)
+            ar = (arg if bs else (wintypes.PWCHAR if w else wintypes.PCHAR).from_buffer(arg),)
           else:
             s += 1
             if arg:
@@ -1122,23 +1114,21 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               s += 4
             else:
               ar = ()
-          if ar:
-            for a in ar:
-              s += 1
-              if a:
+          for a in ar:
+            s += 1
+            if a:
+              if bs:
+                s += 4
+                b = a.ubuffer
+                o = ctypes.sizeof(b)
+              else:
                 if w:
                   b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
                 else:
                   b = ctypes.create_string_buffer(next(i for i, c in enumerate(a) if c == b'\x00') + 1)
                 ctypes.memmove(b, a, (o := ctypes.sizeof(b)))
-                smarsh.append(b)
-                s += o
-        elif isinstance(arg, BSTR):
-          s += 1
-          if arg:
-            s += 4
-            smarsh.append(b := arg.ubuffer)
-            s += ctypes.sizeof(b)
+              smarsh.append(b)
+              s += o
         elif isinstance(arg, ctypes._Pointer):
           s += 1
           if arg:
@@ -1183,7 +1173,7 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           elif isinstance(arg, RIID_PPI):
             ctypes.c_char.from_address(o).value = 1 if arg.p else 0
             o += 1
-          elif isinstance(arg, (wintypes.LPCWSTR, ARRAY_LPWSTR, wintypes.LPCSTR, ARRAY_LPSTR)):
+          elif (bs := isinstance(arg, (BSTR, _ARRAY_BSTR))) or isinstance(arg, (wintypes.LPCWSTR, _ARRAY_LPWSTR, wintypes.LPCSTR, _ARRAY_LPSTR)):
             if (n := getattr(arg, 'number', None)) is None:
               ar = (arg,)
             else:
@@ -1202,23 +1192,14 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                 ctypes.c_char.from_address(o).value = 1
                 o += 1
                 b = next(smarsh)
+                if bs:
+                  ctypes.memmove(o, ctypes.sizeof(b).to_bytes(4, 'little'), 4)
+                  o += 4
                 ctypes.memmove(o, b, (s := ctypes.sizeof(b)))
                 o += s
               else:
                 ctypes.c_char.from_address(o).value = 0
                 o += 1
-          elif isinstance(arg, BSTR):
-            if arg:
-              ctypes.c_char.from_address(o).value = 1
-              o += 1
-              b = next(smarsh)
-              ctypes.memmove(o, (s := ctypes.sizeof(b)).to_bytes(4, 'little'), 4)
-              o += 4
-              ctypes.memmove(o, b, s)
-              o += s
-            else:
-              ctypes.c_char.from_address(o).value = 0
-              o += 1
           elif isinstance(arg, ctypes._Pointer):
             if arg:
               ctypes.c_char.from_address(o).value = 1
@@ -1280,7 +1261,7 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                 else:
                   continue
                 break
-            elif ((w := isinstance(arg, (wintypes.PLPWSTR, ARRAY_LPWSTR))) or isinstance(arg, (wintypes.PLPSTR, ARRAY_LPSTR))):
+            elif (bs := isinstance(arg, (PBSTR, PBSTRING, _ARRAY_BSTR))) or ((w := isinstance(arg, (wintypes.PLPWSTR, _ARRAY_LPWSTR))) or isinstance(arg, (wintypes.PLPSTR, _ARRAY_LPSTR))):
               if arg:
                 if (n := getattr(arg, 'number', None)) is None:
                   n = 1
@@ -1291,39 +1272,34 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                     break
                   if ctypes.c_char.from_address(o):
                     o += 1
-                    if w: 
-                      p = ctypes.cast(o, wintypes.PWCHAR)
-                      if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+                    if bs:
+                      if o + 4 > l:
                         break
-                      s = (s + 1) * ctypes.sizeof(wintypes.WCHAR)
+                      s = int.from_bytes(ctypes.string_at(o, 4), 'little')
+                      o += 4
+                      p = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR), _needsfree=False)
                     else:
-                      p = ctypes.cast(o, wintypes.PCHAR)
-                      if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
-                        break
-                      s = (s + 1) * ctypes.sizeof(wintypes.CHAR)
-                    arg[a] = p = _IUtil.CoTaskMemAlloc(s)
-                    ctypes.memmove(p, o, s)
+                      if w:
+                        p = ctypes.cast(o, wintypes.PWCHAR)
+                        if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+                          break
+                        s = (s + 1) * ctypes.sizeof(wintypes.WCHAR)
+                      else:
+                        p = ctypes.cast(o, wintypes.PCHAR)
+                        if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
+                          break
+                        s = (s + 1) * ctypes.sizeof(wintypes.CHAR)
+                      p = _IUtil.CoTaskMemAlloc(s)
+                      ctypes.memmove(p, o, s)
+                    arg[a] = p
                     smarsh.append(p)
                     o += s
                   else:
                     arg[a] = None
                     o += 1
-            elif isinstance(arg, (PBSTR, PBSTRING)):
-              if arg:
-                if o + 1 > l:
-                  break
-                if ctypes.c_char.from_address(o):
-                  o += 1
-                  if o + 4 > l:
-                    break
-                  s = int.from_bytes(ctypes.string_at(o, 4), 'little')
-                  o += 4
-                  (b := BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR)))._needsfree = False
-                  arg.contents.value = b.value
-                  o += s
                 else:
-                  arg.contents.value = None
-                  o += 1
+                  continue
+                break
             elif not isinstance(arg, RIID_PI) and isinstance(arg, ctypes._Pointer):
               if arg:
                 if o + (s := ctypes.sizeof(arg._type_)) > l:
@@ -1339,8 +1315,13 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           r = 0x8001000c if e else 0x80010009
           for pI in marsh:
             PCOM.Release(pI)
-          for ar in smarsh:
-            _IUtil.CoTaskMemFree(ar)
+          for p in smarsh:
+            if p:
+              if isinstance(p, BSTR):
+                oleauto32.SysFreeString(p)
+                p.value = None
+              else:
+                _IUtil.CoTaskMemFree(p)
       channel.FreeBuffer(message)
     if errres == IGetLastError:
       return r
@@ -1358,7 +1339,7 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
       if not self:
         for eparg in epargs:
           if eparg:
-            eparg.contents.value = None
+            eparg[0] = None
         if errres == IGetLastError:
           return 0x80004003
         else:
@@ -1472,7 +1453,7 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
       if not self:
         for eparg in epargs:
           if eparg:
-            eparg.contents.value = None
+            eparg[0] = None
         if errres == IGetLastError:
           return 0x80004003
         else:
@@ -1552,13 +1533,13 @@ class _COM_IRpcStubBuffer(_COM_IUnknown):
       return 0x80004003
     with cls[pI] as self:
       if not self:
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x80004003
       ind = getattr(cls, '_ovtbl', 0) // cls.__class__._psize
       if not (pI := self.pIntServers[ind]):
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x8000ffff
-      ppObj.contents.value = pI
+      ppObj[0] = pI
   @classmethod
   def _DebugServerRelease(cls, pI, ppObj):
     pass
@@ -1632,8 +1613,8 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
             break
           parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if ctypes.c_char.from_address(o) else wintypes.PLPVOID()
           o += 1
-      elif (w := isinstance(argtype, ARRAY_LPWSTR)) or isinstance(argtype, ARRAY_LPSTR) or (w := issubclass(argtype, wintypes.LPCWSTR)) or issubclass(argtype, wintypes.LPCSTR):
-        if (ar := getattr(argtype, 'number', None)) is True:
+      elif (bs := issubclass(argtype, (BSTR, _ARRAY_BSTR))) or (w := issubclass(argtype, (wintypes.LPCWSTR, _ARRAY_LPWSTR))) or issubclass(argtype, (wintypes.LPCSTR, _ARRAY_LPSTR)):
+        if (ar := hasattr(argtype, 'number')):
           if o + 1 > l:
             break
           if ctypes.c_char.from_address(o):
@@ -1642,7 +1623,7 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               break
             n = int.from_bytes(ctypes.string_at(o, 4), 'little')
             o += 4
-            parg = argtype.__class__(argtype.inarg, argtype.outarg)(n, ctypes.create_string_buffer(n * _COMMeta._psize))
+            parg = argtype(n)
             if not argtype.inarg:
               n = 0
           else:
@@ -1651,43 +1632,38 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
             parg = None
         else:
           n = 1
-          parg = ctypes.pointer(wintypes.PWCHAR() if w else wintypes.PCHAR())
+          parg = [None]
         for a in range(n):
           if o + 1 > l:
             break
           if ctypes.c_char.from_address(o):
             o += 1
-            if w:
-              p = ctypes.cast(o, wintypes.PWCHAR)
-              if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+            if bs:
+              if o + 4 > l:
                 break
-              parg[a] = p = ctypes.create_unicode_buffer(s + 1)
+              s = int.from_bytes(ctypes.string_at(o, 4), 'little')
+              o += 4
+              parg[a] = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR))
             else:
-              p = ctypes.cast(o, wintypes.PCHAR)
-              if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
-                break
-              parg[a] = p = ctypes.create_string_buffer(s + 1)
-            ctypes.memmove(p, o, (s := ctypes.sizeof(p)))
+              if w:
+                p = ctypes.cast(o, wintypes.PWCHAR)
+                if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+                  break
+                parg[a] = p = ctypes.create_unicode_buffer(s + 1)
+              else:
+                p = ctypes.cast(o, wintypes.PCHAR)
+                if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
+                  break
+                parg[a] = p = ctypes.create_string_buffer(s + 1)
+              ctypes.memmove(p, o, (s := ctypes.sizeof(p)))
             o += s
           else:
             parg[a] = None
             o += 1
-        if ar is not True:
-          parg = parg[0]
-      elif issubclass(argtype, BSTR):
-        if o + 1 > l:
-          break
-        if ctypes.c_char.from_address(o):
-          o += 1
-          if o + 4 > l:
-            break
-          s = int.from_bytes(ctypes.string_at(o, 4), 'little')
-          o += 4
-          parg = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR))
-          o += s
         else:
-          parg = None
-          o += 1
+          args.append(parg if ar else parg[0])
+          continue
+        break
       elif issubclass(argtype, wintypes.LPVOID):
         if o + 1 > l:
           break
@@ -1768,31 +1744,29 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               PCOM.Release(pI)
       elif isinstance(argtype, RIID_PI):
         pass
-      elif (w := isinstance(argtype, ARRAY_LPWSTR)) or isinstance(argtype, ARRAY_LPSTR) or (w := issubclass(argtype, wintypes.PLPWSTR)) or issubclass(argtype, wintypes.PLPSTR):
+      elif (bs := issubclass(argtype, (PBSTR, PBSTRING, _ARRAY_BSTR))) or (w := issubclass(argtype, (wintypes.PLPWSTR, _ARRAY_LPWSTR))) or issubclass(argtype, (wintypes.PLPSTR, _ARRAY_LPSTR)):
         if arg:
-          if getattr(argtype, 'number', None) is True:
+          if hasattr(argtype, 'number'):
             ar = arg if argtype.outarg else ()
           else:
-            ar = ((wintypes.PWCHAR if w else wintypes.PCHAR).from_buffer(arg.contents),)
+            ar = (arg.contents if bs else (wintypes.PWCHAR if w else wintypes.PCHAR).from_buffer(arg.contents),)
           for a in ar:
             s += 1
             if a:
-              if w:
-                b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
+              if bs:
+                s += 4
+                b = a.ubuffer
+                o = ctypes.sizeof(b)
+                oleauto32.SysFreeString(a)
               else:
-                b = ctypes.create_string_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
-              ctypes.memmove(b, a, (o := ctypes.sizeof(b)))
-              _IUtil.CoTaskMemFree(a)
+                if w:
+                  b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
+                else:
+                  b = ctypes.create_string_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
+                ctypes.memmove(b, a, (o := ctypes.sizeof(b)))
+                _IUtil.CoTaskMemFree(a)
               smarsh.append(b)
               s += o
-      elif issubclass(argtype, (PBSTR, PBSTRING)):
-        arg._needsfree = True
-        if arg:
-          s += 1
-          if (p := arg.contents):
-            s += 4
-            smarsh.append(b := p.ubuffer)
-            s += ctypes.sizeof(b)
       elif issubclass(argtype, wintypes.LPVOID):
         if arg:
           s += ctypes.sizeof(arg)
@@ -1833,7 +1807,7 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               o += 2
       elif isinstance(argtype, RIID_PI):
         pass
-      elif isinstance(argtype, (ARRAY_LPWSTR, ARRAY_LPSTR)) or issubclass(argtype, (wintypes.PLPWSTR, wintypes.PLPSTR)):
+      elif (bs := issubclass(argtype, (PBSTR, PBSTRING, _ARRAY_BSTR))) or issubclass(argtype, (wintypes.PLPWSTR, wintypes.PLPSTR, _ARRAY_LPWSTR, _ARRAY_LPSTR)):
         if arg:
           if getattr(argtype, 'number', None) is True:
             ar = arg if argtype.outarg else ()
@@ -1844,24 +1818,14 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               ctypes.c_char.from_address(o).value = 1
               o += 1
               b = next(smarsh)
+              if bs:
+                ctypes.memmove(o, ctypes.sizeof(b).to_bytes(4, 'little'), 4)
+                o += 4
               ctypes.memmove(o, b, (s := ctypes.sizeof(b)))
               o += s
             else:
               ctypes.c_char.from_address(o).value = 0
               o += 1
-      elif issubclass(argtype, (PBSTR, PBSTRING)):
-        if arg:
-          if arg.contents:
-            ctypes.c_char.from_address(o).value = 1
-            o += 1
-            b = next(smarsh)
-            ctypes.memmove(o, (s := ctypes.sizeof(b)).to_bytes(4, 'little'), 4)
-            o += 4
-            ctypes.memmove(o, b, s)
-            o += s
-          else:
-            ctypes.c_char.from_address(o).value = 0
-            o += 1
       elif issubclass(argtype, ctypes._Pointer):
         if arg:
           ctypes.memmove(o, arg, (s := ctypes.sizeof(argtype._type_)))
@@ -2041,13 +2005,13 @@ class _COM_IEnumUnknown(_COM_IUnknown):
     with cls[pI] as self:
       if not self or not rgelt or (celt > 1 and not pceltFetched):
         if pceltFetched:
-          pceltFetched.contents.value = 0
+          pceltFetched[0] = None
         if rgelt:
           (wintypes.LPVOID * celt).from_address(rgelt)[:] = (None,) * celt
         return 0x80004003
       fcelt = min(celt, self.count - self.index)
       if pceltFetched:
-        pceltFetched.contents.value = fcelt
+        pceltFetched[0] = fcelt
       (wintypes.LPVOID * celt).from_address(rgelt)[:] = (*(PCOM.AddRef(wintypes.LPVOID(pI)) and pI for pI in self.items[self.index : self.index + fcelt]), *((None,) * (celt - fcelt)))
       self.index += fcelt
       return 0 if fcelt == celt else 1
@@ -2070,9 +2034,9 @@ class _COM_IEnumUnknown(_COM_IUnknown):
     with cls[pI] as self:
       if not self or not ppenum:
         if ppenum:
-          ppenum.contents.value = None
+          ppenum[0] = None
         return 0x80004003
-      ppenum.contents.value = self.__class__(GUID('00000100-0000-0000-c000-000000000046'), items=self.items, index=self.index, container=self.container)
+      ppenum[0] = self.__class__(GUID('00000100-0000-0000-c000-000000000046'), items=self.items, index=self.index, container=self.container)
       return 0
 
 class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
@@ -2143,16 +2107,16 @@ class _COM_IEnumInterface(_COM_IUnknown_aggregatable):
     with cls[pI] as self:
       if not self or not ppenum:
         if ppenum:
-          ppenum.contents.value = None
+          ppenum[0] = None
         return 0x80004003
-      ppenum.contents.value = _COM_IEnumInterface_impl(cls._iid, iiid=self.iiid, items=self.items, index=self.index, container=self.container)
+      ppenum[0] = _COM_IEnumInterface_impl(cls._iid, iiid=self.iiid, items=self.items, index=self.index, container=self.container)
       return 0
   @classmethod
   def _GetIID(cls, pI, riid):
     with cls[pI] as self:
       if not self or not riid:
         return 0x80004003
-      riid.contents[:] = self.iiid
+      riid[0] = self.iiid
     return 0
   @classmethod
   def _Contains(cls, pI, pobj):
@@ -2211,16 +2175,16 @@ class _COM_IEnumInterfaceFactory(_COM_IUnknown_aggregator):
       return 0x80004003
     with cls[pI] as self:
       if not self or not riid:
-        ppObj.contents.value = 0
+        ppObj[0] = None
         return 0x80004003
       with _COM_IUnknown[self.pUnkInners[0]] as inner:
         if not inner:
-          ppObj.contents.value = 0
+          ppObj[0] = None
           return 0x80004003
         items = (wintypes.LPVOID * inner.count)(*(PCOM.QueryInterface(wintypes.LPVOID(item), riid) for item in inner.items))
         for item in items:
           PCOM.Release(wintypes.LPVOID(item))
-        ppObj.contents.value = _COM_IEnumInterface_impl(_COM_IEnumInterface._iid, iiid=riid.contents, items=items, index=inner.index, container=inner.container)
+        ppObj[0] = _COM_IEnumInterface_impl(_COM_IEnumInterface._iid, iiid=riid.contents, items=items, index=inner.index, container=inner.container)
       return 0
   @classmethod
   def _LockServer(cls, pI, fLock):
@@ -2273,7 +2237,7 @@ class _COM_IEnumInterface_Proxy(_COM_IRpcProxy):
     with cls[pI] as self:
       if not self:
         if pceltFetched:
-          pceltFetched.contents.value = 0
+          pceltFetched[0] = None
         if rgelt:
           (wintypes.LPVOID * celt).from_address(rgelt)[:] = (None,) * celt
         return 0x80004003
@@ -2470,6 +2434,8 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
   oleauto32.SysStringLen.argtypes = (wintypes.LPVOID,)
   oleauto32.SysStringByteLen.restype = wintypes.UINT
   oleauto32.SysStringByteLen.argtypes = (wintypes.LPVOID,)
+  oleauto32.SysFreeString.restype = None
+  oleauto32.SysFreeString.argtypes = (wintypes.LPVOID,)
   def __new__(cls, data=None):
     self = wintypes.PWCHAR.__new__(cls)
     if data is None:
@@ -2518,10 +2484,10 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
     else:
       return None
   @classmethod
-  def from_ubuffer(cls, b, l=None):
+  def from_ubuffer(cls, b, l=None, _needsfree=True):
     self = cls()
     if b or isinstance(b, ctypes.Array):
-      self._needsfree = True
+      self._needsfree = _needsfree
       self.value = oleauto32.SysAllocStringLen(b, (len(b) if l is None else l))
       return self
     else:
@@ -2547,6 +2513,9 @@ class BSTRING(BSTR):
   def __ctypes_from_outparam__(self):
     return super().__ctypes_from_outparam__().content
 PBSTRING = ctypes.POINTER(BSTRING)
+class _ARRAY_BSTR(_ARRAY_STR):
+  scls = BSTR
+globals().update({(n := 'ARRAY_BSTR_%s' % d): type(n, (_ARRAY_BSTR,), {'inarg': di, 'outarg': do}) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _DT:
   def __new__(cls, dt=0):
@@ -7943,14 +7912,14 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
     with cls[pI] as self:
       if not self or not pfd:
         return 0x80004003
-      self.fd.__init__(*pfd.contents.to_tuple())
+      self.fd = pfd.contents
       return 0
   @classmethod
   def _GetFindData(cls, pI, pfd):
     with cls[pI] as self:
       if not self or not pfd:
         return 0x80004003
-      pfd.contents.__init__(*self.fd.to_tuple())
+      pfd[0] = self.fd
       return 0
   @classmethod
   def _SetFileID(cls, pI, fid):
@@ -7964,21 +7933,21 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
     with cls[pI] as self:
       if not self or not pfid:
         return 0x80004003
-      pfid.contents.value = self.fid
+      pfid[0] = self.fid
       return 0
   @classmethod
   def _SetJunctionCLSID(cls, pI, pjclsid):
     with cls[pI] as self:
       if not self or not pjclsid:
         return 0x80004003
-      self.jclsid[:] = pjclsid.contents
+      self.jclsid = pjclsid.contents
       return 0
   @classmethod
   def _GetJunctionCLSID(cls, pI, pjclsid):
     with cls[pI] as self:
       if not self or not pjclsid:
         return 0x80004003
-      pjclsid.contents[:] = self.jclsid
+      pjclsid[0] = self.jclsid
       return 0
 
 class _COM_IFileSystemBindData_impl(metaclass=_COMMeta, interfaces=(_COM_IFileSystemBindData,)):
