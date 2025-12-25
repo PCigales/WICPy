@@ -1135,7 +1135,9 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
             s += ctypes.sizeof(arg._type_)
         else:
           if isinstance(arg, ctypes.Array):
-            s += 4 if len(arg) < 0x80000000 else 8
+            s += 1
+            if ctypes.addressof(arg):
+              s += 4 if len(arg) <= 0xffffffff else 8
           s += ctypes.sizeof(arg)
       else:
         if (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, method)) is None:
@@ -1214,16 +1216,22 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               ctypes.c_char.from_address(o).value = 0
               o += 1
           elif isinstance(arg, ctypes.Array):
-            if (n := len(arg)) < 0x80000000:
-              s = 4
-            else:
-              s = 8
-              n |= 0x8000000000000000
-            ctypes.memmove(o, n.to_bytes(s, 'big'), s)
-            o += s
-            if arg:
-              ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
+            if ctypes.addressof(arg):
+              if (n := len(arg)) <= 0xffffffff:
+                ctypes.c_char.from_address(o).value = 1
+                s = 4
+              else:
+                ctypes.c_char.from_address(o).value = 2
+                s = 8
+              o += 1
+              ctypes.memmove(o, n.to_bytes(s, 'little'), s)
               o += s
+              if arg:
+                ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
+                o += s
+            else:
+              ctypes.c_char.from_address(o).value = 0
+              o += 1
           else:
             ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
             o += s
@@ -1320,7 +1328,7 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                 ctypes.memmove(arg, o, s)
                 o += s
             elif isinstance(arg, ctypes.Array):
-              if arg:
+              if ctypes.addressof(arg) and arg:
                 if o + (s := ctypes.sizeof(arg)) > l:
                   break
                 ctypes.memmove(arg, o, s)
@@ -1681,23 +1689,23 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
           arg = None
           o += 1
       elif issubclass(argtype, ctypes.Array):
-        if o + 4 > l:
+        if o + 1 > l:
           break
-        if (n := int.from_bytes(ctypes.string_at(o, 4), 'big')) < 0x80000000:
-          o += 4
-        else:
-          if o + 8 > l:
+        argt = ctypes.c_char.from_address(o).value
+        o += 1
+        if (s := 4 if argt == b'\x01' else (8 if argt == b'\x02' else None)) is not None:
+          if o + s > l:
             break
-          n = int.from_bytes(ctypes.string_at(o, 8), 'big')
-          o += 8
-        if o + (s := n * ctypes.sizeof(argtype._type_)) > l:
-          break
-        if n:
+          n = int.from_bytes(ctypes.string_at(o, s), 'little')
+          o += s
           arg = (argtype._type_ * n)()
-          ctypes.memmove(ctypes.addressof(arg), o, s)
+          if n:
+            if o + (s := n * ctypes.sizeof(argtype._type_)) > l:
+              break
+            ctypes.memmove(ctypes.addressof(arg), o, s)
+            o += s
         else:
           arg = wintypes.LPVOID()
-        o += s
       else:
         if o + (s := ctypes.sizeof(argtype)) > l:
           break
@@ -2270,7 +2278,7 @@ _COM_IEnumInterfaceFactory_Stub._inproc = _COM_IRpcInProcStub
 
 class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IEnumInterface_Proxy, _COM_IEnumInterface_Stub), (_COM_IEnumInterfaceFactory_Proxy, _COM_IEnumInterfaceFactory_Stub))):
   CLSID = True
-_PS_IEnumInterfaceFactory_impl.proxy_impl.iiid = property(lambda self: self._iiid if any(self._iiid) else (wintypes.BYTES16() if _COM_IEnumInterface_Proxy._offsetted[_PS_IEnumInterfaceFactory_impl.proxy_impl._iids[IEnumInterface.IID]]._call(self, 7, (ctypes.pointer(self._iiid),)) else self._iiid))
+_PS_IEnumInterfaceFactory_impl.proxy_impl.iiid = property(lambda self: self._iiid if any(self._iiid) else ((setattr(self, '_iiid', wintypes.BYTES16()) or self._iiid) if _COM_IEnumInterface_Proxy._offsetted[_PS_IEnumInterfaceFactory_impl.proxy_impl._iids[IEnumInterface.IID]]._call(self, 7, (ctypes.pointer(self._iiid),)) else self._iiid))
 _COM_IEnumInterface._ps_impl = _PS_IEnumInterfaceFactory_impl
 
 class IStream(IUnknown):
