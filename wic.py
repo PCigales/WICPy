@@ -174,7 +174,7 @@ class _BPGUID:
   @classmethod
   def create_from(cls, obj):
     obj = cls._type_.name_guid(obj)
-    return ctypes.cast(ctypes.c_void_p(None), cls) if obj is None else cls(cls._type_(obj))
+    return cls() if obj is None else cls(cls._type_(obj))
 
 class _GUtil:
   _mul_cache = {}
@@ -963,67 +963,64 @@ class PCOMRPCCHANNEL(PCOM):
   def SendReceive(self, message):
     return None if not self or IRpcChannelBuffer._protos['SendReceive'](self, message) is None else True
 
-class RIID_PI(PUUID):
-  _type_ = UUID
+class RIID_PI:
+  _cache = {}
+  def __new__(cls, iid=_COMMeta._iid_iunknown):
+    iid = PUUID.from_buffer(wintypes.LPVOID(iid) if isinstance(iid, int) else (ctypes.cast(self, wintypes.LPVOID) if isinstance((self := PUUID.from_param(iid)), ctypes.CArgObject) else self)).contents.guid
+    return cls._cache.get(iid) or cls._cache.setdefault(iid, type('RIID_PI_%s' % iid, (_RIID_PI,), {'riid': PUUID.from_param(iid)}))
+class _RIID_PI(wintypes.LPVOID):
   number = None
   inarg = True
-  p = None
-  def __new__(cls, iid=_COMMeta._iid_iunknown):
-    self = cls.from_buffer(wintypes.LPVOID(iid) if isinstance(iid, int) else (ctypes.cast(self, wintypes.LPVOID) if isinstance((self := PUUID.from_param(iid)), ctypes.CArgObject) else self))
-    return self
-  def __init__(self, iid=_COMMeta._iid_iunknown):
-    pass
-  def __call__(self, p):
-    self.p = p if self.number is None else ctypes.cast(p, wintypes.PLPVOID)
-    return self
-  @classmethod
-  def array(cls, number, iid=_COMMeta._iid_iunknown):
-    self = cls(iid)
-    self.number = number
-    return self
-
-class RIID_PPI(PUUID):
-  _type_ = UUID
-  number = 1
-  inarg = False
-  p = None
-  def __new__(cls, iid=_COMMeta._iid_iunknown, inout=False):
-    self = cls.from_buffer(wintypes.LPVOID(iid) if isinstance(iid, int) else (ctypes.cast(self, wintypes.LPVOID) if isinstance((self := PUUID.from_param(iid)), ctypes.CArgObject) else self))
-    if inout:
-      self.inarg = True
-    return self
-  def __init__(self, iid=_COMMeta._iid_iunknown, inout=False):
-    pass
-  def __call__(self, p):
-    self.p = ctypes.cast(p, wintypes.PLPVOID)
-    return self
-  @classmethod
-  def array(cls, number, iid=_COMMeta._iid_iunknown, inout=False):
-    self = cls(iid, inout)
-    self.number = number
-    return self
-
-class _ARRAY_STR:
+  outarg = False
+  def __new__(cls, p=None):
+    return super().__new__(cls) if p is None else ctypes.cast(p, cls)
+  def __init__(self, p=None):
+    if p is None:
+      super().__init__()
+class RIID_PPI:
+  LPVOID = type('LPVOID', (wintypes.LPVOID,), {})
+  _cache = {}
+  def __new__(cls, iid=_COMMeta._iid_iunknown, inarg=False, outarg=False):
+    if not (inarg or outarg):
+      raise ValueError('neither inarg nor outarg')
+    iid = PUUID.from_buffer(wintypes.LPVOID(iid) if isinstance(iid, int) else (ctypes.cast(self, wintypes.LPVOID) if isinstance((self := PUUID.from_param(iid)), ctypes.CArgObject) else self)).contents.guid
+    return cls._cache.get((iid, inarg, outarg)) or cls._cache.setdefault((iid, inarg, outarg), type('RIID_PPI_%s_%s%s' % (iid, ('IN' if inarg else ''), ('OUT' if outarg else '')), (_RIID_PPI,), {'_type_': cls.LPVOID, 'riid': PUUID.from_param(iid), 'inarg': inarg, 'outarg': outarg}))
+class _RIID_PPI(wintypes.PLPVOID):
   number = True
-  p = None
-  def __init__(self, number, p=False):
+  def __new__(cls, p=None, number=False):
+    return super().__new__(cls) if p is None else ctypes.cast(p, cls)
+  def __init__(self, p=None, number=1):
+    if p is None:
+      super().__init__()
     self.number = number
-    self.p = ctypes.cast((ctypes.create_string_buffer(number * _COMMeta._psize) if p is False else p), wintypes.PLPVOID)
-  def __bool__(self):
-    return bool(self.p)
-  @property
-  def _as_parameter_(self):
-    return self.p
   def __getitem__(self, k):
     if k < 0 or k >= self.number:
       raise IndexError('index out of range')
-    return ctypes.cast(self.p[k], self.__class__.scls)
+    return super().__getitem__(k)
   def __setitem__(self, k, v):
     if k < 0 or k >= self.number:
       raise IndexError('index out of range')
-    self.p[k] = ctypes.cast(v, wintypes.LPVOID)
-globals().update({(n := '_ARRAY_%s' % t): type(n, (_ARRAY_STR,), {'scls': s}) for t, s in (('LPWSTR', wintypes.PWCHAR), ('LPSTR', wintypes.PCHAR))})
-globals().update({(n := 'ARRAY_%s_%s' % (t, d)): type(n, (b,), {'inarg': di, 'outarg': do}) for t, b in (('LPWSTR', _ARRAY_LPWSTR), ('LPSTR', _ARRAY_LPSTR)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
+    super().__setitem__(k, v)
+
+class _ARRAY_STR(wintypes.PLPVOID):
+  number = True
+  def __new__(cls, number=None, p=False):
+    return super().__new__(cls) if number is None else ctypes.cast((ctypes.create_string_buffer(number * _COMMeta._psize) if p is False else p), cls)
+  def __init__(self, number=None, p=False):
+    if number is None:
+      super().__init__()
+    else:
+      self.number = number
+  def __getitem__(self, k):
+    if k < 0 or k >= self.number:
+      raise IndexError('index out of range')
+    return ctypes.cast(super().__getitem__(k), self.__class__.scls)
+  def __setitem__(self, k, v):
+    if k < 0 or k >= self.number:
+      raise IndexError('index out of range')
+    super().__setitem__(k, ctypes.cast(v, wintypes.LPVOID))
+globals().update({'_ARRAY_%s' % t: type('_ARRAY_%s' % t, (_ARRAY_STR,), {'scls': s}) for t, s in (('LPWSTR', wintypes.PWCHAR), ('LPSTR', wintypes.PCHAR))})
+globals().update({'ARRAY_%s_%s' % (t, d): type('ARRAY_%s_%s' % (t, d), (b,), {'_type_': wintypes.LPVOID, 'inarg': di, 'outarg': do}) for t, b in (('LPWSTR', _ARRAY_LPWSTR), ('LPSTR', _ARRAY_LPSTR)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _COM_IRpcProxyBuffer(_COM_IUnknown):
   _iids.add(GUID(0xd5f56a34, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a))
@@ -1076,34 +1073,37 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
       smarsh = []
       s = 0
       for arg in args:
-        if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
-          p = arg.p
+        if isinstance(arg, (_RIID_PI, _RIID_PPI)) and arg.inarg:
           if (n := arg.number) is None:
-            pIs = (p,)
+            ar = (arg,)
+          elif n < 0 or n > 0xffffffff:
+            break
           else:
             s += 1
-            if n > 0 and p:
-              add = wintypes.LPVOID.from_buffer(p).value
-              pIs = map(wintypes.LPVOID.from_address, range(add, add + n * _COMMeta._psize, _COMMeta._psize))
+            if arg:
+              ar = arg
+              if n != 1:
+                s += 4
             else:
-              pIs = ()
-          for pI in pIs:
+              ar = ()
+          for pI in ar:
             s += 2
             if pI:
-              if (istream := PCOMSTREAM.MarshalInterface(arg, pI, context)) is None:
-                r = 0x8001000b
+              if (istream := PCOMSTREAM.MarshalInterface(arg.riid, pI, context)) is None:
                 break
               else:
                 marsh.append(istream)
                 if (o := istream.Seek(0, 1)) > 65535:
-                  r = 0x8001000b
                   break
                 s += o
           else:
             continue
+          r = 0x8001000b
           break
-        elif isinstance(arg, RIID_PPI):
+        elif isinstance(arg, _RIID_PPI):
           s += 1
+          if arg and arg.number != 1:
+            s += 4
         elif (bs := isinstance(arg, (BSTR, _ARRAY_BSTR))) or ((w := isinstance(arg, (wintypes.LPCWSTR, _ARRAY_LPWSTR))) or isinstance(arg, (wintypes.LPCSTR, _ARRAY_LPSTR))):
           if (n := getattr(arg, 'number', None)) is None:
             ar = (arg if bs else (wintypes.PWCHAR if w else wintypes.PCHAR).from_buffer(arg),)
@@ -1134,6 +1134,8 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           if arg:
             s += ctypes.sizeof(arg._type_)
         else:
+          if isinstance(arg, ctypes.Array):
+            s += 4 if len(arg) < 0x80000000 else 8
           s += ctypes.sizeof(arg)
       else:
         if (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, method)) is None:
@@ -1146,20 +1148,25 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
         smarsh = iter(smarsh)
         o = message.Buffer
         for arg in args:
-          if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
-            p = arg.p
+          if isinstance(arg, (_RIID_PI, _RIID_PPI)):
             if (n := arg.number) is None:
-              pIs = (p,)
+              ar = (arg,)
             else:
-              if n > 0 and p:
-                ctypes.c_char.from_address(o).value = 1
-                add = wintypes.LPVOID.from_buffer(p).value
-                pIs = map(wintypes.LPVOID.from_address, range(add, add + n * _COMMeta._psize, _COMMeta._psize))
+              if arg:
+                if n == 1:
+                  ctypes.c_char.from_address(o).value = 1
+                  o += 1
+                else:
+                  ctypes.c_char.from_address(o).value = 2
+                  o += 1
+                  ctypes.memmove(o, n.to_bytes(4, 'little'), 4)
+                  o += 4
+                ar = arg if arg.inarg else ()
               else:
                 ctypes.c_char.from_address(o).value = 0
-                pIs = ()
-              o += 1
-            for pI in pIs:
+                ar = ()
+                o += 1
+            for pI in ar:
               if pI:
                 istream = next(imarsh)
                 ctypes.memmove(o, (s := istream.Seek(0, 1)).to_bytes(2, 'little'), 2)
@@ -1170,9 +1177,6 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               else:
                 ctypes.memmove(o, b'\x00\x00', 2)
                 o += 2
-          elif isinstance(arg, RIID_PPI):
-            ctypes.c_char.from_address(o).value = 1 if arg.p else 0
-            o += 1
           elif (bs := isinstance(arg, (BSTR, _ARRAY_BSTR))) or isinstance(arg, (wintypes.LPCWSTR, _ARRAY_LPWSTR, wintypes.LPCSTR, _ARRAY_LPSTR)):
             if (n := getattr(arg, 'number', None)) is None:
               ar = (arg,)
@@ -1210,8 +1214,17 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               ctypes.c_char.from_address(o).value = 0
               o += 1
           else:
-            ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
-            o += s
+            if isinstance(arg, ctypes.Array):
+              if (n := len(arg)) < 0x80000000:
+                s = 4
+              else:
+                s = 8
+                n |= 0x8000000000000000
+              ctypes.memmove(o, n.to_bytes(s, 'big'), s)
+              o += s
+            if arg:
+              ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
+              o += s
         if not channel.SendReceive(message):
           r = IGetLastError().code or 0x8001000a
           if message.Buffer:
@@ -1237,21 +1250,19 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           marsh = []
           smarsh = []
           for arg in args:
-            if isinstance(arg, RIID_PPI):
-              if (n := arg.number) > 0 and (p := arg.p):
-                add = wintypes.LPVOID.from_buffer(p).value
-                for a in range(add, add + arg.number * _COMMeta._psize, _COMMeta._psize):
+            if isinstance(arg, _RIID_PPI) and arg.outarg:
+              if arg:
+                for pI in arg:
                   if o + 2 > l:
                     break
                   s = int.from_bytes(ctypes.string_at(o, 2), 'little')
                   o += 2
-                  pI = wintypes.LPVOID.from_address(a)
                   if s:
                     if o + s > l:
                       break
                     if e:
                       PCOMSTREAM.ReleaseMarshalData(o, s)
-                    elif PCOMSTREAM.UnmarshalInterface(o, s, arg, pI):
+                    elif PCOMSTREAM.UnmarshalInterface(o, s, arg.riid, pI):
                       marsh.append(pI)
                     else:
                       e = True
@@ -1300,9 +1311,15 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                 else:
                   continue
                 break
-            elif not isinstance(arg, RIID_PI) and isinstance(arg, ctypes._Pointer):
+            elif isinstance(arg, ctypes._Pointer):
               if arg:
                 if o + (s := ctypes.sizeof(arg._type_)) > l:
+                  break
+                ctypes.memmove(arg, o, s)
+                o += s
+            elif isinstance(arg, ctypes.Array):
+              if arg:
+                if o + (s := ctypes.sizeof(arg)) > l:
                   break
                 ctypes.memmove(arg, o, s)
                 o += s
@@ -1316,12 +1333,11 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           for pI in marsh:
             PCOM.Release(pI)
           for p in smarsh:
-            if p:
-              if isinstance(p, BSTR):
-                oleauto32.SysFreeString(p)
-                p.value = None
-              else:
-                _IUtil.CoTaskMemFree(p)
+            if isinstance(p, BSTR):
+              oleauto32.SysFreeString(p)
+              p.value = None
+            else:
+              _IUtil.CoTaskMemFree(p)
       channel.FreeBuffer(message)
     if errres == IGetLastError:
       return r
@@ -1353,48 +1369,37 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
   def _send_message(cls, self, method, args):
     if not (channel := self.pRpcChannelBuffer):
       r = 0x80004003
-    elif (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], sum(map(ctypes.sizeof, args)), method)) is None:
+    elif (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], _COMMeta._psize + 4, method)) is None:
       r =  IGetLastError().code or 0x80004005
     else:
       r = 0
-      o = message.Buffer
       marsh = []
       for arg in args:
-        s = ctypes.sizeof(arg)
-        if isinstance(arg, RIID_PI) or (isinstance(arg, RIID_PPI) and arg.inarg):
-          p = arg.p
+        n = None
+        if isinstance(arg, (_RIID_PI, _RIID_PPI)) and arg.inarg and arg:
           if (n := arg.number) is None:
-            pI = wintypes.LPVOID.from_address(o)
-            if p:
-              if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, p, pI) is None:
-                r = 0x8001000b
+            ar = (arg,)
+          elif n < 0:
+            break
+          else:
+            ar = arg
+            if not arg.outarg:
+              bs = n * _COMMeta._psize
+              b = ctypes.create_string_buffer(bs)
+              ctypes.memmove(b, arg, bs)
+              arg.contents = b
+          for pI in ar:
+            if pI:
+              if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg.riid, pI, pI) is None:
                 break
               else:
                 marsh.append(pI)
-            else:
-              pI.value = None
           else:
-            if n > 0 and p:
-              bs = n * s
-              if isinstance(arg, RIID_PI):
-                b = ctypes.cast(ctypes.create_string_buffer(bs), wintypes.PLPVOID)
-                ctypes.memmove(b, p, bs)
-                arg.p = p = b
-              add = wintypes.LPVOID.from_buffer(p).value
-              for a in range(add, add + bs, s):
-                if (pI := wintypes.LPVOID.from_address(a)):
-                  if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg, pI, pI) is None:
-                    r = 0x8001000b
-                    break
-                  else:
-                    marsh.append(pI)
-              if r:
-                break
-            ctypes.memmove(o, ctypes.addressof(p), s)
-        else:
-          ctypes.memmove(o, ctypes.addressof(arg.p if isinstance(arg, RIID_PPI) else arg), s)
-        o += s
+            continue
+          r = 0x8001000b
+          break
       else:
+        ctypes.memmove(message.Buffer, ctypes.addressof(ctypes.py_object(args)), _COMMeta._psize)
         if not channel.SendReceive(message):
           r = IGetLastError().code or 0x8001000a
       if r:
@@ -1419,15 +1424,13 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
         if restype is None or not (errcheck and errcheck(r)):
           marsh = []
           for arg in args:
-            if isinstance(arg, RIID_PPI) and (n := arg.number) > 0 and (p := arg.p):
-              s = ctypes.sizeof(arg)
-              add = wintypes.LPVOID.from_buffer(p).value
-              for a in range(add, add + n * s, s):
-                if (pI := wintypes.LPVOID.from_address(a)):
+            if isinstance(arg, _RIID_PPI) and arg.outarg and arg:
+              for pI in arg:
+                if pI:
                   if e:
                     _IUtil.CoReleaseMarshalData(pI)
                     PCOM.Release(pI)
-                  elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI, arg, pI) is None:
+                  elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI, arg.riid, pI) is None:
                     e = True
                   else:
                     marsh.append(pI)
@@ -1552,7 +1555,11 @@ class _COM_IRpcStubBuffer(_COM_IUnknown):
         return (lambda pI: 0x80004001), ()
       return super().__getitem__(key)
   class _args(list):
-    def __init__(self):
+    def __init__(self, l=None):
+      if l is None:
+        super().__init__()
+      else:
+        super().__init__(l)
       self.marsh = []
     def release(self):
       for pI in self.marsh:
@@ -1564,55 +1571,49 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
   def _process_message(cls, channel, message, argtypes):
     l = (o := message.Buffer) + message.cbBuffer
     args = cls._args()
-    parg = None
     e = False
     for argtype in argtypes:
-      if isinstance(argtype, RIID_PI) or (isinstance(argtype, RIID_PPI) and argtype.inarg):
-        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
-          e = True
-          break
-        else:
-          if n is None:
-            n = 1
-            add = ctypes.addressof(parg := wintypes.LPVOID())
-          else:
-            if o + 1 > l:
-              break
-            parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if ctypes.c_char.from_address(o) and n > 0 else wintypes.PLPVOID()
-            o += 1
-            add = wintypes.LPVOID.from_buffer(parg).value if parg else None
-          if add:
-            for a in range(add, add + n * _COMMeta._psize, _COMMeta._psize):
-              if o + 2 > l:
-                break
-              s = int.from_bytes(ctypes.string_at(o, 2), 'little')
-              o += 2
-              pI = wintypes.LPVOID.from_address(a)
-              if s:
-                if o + s > l:
-                  break
-                if e:
-                  PCOMSTREAM.ReleaseMarshalData(o, s)
-                elif PCOMSTREAM.UnmarshalInterface(o, s, argtype, pI):
-                  args.marsh.append(pI)
-                else:
-                  e = True
-                o += s
-              else:
-                pI.value = None
-            else:
-              args.append(parg)
-              continue
-            break
-      elif isinstance(argtype, RIID_PPI):
-        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
-          e = True
-          break
+      if issubclass(argtype, (_RIID_PI, _RIID_PPI)):
+        if argtype.number is None:
+          arg = argtype(wintypes.LPVOID())
+          ar = (arg,)
         else:
           if o + 1 > l:
             break
-          parg = ctypes.cast(ctypes.create_string_buffer(n * _COMMeta._psize), wintypes.PLPVOID) if ctypes.c_char.from_address(o) else wintypes.PLPVOID()
+          argt = ctypes.c_char.from_address(o).value
           o += 1
+          if argt == b'\x01':
+            arg = argtype(ctypes.create_string_buffer(_COMMeta._psize))
+          elif argt == b'\x02':
+            if o + 4 > l:
+              break
+            n = int.from_bytes(ctypes.string_at(o, 4), 'little')
+            o += 4
+            arg = argtype(ctypes.create_string_buffer(n * _COMMeta._psize), n)
+          else:
+            arg = argtype()
+          ar = arg if argtype.inarg and arg else ()
+        for pI in ar:
+          if o + 2 > l:
+            break
+          s = int.from_bytes(ctypes.string_at(o, 2), 'little')
+          o += 2
+          if s:
+            if o + s > l:
+              break
+            if e:
+              PCOMSTREAM.ReleaseMarshalData(o, s)
+            elif PCOMSTREAM.UnmarshalInterface(o, s, argtype.riid, pI):
+              args.marsh.append(pI)
+            else:
+              e = True
+            o += s
+          else:
+            pI.value = None
+        else:
+          args.append(arg)
+          continue
+        break
       elif (bs := issubclass(argtype, (BSTR, _ARRAY_BSTR))) or (w := issubclass(argtype, (wintypes.LPCWSTR, _ARRAY_LPWSTR))) or issubclass(argtype, (wintypes.LPCSTR, _ARRAY_LPSTR)):
         if (ar := hasattr(argtype, 'number')):
           if o + 1 > l:
@@ -1623,16 +1624,16 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
               break
             n = int.from_bytes(ctypes.string_at(o, 4), 'little')
             o += 4
-            parg = argtype(n)
+            arg = argtype(n)
             if not argtype.inarg:
               n = 0
           else:
             o += 1
             n = 0
-            parg = None
+            arg = None
         else:
           n = 1
-          parg = [None]
+          arg = [None]
         for a in range(n):
           if o + 1 > l:
             break
@@ -1643,43 +1644,27 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
                 break
               s = int.from_bytes(ctypes.string_at(o, 4), 'little')
               o += 4
-              parg[a] = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR))
+              arg[a] = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR))
             else:
               if w:
                 p = ctypes.cast(o, wintypes.PWCHAR)
                 if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
                   break
-                parg[a] = p = ctypes.create_unicode_buffer(s + 1)
+                arg[a] = p = ctypes.create_unicode_buffer(s + 1)
               else:
                 p = ctypes.cast(o, wintypes.PCHAR)
                 if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
                   break
-                parg[a] = p = ctypes.create_string_buffer(s + 1)
+                arg[a] = p = ctypes.create_string_buffer(s + 1)
               ctypes.memmove(p, o, (s := ctypes.sizeof(p)))
             o += s
           else:
-            parg[a] = None
+            arg[a] = None
             o += 1
         else:
-          args.append(parg if ar else parg[0])
+          args.append(arg if ar else arg[0])
           continue
         break
-      elif issubclass(argtype, wintypes.LPVOID):
-        if o + 1 > l:
-          break
-        if ctypes.c_char.from_address(o):
-          o += 1
-          if not isinstance((s := getattr(parg, 'value', None)), int):
-            e = True
-            break
-          if o + s > l:
-            break
-          parg = ctypes.create_string_buffer(s)
-          ctypes.memmove(parg, o, s)
-          o += s
-        else:
-          parg = None
-          o += 1
       elif issubclass(argtype, ctypes._Pointer):
         if o + 1 > l:
           break
@@ -1687,19 +1672,37 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
           o += 1
           if o + (s := ctypes.sizeof(argtype._type_)) > l:
             break
-          parg = ctypes.pointer(argtype._type_())
-          ctypes.memmove(parg, o, s)
+          arg = ctypes.pointer(argtype._type_())
+          ctypes.memmove(arg, o, s)
           o += s
         else:
-          parg = None
+          arg = None
           o += 1
+      elif issubclass(argtype, ctypes.Array):
+        if o + 4 > l:
+          break
+        if (n := int.from_bytes(ctypes.string_at(o, 4), 'big')) < 0x80000000:
+          o += 4
+        else:
+          if o + 8 > l:
+            break
+          n = int.from_bytes(ctypes.string_at(o, 8), 'big')
+          o += 8
+        if o + (s := n * ctypes.sizeof(argtype._type_)) > l:
+          break
+        if n:
+          arg = (argtype._type_ * n)()
+          ctypes.memmove(ctypes.addressof(arg), o, s)
+        else:
+          arg = wintypes.LPVOID()
+        o += s
       else:
         if o + (s := ctypes.sizeof(argtype)) > l:
           break
-        parg = argtype()
-        ctypes.memmove(ctypes.addressof(parg), o, s)
+        arg = argtype()
+        ctypes.memmove(ctypes.addressof(arg), o, s)
         o += s
-      args.append(parg)
+      args.append(arg)
     else:
       if not e:
         return args
@@ -1721,19 +1724,15 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
       return 0x80004005
     marsh = []
     smarsh = []
-    parg = None
     e = False
     for arg, argtype in zip(args, argtypes):
-      if isinstance(argtype, RIID_PPI):
-        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
-          e = True
-        elif n > 0 and arg:
-          add = wintypes.LPVOID.from_buffer(arg).value
-          for a in range(add, add + n * _COMMeta._psize, _COMMeta._psize):
+      if issubclass(argtype, _RIID_PPI) and argtype.outarg:
+        if arg:
+          for pI in arg:
             s += 2
-            if (pI := wintypes.LPVOID.from_address(a)):
+            if pI:
               if not e:
-                if (istream := PCOMSTREAM.MarshalInterface(argtype, pI, context)) is None:
+                if (istream := PCOMSTREAM.MarshalInterface(argtype.riid, pI, context)) is None:
                   e = True
                 else:
                   marsh.append(istream)
@@ -1742,8 +1741,6 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
                   else:
                     s += o
               PCOM.Release(pI)
-      elif isinstance(argtype, RIID_PI):
-        pass
       elif (bs := issubclass(argtype, (PBSTR, PBSTRING, _ARRAY_BSTR))) or (w := issubclass(argtype, (wintypes.PLPWSTR, _ARRAY_LPWSTR))) or issubclass(argtype, (wintypes.PLPSTR, _ARRAY_LPSTR)):
         if arg:
           if hasattr(argtype, 'number'):
@@ -1767,13 +1764,11 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
                 _IUtil.CoTaskMemFree(a)
               smarsh.append(b)
               s += o
-      elif issubclass(argtype, wintypes.LPVOID):
-        if arg:
-          s += ctypes.sizeof(arg)
       elif issubclass(argtype, ctypes._Pointer):
         if arg:
           s += ctypes.sizeof(argtype._type_)
-      parg = arg
+      elif issubclass(argtype, ctypes.Array):
+        s += ctypes.sizeof(arg)
     if e or channel.GetBuffer(self.__class__._siids[1][getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, message.iMethod, message) is None:
       for istream in marsh:
         _IUtil.CoReleaseMarshalData(istream)
@@ -1788,13 +1783,10 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
       ctypes.memmove(o, ctypes.addressof(res if isinstance(res, restype) else (r := restype(res))), (s := ctypes.sizeof(restype)))
     o += s
     for arg, argtype in zip(args, argtypes):
-      if isinstance(argtype, RIID_PPI):
-        if (n := argtype.number) is True:
-          n = parg.value
-        if n > 0 and arg:
-          add = wintypes.LPVOID.from_buffer(arg).value
-          for a in range(add, add + n * _COMMeta._psize, _COMMeta._psize):
-            if wintypes.LPVOID.from_address(a):
+      if issubclass(argtype, _RIID_PPI) and argtype.outarg:
+        if arg:
+          for pI in arg:
+            if pI:
               istream = next(imarsh)
               ctypes.memmove(o, (s := istream.Seek(0, 1)).to_bytes(2, 'little'), 2)
               o += 2
@@ -1805,8 +1797,6 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
             else:
               ctypes.memmove(o, b'\x00\x00', 2)
               o += 2
-      elif isinstance(argtype, RIID_PI):
-        pass
       elif (bs := issubclass(argtype, (PBSTR, PBSTRING, _ARRAY_BSTR))) or issubclass(argtype, (wintypes.PLPWSTR, wintypes.PLPSTR, _ARRAY_LPWSTR, _ARRAY_LPSTR)):
         if arg:
           if getattr(argtype, 'number', None) is True:
@@ -1830,16 +1820,15 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
         if arg:
           ctypes.memmove(o, arg, (s := ctypes.sizeof(argtype._type_)))
           o += s
-      elif issubclass(argtype, wintypes.LPVOID):
+      elif issubclass(argtype, ctypes.Array):
         if arg:
           ctypes.memmove(o, arg, (s := ctypes.sizeof(arg)))
           o += s
-      parg = arg
     return 0
   @classmethod
   def _call(cls, self, pI, channel, message, func, argtypes, errcheck=0x80000000.__and__):
     if (inproc := getattr(cls, '_inproc', None)) and getattr(channel.GetDestCtx(), 'code', None) in (3, 4):
-      return inproc._offsetted[getattr(cls, '_ovtbl', 0) // cls.__class__._psize]._call(self, pI, channel, message, func, argtypes, errcheck)
+      return inproc._offsetted[getattr(cls, '_ovtbl', 0) // cls.__class__._psize]._call(self, pI, channel, message, func, errcheck)
     restype = getattr(func, 'restype', None)
     return args if isinstance((args := cls._process_message(channel, message, argtypes)), int) else cls._send_message(self, channel, message, args, argtypes, func(pI, *args), restype, errcheck)
   @classmethod
@@ -1848,81 +1837,57 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
 
 class _COM_IRpcInProcStub(_COM_IRpcStubBuffer):
   @classmethod
-  def _process_message(cls, self, channel, message, restype, argtypes):
-    if message.cbBuffer < sum(map(ctypes.sizeof, argtypes)):
+  def _process_message(cls, self, channel, message, restype):
+    if message.cbBuffer < _COMMeta._psize:
       return 0x80010009
-    o = message.Buffer
-    args = cls._args()
-    parg = None
+    args = cls._args(ctypes.py_object.from_address(message.Buffer).value)
     e = False
-    for argtype in argtypes:
-      s = ctypes.sizeof(argtype)
-      if isinstance(argtype, RIID_PI) or (isinstance(argtype, RIID_PPI) and argtype.inarg):
-        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
-          e = True
-        else:
-          if n is None:
-            n = 1
-            p = wintypes.LPVOID.from_address(add := o)
-          else:
-            add = wintypes.LPVOID.from_buffer(p).value if (p := wintypes.PLPVOID.from_address(o)) else None
-          if n > 0 and add is not None:
-            for a in range(add, add + n * s, s):
-              if (pI := wintypes.LPVOID.from_address(a)):
-                if e:
-                  _IUtil.CoReleaseMarshalData(pI)
-                  PCOM.Release(pI)
-                elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI, argtype, pI) is None:
-                  e = True
-                else:
-                  args.marsh.append(pI)
-        parg = p
-      else:
-        parg = (wintypes.PLPVOID if isinstance(argtype, RIID_PPI) else argtype).from_address(o)
-      args.append(parg)
-      o += s
+    for arg in args:
+      if (isinstance(arg, (_RIID_PI, _RIID_PPI)) and arg.inarg) and arg:
+        for pI in (arg,) if arg.number is None else arg:
+          if pI:
+            if e:
+              _IUtil.CoReleaseMarshalData(pI)
+              PCOM.Release(pI)
+            elif _IUtil.CoGetInterfaceIntoAndReleaseStream(pI, arg.riid, pI) is None:
+              e = True
+            else:
+              args.marsh.append(pI)
     if e or channel.GetBuffer(self.__class__._siids[1][getattr(cls, '_ovtbl', 0) // cls.__class__._psize], (0 if restype is None else ctypes.sizeof(restype)), message.iMethod, message) is None:
       args.release()
       return 0x8001000e if e else (IGetLastError().code or 0x80004005)
     return args
   @classmethod
-  def _send_message(cls, message, args, argtypes, res, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
+  def _send_message(cls, message, args, res, restype=wintypes.ULONG, errcheck=0x80000000.__and__):
     args.release()
     if restype is not None:
       ctypes.memmove(message.Buffer, ctypes.addressof(res if isinstance(res, restype) else (r := restype(res))), ctypes.sizeof(restype))
       if errcheck and errcheck(res):
-        return 0
+        return None
     marsh = []
-    parg = None
     e = False
-    for arg, argtype in zip(args, argtypes):
-      if isinstance(argtype, RIID_PPI):
-        if (n := argtype.number) is True and not isinstance((n := getattr(parg, 'value', None)), int):
-          e = True
-        elif n > 0 and arg:
-          s = ctypes.sizeof(argtype)
-          add = wintypes.LPVOID.from_buffer(arg).value
-          for a in range(add, add + n * s, s):
-            if (ar := (pI := wintypes.LPVOID.from_address(a)).value):
-              if not e:
-                if _IUtil.CoMarshalInterThreadInterfaceIntoStream(argtype, ar, pI) is None:
-                  e = True
-                else:
-                  marsh.append(pI)
-              PCOM.Release(wintypes.LPVOID(ar))
-      parg = arg
+    for arg in args:
+      if isinstance(arg, _RIID_PPI) and arg.outarg and arg:
+        for pI in arg:
+          if (ar := pI.value):
+            if not e:
+              if _IUtil.CoMarshalInterThreadInterfaceIntoStream(arg.riid, pI, pI) is None:
+                e = True
+              else:
+                marsh.append(pI)
+            PCOM.Release(wintypes.LPVOID(ar))
     if e:
       for pI in marsh:
         _IUtil.CoReleaseMarshalData(pI)
         PCOM.Release(pI)
     return 0x8001000d if e else 0
   @classmethod
-  def _call(cls, self, pI, channel, message, func, argtypes, errcheck=0x80000000.__and__):
+  def _call(cls, self, pI, channel, message, func, errcheck=0x80000000.__and__):
     restype = getattr(func, 'restype', None)
-    return args if isinstance((args := cls._process_message(self, channel, message, restype, argtypes)), int) else cls._send_message(message, args, argtypes, func(pI, *args), restype, errcheck)
+    return args if isinstance((args := cls._process_message(self, channel, message, restype)), int) else cls._send_message(message, args, func(pI, *args), restype, errcheck)
   @classmethod
   def _invoke(cls, self, pI, channel, message):
-    return cls._call(self, pI, channel, message, *cls._svtbl[message.iMethod])
+    return cls._call(self, pI, channel, message, cls._svtbl[message.iMethod])
 
 class _PSImplMeta(type):
   @staticmethod
@@ -2222,10 +2187,10 @@ class IEnumInterfaceFactory(IUnknown):
 class _COM_IEnumInterface_Proxy(_COM_IRpcProxy):
   _iids.update(_COM_IEnumInterface._iids)
   _vtbl.update(_COM_IEnumInterface._vtbl)
-  _vars['iiid'] = wintypes.BYTES16
+  _vars['_iiid'] = wintypes.BYTES16
   @classmethod
   def _call(cls, self, method, args, restype=wintypes.ULONG, errcheck=0x80000000.__and__, errres=IGetLastError):
-    if method != 7 and not any(self.iiid) and super()._call(self, 7, (ctypes.pointer(self.iiid),)):
+    if method != 7 and not any(self.iiid):
       if errres == IGetLastError:
         return 0x8000ffff
       else:
@@ -2241,7 +2206,7 @@ class _COM_IEnumInterface_Proxy(_COM_IRpcProxy):
         if rgelt:
           (wintypes.LPVOID * celt).from_address(rgelt)[:] = (None,) * celt
         return 0x80004003
-      return cls._call(self, 3, (wintypes.ULONG(celt), RIID_PPI.array(celt, self.iiid)(rgelt), pceltFetched))
+      return cls._call(self, 3, (wintypes.ULONG(celt), RIID_PPI(self.iiid, outarg=True)(rgelt, celt), pceltFetched))
   @classmethod
   def _Skip(cls, pI, celt):
     return cls._invoke(pI, 4, (wintypes.ULONG(celt),))
@@ -2250,7 +2215,7 @@ class _COM_IEnumInterface_Proxy(_COM_IRpcProxy):
     return cls._invoke(pI, 5, ())
   @classmethod
   def _Clone(cls, pI, ppenum):
-    return cls._invoke(pI, 6, (RIID_PPI(_COM_IEnumInterface._iid)(ppenum),), (ppenum,))
+    return cls._invoke(pI, 6, (RIID_PPI(_COM_IEnumInterface._iid, outarg=True)(ppenum),), (ppenum,))
   @classmethod
   def _GetIID(cls, pI, riid):
     return cls._invoke(pI, 7, (riid,))
@@ -2264,7 +2229,7 @@ _COM_IEnumInterface_Proxy._inproc = _COM_IRpcInProcProxy
 
 class _COM_IEnumInterface_Stub(_COM_IRpcStub):
   _vars['iiid'] = wintypes.BYTES16
-  _svtbl = _COM_IRpcInProcStub._svtbl(_COM_IEnumInterface, (), (wintypes.ULONG,), (), (RIID_PPI(_COM_IEnumInterface._iid),), (wintypes.PBYTES16,), ())
+  _svtbl = _COM_IRpcInProcStub._svtbl(_COM_IEnumInterface, (), (wintypes.ULONG,), (), (RIID_PPI(_COM_IEnumInterface._iid, outarg=True),), (wintypes.PBYTES16,), ())
   @classmethod
   def _Connect(cls, pI, pUnkServer):
     if (r := super()._Connect(pI, pUnkServer)):
@@ -2280,7 +2245,7 @@ class _COM_IEnumInterface_Stub(_COM_IRpcStub):
   def _invoke(cls, self, pI, channel, message):
     func, argtypes = cls._svtbl[method := message.iMethod]
     if (method) == 3:
-      argtypes = (wintypes.ULONG, RIID_PPI.array(True, self.iiid), wintypes.PULONG)
+      argtypes = (wintypes.ULONG, RIID_PPI(self.iiid, outarg=True), wintypes.PULONG)
     elif method == 8:
       argtypes = (RIID_PI(self.iiid),)
     return cls._call(self, pI, channel, message, func, argtypes)
@@ -2291,18 +2256,19 @@ class _COM_IEnumInterfaceFactory_Proxy(_COM_IRpcProxy):
   _vtbl.update(_COM_IEnumInterfaceFactory._vtbl)
   @classmethod
   def _CreateInstance(cls, pI, riid, ppObj):
-    return cls._invoke(pI, 3, (riid, RIID_PPI(_COM_IEnumInterface._iid)(ppObj)), (ppObj,))
+    return cls._invoke(pI, 3, (riid, RIID_PPI(_COM_IEnumInterface._iid, outarg=True)(ppObj)), (ppObj,))
   @classmethod
   def _LockServer(cls, pI, fLock):
     return cls._invoke(pI, 4, (wintypes.BOOL(fLock),))
 _COM_IEnumInterfaceFactory_Proxy._inproc = _COM_IRpcInProcProxy
 
 class _COM_IEnumInterfaceFactory_Stub(_COM_IRpcStub):
-  _svtbl = _COM_IRpcInProcStub._svtbl(_COM_IEnumInterfaceFactory, (wintypes.PBYTES16, RIID_PPI(_COM_IEnumInterface._iid)), (wintypes.BOOL,))
+  _svtbl = _COM_IRpcInProcStub._svtbl(_COM_IEnumInterfaceFactory, (wintypes.PBYTES16, RIID_PPI(_COM_IEnumInterface._iid, outarg=True)), (wintypes.BOOL,))
 _COM_IEnumInterfaceFactory_Stub._inproc = _COM_IRpcInProcStub
 
 class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM_IEnumInterface_Proxy, _COM_IEnumInterface_Stub), (_COM_IEnumInterfaceFactory_Proxy, _COM_IEnumInterfaceFactory_Stub))):
   CLSID = True
+_PS_IEnumInterfaceFactory_impl.proxy_impl.iiid = property(lambda self: self._iiid if any(self._iiid) else (wintypes.BYTES16() if _COM_IEnumInterface_Proxy._offsetted[_PS_IEnumInterfaceFactory_impl.proxy_impl._iids[IEnumInterface.IID]]._call(self, 7, (ctypes.pointer(self._iiid),)) else self._iiid))
 _COM_IEnumInterface._ps_impl = _PS_IEnumInterfaceFactory_impl
 
 class IStream(IUnknown):
@@ -2410,20 +2376,6 @@ class PCOMSTREAM(PCOM):
 
 class _BSTRUtil:
   _mul_cache = {}
-  @staticmethod
-  def _agitem(arr, key):
-    e = arr.__class__.__bases__[0].__getitem__(arr, key)
-    return e.content if isinstance(key, int) else [b.content for b in e]
-  @staticmethod
-  def _asitem(arr, key, value):
-    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, BSTR) else BSTR(value)) if isinstance(key, int) else [v if isinstance(v, BSTR) else BSTR(v) for v in value])
-
-class _BSTRMeta(ctypes._Pointer.__class__):
-  def __mul__(bcls, size):
-    return _BSTRUtil._mul_cache.get((bcls, size)) or _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
-
-class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
-  _type_ = wintypes.WCHAR
   oleauto32.SysAllocString.restype = wintypes.LPVOID
   oleauto32.SysAllocString.argtypes = (wintypes.LPOLESTR,)
   oleauto32.SysAllocStringLen.restype = wintypes.LPVOID
@@ -2436,6 +2388,31 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
   oleauto32.SysStringByteLen.argtypes = (wintypes.LPVOID,)
   oleauto32.SysFreeString.restype = None
   oleauto32.SysFreeString.argtypes = (wintypes.LPVOID,)
+  @staticmethod
+  def _ainit(arr, *args, needsfree=False, **kwargs):
+    arr.__class__.__bases__[0].__init__(arr, *args, **kwargs)
+    arr._needsfree = needsfree
+  @staticmethod
+  def _adel(arr):
+    if getattr(arr, '_needsfree', False):
+      for k in range(len(arr)):
+        oleauto32.SysFreeString(b := arr.__class__.__bases__[0].__getitem__(arr, k))
+        b.value = None
+    getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
+  @staticmethod
+  def _agitem(arr, key):
+    e = arr.__class__.__bases__[0].__getitem__(arr, key)
+    return e.content if isinstance(key, int) else [b.content for b in e]
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, (value if isinstance(value, BSTR) else BSTR(value)) if isinstance(key, int) else [v if isinstance(v, BSTR) else BSTR(v) for v in value])
+
+class _BSTRMeta(ctypes._Pointer.__class__):
+  def __mul__(bcls, size):
+    return _BSTRUtil._mul_cache.get((bcls, size)) or _BSTRUtil._mul_cache.setdefault((bcls, size), type('BSTR_Array_%d' % size, (ctypes._Pointer.__class__.__mul__(bcls, size),), {'__init__': _BSTRUtil._ainit, '__del__': _BSTRUtil._adel, '__getitem__': _BSTRUtil._agitem, '__setitem__': _BSTRUtil._asitem}))
+
+class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
+  _type_ = wintypes.WCHAR
   def __new__(cls, data=None):
     self = wintypes.PWCHAR.__new__(cls)
     if data is None:
@@ -2443,38 +2420,35 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
       return self
     if isinstance(data, BSTR):
       self._needsfree = False
-      bstr = getattr(data, 'bstr', ctypes.cast(data, ctypes.c_void_p)).value
+      self.value = getattr(data, 'bstr', wintypes.LPVOID.from_buffer(data)).value
     elif isinstance(data, wintypes.LPVOID):
       self._needsfree = False
-      bstr = data.value
+      self.value = data.value
     elif isinstance(data, int):
       self._needsfree = False
-      bstr = data
+      self.value = data
     elif isinstance(data, (str, wintypes.LPCWSTR)):
       self._needsfree = True
-      bstr = oleauto32.SysAllocString(data)
+      self.value = oleauto32.SysAllocString(data)
     elif isinstance(data, ctypes.Array) and getattr(data, '_type_') == wintypes.WCHAR:
       self._needsfree = True
-      bstr = oleauto32.SysAllocStringLen(data, len(data))
+      self.value = oleauto32.SysAllocStringLen(data, len(data))
     else:
       self._needsfree = True
-      bstr = oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data), PBUFFER.length(data))
-    self.value = bstr
+      self.value = oleauto32.SysAllocStringByteLen(PBUFFER.from_param(data), PBUFFER.length(data))
     return self
   @property
   def value(self):
-    return getattr(getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p)), 'value', None)
+    return getattr(getattr(self, 'bstr', wintypes.LPVOID.from_buffer(self)), 'value', None)
   @value.setter
   def value(self, val):
-    ctypes.c_void_p.from_address(ctypes.addressof(self)).value = val
-    self.bstr = ctypes.cast(self, ctypes.c_void_p)
+    wintypes.LPVOID.from_buffer(self).value = val
+    self.bstr = ctypes.cast(self, wintypes.LPVOID)
   @property
   def content(self):
     if not hasattr(self, 'bstr'):
-      self.bstr = ctypes.cast(self, ctypes.c_void_p)
-    if not self.bstr:
-      return None
-    return ctypes.wstring_at(self.bstr, oleauto32.SysStringLen(self.bstr))
+      self.bstr = ctypes.cast(self, wintypes.LPVOID)
+    return ctypes.wstring_at(self.bstr, oleauto32.SysStringLen(self)) if self else None
   @property
   def ubuffer(self):
     if self:
@@ -2495,13 +2469,15 @@ class BSTR(wintypes.PWCHAR, metaclass=_BSTRMeta):
   def __init__(self, data=None):
     super().__init__()
   def __del__(self):
-    if (bstr := getattr(self, 'bstr', ctypes.cast(self, ctypes.c_void_p))) and getattr(self, '_needsfree', False):
+    if (bstr := getattr(self, 'bstr', ctypes.cast(self, wintypes.LPVOID))) and getattr(self, '_needsfree', False):
       oleauto32.SysFreeString(bstr)
       self._needsfree = False
       self.value = None
+  def __len__(self):
+    return oleauto32.SysStringLen(self) if self else 0
   def __ctypes_from_outparam__(self):
     self._needsfree = True
-    self.bstr = ctypes.cast(self, ctypes.c_void_p)
+    self.bstr = ctypes.cast(self, wintypes.LPVOID)
     return self
   _for_json = content
 PBSTR = ctypes.POINTER(BSTR)
@@ -2515,7 +2491,7 @@ class BSTRING(BSTR):
 PBSTRING = ctypes.POINTER(BSTRING)
 class _ARRAY_BSTR(_ARRAY_STR):
   scls = BSTR
-globals().update({(n := 'ARRAY_BSTR_%s' % d): type(n, (_ARRAY_BSTR,), {'inarg': di, 'outarg': do}) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
+globals().update({'ARRAY_BSTR_%s' % d: type('ARRAY_BSTR_%s' % d, (_ARRAY_BSTR,), {'_type_': wintypes.LPVOID, 'inarg': di, 'outarg': do}) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _DT:
   def __new__(cls, dt=0):
