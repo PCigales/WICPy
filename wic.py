@@ -1213,18 +1213,20 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
             else:
               ctypes.c_char.from_address(o).value = 0
               o += 1
-          else:
-            if isinstance(arg, ctypes.Array):
-              if (n := len(arg)) < 0x80000000:
-                s = 4
-              else:
-                s = 8
-                n |= 0x8000000000000000
-              ctypes.memmove(o, n.to_bytes(s, 'big'), s)
-              o += s
+          elif isinstance(arg, ctypes.Array):
+            if (n := len(arg)) < 0x80000000:
+              s = 4
+            else:
+              s = 8
+              n |= 0x8000000000000000
+            ctypes.memmove(o, n.to_bytes(s, 'big'), s)
+            o += s
             if arg:
               ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
               o += s
+          else:
+            ctypes.memmove(o, ctypes.addressof(arg), (s := ctypes.sizeof(arg)))
+            o += s
         if not channel.SendReceive(message):
           r = IGetLastError().code or 0x8001000a
           if message.Buffer:
