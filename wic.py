@@ -1778,7 +1778,8 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
         if arg:
           s += ctypes.sizeof(argtype._type_)
       elif issubclass(argtype, ctypes.Array):
-        s += ctypes.sizeof(arg)
+        if arg:
+          s += ctypes.sizeof(arg)
     if e or channel.GetBuffer(self.__class__._siids[1][getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, message.iMethod, message) is None:
       for istream in marsh:
         _IUtil.CoReleaseMarshalData(istream)
