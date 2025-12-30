@@ -39,6 +39,7 @@ kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 user32 = ctypes.WinDLL('user32', use_errno=True, use_last_error=True)
 ole32 = ctypes.WinDLL('ole32', use_last_error=True)
 oleauto32 = ctypes.WinDLL('oleaut32', use_last_error=True)
+propsys = ctypes.WinDLL('propsys', use_last_error=True)
 shl = ctypes.WinDLL('shlwapi', use_last_error=True)
 sh32 = ctypes.WinDLL('shell32', use_last_error=True)
 d2d1 = ctypes.WinDLL('d2d1', use_last_error=True)
@@ -987,7 +988,7 @@ class RIID_PPI:
     return cls._cache.get((iid, inarg, outarg)) or cls._cache.setdefault((iid, inarg, outarg), type('RIID_PPI_%s_%s%s' % (iid, ('IN' if inarg else ''), ('OUT' if outarg else '')), (_RIID_PPI,), {'_type_': cls.LPVOID, 'riid': PUUID.from_param(iid), 'inarg': inarg, 'outarg': outarg}))
 class _RIID_PPI(wintypes.PLPVOID):
   number = True
-  def __new__(cls, p=None, number=False):
+  def __new__(cls, p=None, number=1):
     return super().__new__(cls) if p is None else ctypes.cast(p, cls)
   def __init__(self, p=None, number=1):
     if p is None:
@@ -1019,7 +1020,52 @@ class _ARRAY_STR(wintypes.PLPVOID):
     if k < 0 or k >= self.number:
       raise IndexError('index out of range')
     super().__setitem__(k, ctypes.cast(v, wintypes.LPVOID))
-globals().update({'_ARRAY_%s' % t: type('_ARRAY_%s' % t, (_ARRAY_STR,), {'scls': s}) for t, s in (('LPWSTR', wintypes.PWCHAR), ('LPSTR', wintypes.PCHAR))})
+class _ARRAY_LPWSTR(_ARRAY_STR):
+  scls = wintypes.PWCHAR
+  @staticmethod
+  def Marshal(a, f=False):
+    b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
+    o = ctypes.sizeof(b)
+    ctypes.memmove(b, a, o)
+    if f:
+      _IUtil.CoTaskMemFree(a)
+    return b, o
+  @staticmethod
+  def Unmarshal(o, l, f=False):
+    p = ctypes.cast(o, wintypes.PWCHAR) 
+    if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
+      return None, None
+    if f:
+      p = ctypes.create_unicode_buffer(s + 1)
+      s = ctypes.sizeof(p)
+    else:
+      s = (s + 1) * ctypes.sizeof(wintypes.WCHAR)
+      p = _IUtil.CoTaskMemAlloc(s)
+    ctypes.memmove(p, o, s)
+    return p, s
+class _ARRAY_LPSTR(_ARRAY_STR):
+  scls = wintypes.PCHAR
+  @staticmethod
+  def Marshal(a, f=False):
+    b = ctypes.create_string_buffer(next(i for i, c in enumerate(a) if c == b'\x00') + 1)
+    o = ctypes.sizeof(b)
+    ctypes.memmove(b, a, o)
+    if f:
+      _IUtil.CoTaskMemFree(a)
+    return b, o
+  @staticmethod
+  def Unmarshal(o, l, f=False):
+    p = ctypes.cast(o, wintypes.PCHAR) 
+    if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
+      return None, None
+    if f:
+      p = ctypes.create_string_buffer(s + 1)(s + 1)
+      s = ctypes.sizeof(p)
+    else:
+      s = (s + 1) * ctypes.sizeof(wintypes.CHAR)
+      p = _IUtil.CoTaskMemAlloc(s)
+    ctypes.memmove(p, o, s)
+    return p, s
 globals().update({'ARRAY_%s_%s' % (t, d): type('ARRAY_%s_%s' % (t, d), (b,), {'_type_': wintypes.LPVOID, 'inarg': di, 'outarg': do}) for t, b in (('LPWSTR', _ARRAY_LPWSTR), ('LPSTR', _ARRAY_LPSTR)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _COM_IRpcProxyBuffer(_COM_IUnknown):
@@ -1071,17 +1117,16 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
       r = 0
       marsh = []
       smarsh = []
+      vmarsh = []
       s = 0
       for arg in args:
-        if isinstance(arg, (_RIID_PI, _RIID_PPI)) and arg.inarg:
+        if isinstance(arg, (_RIID_PI, _RIID_PPI)):
           if (n := arg.number) is None:
             ar = (arg,)
-          elif n < 0 or n > 0xffffffff:
-            break
           else:
             s += 1
             if arg:
-              ar = arg
+              ar = arg if arg.inarg else ()
               if n != 1:
                 s += 4
             else:
@@ -1100,10 +1145,6 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
             continue
           r = 0x8001000b
           break
-        elif isinstance(arg, _RIID_PPI):
-          s += 1
-          if arg and arg.number != 1:
-            s += 4
         elif (bs := isinstance(arg, (BSTR, _ARRAY_BSTR))) or ((w := isinstance(arg, (wintypes.LPCWSTR, _ARRAY_LPWSTR))) or isinstance(arg, (wintypes.LPCSTR, _ARRAY_LPSTR))):
           if (n := getattr(arg, 'number', None)) is None:
             ar = (arg if bs else (wintypes.PWCHAR if w else wintypes.PCHAR).from_buffer(arg),)
@@ -1117,18 +1158,27 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           for a in ar:
             s += 1
             if a:
-              if bs:
-                s += 4
-                b = a.ubuffer
-                o = ctypes.sizeof(b)
-              else:
-                if w:
-                  b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
-                else:
-                  b = ctypes.create_string_buffer(next(i for i, c in enumerate(a) if c == b'\x00') + 1)
-                ctypes.memmove(b, a, (o := ctypes.sizeof(b)))
+              b, o = getattr((_ARRAY_BSTR if bs else (_ARRAY_LPWSTR if w else _ARRAY_LPSTR)), 'Marshal')(a, False)
               smarsh.append(b)
               s += o
+        elif isinstance(arg, (_ARRAY_VARIANT, _ARRAY_PROPVARIANT)):
+          s += 1
+          if arg:
+            ar = arg if arg.inarg else ()
+            if arg.number != 1:
+              s += 4
+          else:
+            ar = ()
+          for a in ar:
+            b, o = arg.__class__.Marshal(a, False)
+            if o is None:
+              break
+            vmarsh.append((b, o))
+            s += o
+          else:
+            continue
+          r = 0x8001000b
+          break
         elif isinstance(arg, ctypes._Pointer):
           s += 1
           if arg:
@@ -1145,9 +1195,12 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
       if r:
         for istream in marsh:
           _IUtil.CoReleaseMarshalData(istream)
+        for b, s in vmarsh:
+          _IUtil.CoTaskMemFree(b)
       else:
         imarsh = iter(marsh)
         smarsh = iter(smarsh)
+        vmarsh = iter(vmarsh)
         o = message.Buffer
         for arg in args:
           if isinstance(arg, (_RIID_PI, _RIID_PPI)):
@@ -1166,8 +1219,8 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                 ar = arg if arg.inarg else ()
               else:
                 ctypes.c_char.from_address(o).value = 0
-                ar = ()
                 o += 1
+                ar = ()
             for pI in ar:
               if pI:
                 istream = next(imarsh)
@@ -1206,6 +1259,27 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               else:
                 ctypes.c_char.from_address(o).value = 0
                 o += 1
+          elif isinstance(arg, (_ARRAY_VARIANT, _ARRAY_PROPVARIANT)):
+            if arg:
+              if (n := arg.number) == 1:
+                ctypes.c_char.from_address(o).value = 1
+                o += 1
+              else:
+                ctypes.c_char.from_address(o).value = 2
+                o += 1
+                ctypes.memmove(o, n.to_bytes(4, 'little'), 4)
+                o += 4
+              ar = arg if arg.inarg else ()
+            else:
+              ctypes.c_char.from_address(o).value = 0
+              o += 1
+              ar = ()
+            for a in ar:
+              b, s = next(vmarsh)
+              ctypes.memmove(o, (s - (uls := _ARRAY_BVARIANT._ulsize)).to_bytes(uls, 'little'), uls)
+              ctypes.memmove(o + uls, b, s)
+              o += s
+              _IUtil.CoTaskMemFree(b)
           elif isinstance(arg, ctypes._Pointer):
             if arg:
               ctypes.c_char.from_address(o).value = 1
@@ -1259,9 +1333,10 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
         if restype is None or not (errcheck and errcheck(r)):
           marsh = []
           smarsh = []
+          vmarsh = []
           for arg in args:
-            if isinstance(arg, _RIID_PPI) and arg.outarg:
-              if arg:
+            if isinstance(arg, _RIID_PPI):
+              if arg.outarg and arg:
                 for pI in arg:
                   if o + 2 > l:
                     break
@@ -1293,31 +1368,30 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                     break
                   if ctypes.c_char.from_address(o):
                     o += 1
-                    if bs:
-                      if o + 4 > l:
-                        break
-                      s = int.from_bytes(ctypes.string_at(o, 4), 'little')
-                      o += 4
-                      p = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR), _needsfree=False)
-                    else:
-                      if w:
-                        p = ctypes.cast(o, wintypes.PWCHAR)
-                        if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
-                          break
-                        s = (s + 1) * ctypes.sizeof(wintypes.WCHAR)
-                      else:
-                        p = ctypes.cast(o, wintypes.PCHAR)
-                        if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
-                          break
-                        s = (s + 1) * ctypes.sizeof(wintypes.CHAR)
-                      p = _IUtil.CoTaskMemAlloc(s)
-                      ctypes.memmove(p, o, s)
+                    p, s = getattr((_ARRAY_BSTR if bs else (_ARRAY_LPWSTR if w else _ARRAY_LPSTR)), 'Unmarshal')(o, l, False)
+                    if s is None:
+                      break
                     arg[a] = p
                     smarsh.append(p)
                     o += s
                   else:
                     arg[a] = None
                     o += 1
+                else:
+                  continue
+                break
+            elif isinstance(arg, (_ARRAY_VARIANT, _ARRAY_PROPVARIANT)):
+              if arg.outarg and arg:
+                for a in range(arg.number):
+                  p, s = arg.__class__.Unmarshal(o, l, False)
+                  if s is None:
+                    break
+                  if p is None:
+                    e = True
+                  else:
+                    arg[a] = p
+                    vmarsh.append(p)
+                    o += s
                 else:
                   continue
                 break
@@ -1348,6 +1422,8 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               p.value = None
             else:
               _IUtil.CoTaskMemFree(p)
+          for p in vmarsh:
+            p.__class__._clear(p)
       channel.FreeBuffer(message)
     if errres == IGetLastError:
       return r
@@ -1649,30 +1725,48 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
             break
           if ctypes.c_char.from_address(o):
             o += 1
-            if bs:
-              if o + 4 > l:
-                break
-              s = int.from_bytes(ctypes.string_at(o, 4), 'little')
-              o += 4
-              arg[a] = BSTR.from_ubuffer(o, s // ctypes.sizeof(wintypes.WCHAR))
-            else:
-              if w:
-                p = ctypes.cast(o, wintypes.PWCHAR)
-                if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
-                  break
-                arg[a] = p = ctypes.create_unicode_buffer(s + 1)
-              else:
-                p = ctypes.cast(o, wintypes.PCHAR)
-                if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
-                  break
-                arg[a] = p = ctypes.create_string_buffer(s + 1)
-              ctypes.memmove(p, o, (s := ctypes.sizeof(p)))
+            p, s = getattr((_ARRAY_BSTR if bs else (_ARRAY_LPWSTR if w else _ARRAY_LPSTR)), 'Unmarshal')(o, l, True)
+            if s is None:
+              break
+            arg[a] = p
             o += s
           else:
             arg[a] = None
             o += 1
         else:
           args.append(arg if ar else arg[0])
+          continue
+        break
+      elif issubclass(argtype, (_ARRAY_VARIANT, _ARRAY_PROPVARIANT)):
+        if o + 1 > l:
+          break
+        argt = ctypes.c_char.from_address(o).value
+        o += 1
+        if argt == b'\x01':
+          n = 1
+          arg = argtype(ctypes.create_string_buffer(argtype._vsize))
+        elif argt == b'\x02':
+          if o + 4 > l:
+            break
+          n = int.from_bytes(ctypes.string_at(o, 4), 'little')
+          o += 4
+          arg = argtype(ctypes.create_string_buffer(n * argtype._vsize), n)
+        else:
+          n = 0
+          arg = None
+        if not argtype.inarg:
+          n = 0
+        for a in range(n):
+          p, s = argtype.Unmarshal(o, l, True)
+          if s is None:
+            break
+          if p is False:
+            e = True
+          else:
+            arg[a] = p
+          o += s
+        else:
+          args.append(arg)
           continue
         break
       elif issubclass(argtype, ctypes._Pointer):
@@ -1734,10 +1828,11 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
       return 0x80004005
     marsh = []
     smarsh = []
+    vmarsh = []
     e = False
     for arg, argtype in zip(args, argtypes):
-      if issubclass(argtype, _RIID_PPI) and argtype.outarg:
-        if arg:
+      if issubclass(argtype, _RIID_PPI):
+        if argtype.outarg and arg:
           for pI in arg:
             s += 2
             if pI:
@@ -1760,19 +1855,17 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
           for a in ar:
             s += 1
             if a:
-              if bs:
-                s += 4
-                b = a.ubuffer
-                o = ctypes.sizeof(b)
-                oleauto32.SysFreeString(a)
-              else:
-                if w:
-                  b = ctypes.create_unicode_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
-                else:
-                  b = ctypes.create_string_buffer(next(i for i, c in enumerate(a) if c == '\x00') + 1)
-                ctypes.memmove(b, a, (o := ctypes.sizeof(b)))
-                _IUtil.CoTaskMemFree(a)
+              b, o = getattr((_ARRAY_BSTR if bs else (_ARRAY_LPWSTR if w else _ARRAY_LPSTR)), 'Marshal')(a, True)
               smarsh.append(b)
+              s += o
+      elif issubclass(argtype, (_ARRAY_VARIANT, _ARRAY_PROPVARIANT)):
+        if argtype.outarg and arg:
+          for a in arg:
+            b, o = argtype.Marshal(a, True)
+            if o is None:
+              e = True
+            else:
+              vmarsh.append((b, o))
               s += o
       elif issubclass(argtype, ctypes._Pointer):
         if arg:
@@ -1784,9 +1877,12 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
       for istream in marsh:
         _IUtil.CoReleaseMarshalData(istream)
         istream.Release()
+      for b, s in vmarsh:
+        _IUtil.CoTaskMemFree(b)
       return 0x8001000d if e else (IGetLastError().code or 0x80004005)
     imarsh = iter(marsh)
     smarsh = iter(smarsh)
+    vmarsh = iter(vmarsh)
     o = message.Buffer
     if restype is None:
       s = 0
@@ -1794,8 +1890,8 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
       ctypes.memmove(o, ctypes.addressof(res if isinstance(res, restype) else (r := restype(res))), (s := ctypes.sizeof(restype)))
     o += s
     for arg, argtype in zip(args, argtypes):
-      if issubclass(argtype, _RIID_PPI) and argtype.outarg:
-        if arg:
+      if issubclass(argtype, _RIID_PPI):
+        if argtype.outarg and arg:
           for pI in arg:
             if pI:
               istream = next(imarsh)
@@ -1827,6 +1923,14 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
             else:
               ctypes.c_char.from_address(o).value = 0
               o += 1
+      elif issubclass(argtype, (_ARRAY_VARIANT, _ARRAY_PROPVARIANT)):
+        if argtype.outarg and arg:
+          for a in arg:
+            b, s = next(vmarsh)
+            ctypes.memmove(o, (s - (uls := _ARRAY_BVARIANT._ulsize)).to_bytes(uls, 'little'), uls)
+            ctypes.memmove(o + uls, b, s)
+            _IUtil.CoTaskMemFree(b)
+            o += s
       elif issubclass(argtype, ctypes._Pointer):
         if arg:
           ctypes.memmove(o, arg, (s := ctypes.sizeof(argtype._type_)))
@@ -2502,6 +2606,20 @@ class BSTRING(BSTR):
 PBSTRING = ctypes.POINTER(BSTRING)
 class _ARRAY_BSTR(_ARRAY_STR):
   scls = BSTR
+  @staticmethod
+  def Marshal(a, f=False):
+    b = a.ubuffer
+    o = ctypes.sizeof(b)
+    if f:
+      oleauto32.SysFreeString(a)
+    return b, o + 4
+  @staticmethod
+  def Unmarshal(o, l, f=False):
+    if o + 4 > l:
+      return None, None
+    s = int.from_bytes(ctypes.string_at(o, 4), 'little')
+    p = BSTR.from_ubuffer(o + 4, s // ctypes.sizeof(wintypes.WCHAR), _needsfree=f)
+    return p, s + 4
 globals().update({'ARRAY_BSTR_%s' % d: type('ARRAY_BSTR_%s' % d, (_ARRAY_BSTR,), {'_type_': wintypes.LPVOID, 'inarg': di, 'outarg': do}) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _DT:
@@ -2967,7 +3085,7 @@ class _BVUtil:
   def _adel(arr):
     if getattr(arr, '_needsclear', False):
       for s in arr:
-        s.__class__._clear(ctypes.byref(s))
+        s.__class__._clear(s)
     getattr(arr.__class__.__bases__[0], '__del__', id)(arr)
   @staticmethod
   def _padup(parr):
@@ -3099,7 +3217,7 @@ class _BVARIANT(metaclass=_BVMeta):
       return False
     if getattr(self, '_needsclear', False):
       if vtype in (0, 1):
-        self.__class__._clear(ctypes.byref(self))
+        self.__class__._clear(self)
       else:
         return False
     if vtype in (0, 1):
@@ -3140,7 +3258,7 @@ class _BVARIANT(metaclass=_BVMeta):
     self._needsclear = needsclear
   def __del__(self):
     if getattr(self, '_needsclear', False):
-      self.__class__._clear(ctypes.byref(self))
+      self.__class__._clear(self)
     getattr(self.__class__.__bases__[1], '__del__', id)(self)
   def __ctypes_from_outparam__(self):
     self._needsclear = True
@@ -3154,17 +3272,64 @@ class _BPBVARIANT:
 class VARIANT(_BVARIANT, ctypes.Structure):
   code_name = {20: 'llVal', 3: 'lVal', 17: 'bVal', 2: 'iVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 8: 'bstrVal', 13: 'punkVal', 9: 'pdispVal', 16: 'cVal', 18: 'uiVal', 19: 'ulVal', 21: 'ullVal', 22: 'intVal', 23: 'uintVal', 36: 'brecord', 14: 'decVal', 8192: 'parray', 16384: 'byref'}
   _vtype = VariantType
-  _clear = oleauto32.VariantClear
 class PVARIANT(_BPBVARIANT, ctypes.POINTER(VARIANT)):
   _type_ = VARIANT
+VARIANT._clear = _IUtil._wrap('VariantClear', (PVARIANT, 1), p=oleauto32)
 
 class PROPVARIANT(_BVARIANT, ctypes.Structure):
   code_name = {16: 'cVal', 17: 'bVal', 2: 'iVal',  18: 'uiVal', 3: 'lVal', 19: 'ulVal', 22: 'intVal', 23: 'uintVal', 20: 'hVal', 21: 'uhVal', 4: 'fltVal', 5: 'dblVal', 11: 'boolVal', 10: 'scode', 6: 'cyVal', 7: 'date', 64: 'filetime', 72: 'puuid', 71: 'pclipdata', 8: 'bstrVal', 65: 'blob', 70: 'blob', 30: 'pszVal', 31: 'pwszVal', 13: 'punkVal', 9: 'pdispVal', 66: 'pStream', 68: 'pStream', 67: 'pStorage', 69: 'pStorage', 73: 'pVersionedStream', 14: 'decVal', 4096: 'ca', 8192: 'parray', 16384: 'byref'}
   _vtype = PropVariantType
-  _clear = ole32.PropVariantClear
 class PPROPVARIANT(_BPBVARIANT, ctypes.POINTER(PROPVARIANT)):
   _type_ = PROPVARIANT
+PROPVARIANT._clear = _IUtil._wrap('PropVariantClear', (PPROPVARIANT, 1))
 
+class _ARRAY_BVARIANT:
+  _ulsize = ctypes.sizeof(wintypes.ULONG)
+  number = True
+  def __new__(cls, p=None, number=1):
+    return super().__new__(cls) if p is None else ctypes.cast(p, cls)
+  def __init__(self, p=None, number=1):
+    if p is None:
+      super().__init__()
+    self.number = number
+  def __getitem__(self, k):
+    if k < 0 or k >= self.number:
+      raise IndexError('index out of range')
+    return super().__getitem__(k)
+  def __setitem__(self, k, v):
+    if k < 0 or k >= self.number:
+      raise IndexError('index out of range')
+    super().__setitem__(k, v)
+  @classmethod
+  def Marshal(cls, a, f=False):
+    if (b_o := cls.Serialize(a)) is None:
+      b = o = None
+    else:
+      b, o = b_o[0], b_o[1] + _ARRAY_BVARIANT._ulsize
+    if f:
+      cls.vcls._clear(a)
+    return b, o
+  @classmethod
+  def Unmarshal(cls, o, l, f=False):
+    if o + (uls := _ARRAY_BVARIANT._ulsize) > l:
+      return None, None
+    s = int.from_bytes(ctypes.string_at(o, uls), 'little')
+    if (p := cls.Deserialize(o + uls, s)):
+      p._needsclear = f
+      return p, s + uls
+    else:
+      return None, s + uls
+class _ARRAY_VARIANT(_ARRAY_BVARIANT, PVARIANT):
+  vcls = VARIANT
+  _vsize = ctypes.sizeof(VARIANT)
+  Serialize = _IUtil._wrap('StgSerializePropVariant', (PVARIANT, 1), (wintypes.PLPVOID, 2), (wintypes.PULONG, 2), p=propsys)
+  Deserialize = _IUtil._wrap('StgDeserializePropVariant', (wintypes.LPVOID, 1), (wintypes.UINT, 1), (PVARIANT, 2), p=propsys)
+class _ARRAY_PROPVARIANT(_ARRAY_BVARIANT, PPROPVARIANT):
+  vcls = PROPVARIANT
+  _vsize = ctypes.sizeof(PROPVARIANT)
+  Serialize = _IUtil._wrap('StgSerializePropVariant', (PPROPVARIANT, 1), (wintypes.PLPVOID, 2), (wintypes.PULONG, 2), p=propsys)
+  Deserialize = _IUtil._wrap('StgDeserializePropVariant', (wintypes.LPVOID, 1), (wintypes.UINT, 1), (PPROPVARIANT, 2), p=propsys)
+globals().update({'ARRAY_%s_%s' % (t, d): type('ARRAY_%s_%s' % (t, d), (b,), {'_type_': b.vcls, 'inarg': di, 'outarg': do}) for t, b in (('VARIANT', _ARRAY_VARIANT), ('PROPVARIANT', _ARRAY_PROPVARIANT)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class IWICStream(IStream):
   IID = GUID(0x135ff860, 0x22b7, 0x4ddf, 0xb0, 0xf6, 0x21, 0x8f, 0x4f, 0x29, 0x9a, 0x43)
