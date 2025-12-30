@@ -1128,6 +1128,9 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
         if isinstance(arg, (_RIID_PI, _RIID_PPI)):
           if (n := arg.number) is None:
             ar = (arg,)
+          elif n < 0 or n > 0xffffffff:
+            r = 0x8001000b
+            break
           else:
             s += 1
             if arg:
@@ -1153,6 +1156,9 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
         elif (bs := isinstance(arg, (BSTR, _ARRAY_BSTR))) or ((w := isinstance(arg, (wintypes.LPCWSTR, _ARRAY_LPWSTR))) or isinstance(arg, (wintypes.LPCSTR, _ARRAY_LPSTR))):
           if (n := getattr(arg, 'number', None)) is None:
             ar = (arg if bs else (wintypes.PWCHAR if w else wintypes.PCHAR).from_buffer(arg),)
+          elif n < 0 or n > 0xffffffff:
+            r = 0x8001000b
+            break
           else:
             s += 1
             if arg:
@@ -1167,10 +1173,13 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               smarsh.append(b)
               s += o
         elif isinstance(arg, (_ARRAY_VARIANT, _ARRAY_PROPVARIANT)):
+          if (n := arg.number) < 0 or n > 0xffffffff:
+            r = 0x8001000b
+            break
           s += 1
           if arg:
             ar = arg if arg.inarg else ()
-            if arg.number != 1:
+            if n != 1:
               s += 4
           else:
             ar = ()
