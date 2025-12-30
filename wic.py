@@ -1020,6 +1020,12 @@ class _ARRAY_STR(wintypes.PLPVOID):
     if k < 0 or k >= self.number:
       raise IndexError('index out of range')
     super().__setitem__(k, ctypes.cast(v, wintypes.LPVOID))
+  @classmethod
+  def __init_subclass__(cls):
+    if cls.__bases__[0] == _ARRAY_STR:
+      n = cls.__name__[1:]
+      for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True)):
+        globals()['%s_%s' % (n, d)] = type('%s_%s' % (n, d), (cls,), {'_type_': wintypes.LPVOID, 'inarg': di, 'outarg': do})
 class _ARRAY_LPWSTR(_ARRAY_STR):
   scls = wintypes.PWCHAR
   @staticmethod
@@ -1066,7 +1072,6 @@ class _ARRAY_LPSTR(_ARRAY_STR):
       p = _IUtil.CoTaskMemAlloc(s)
     ctypes.memmove(p, o, s)
     return p, s
-globals().update({'ARRAY_%s_%s' % (t, d): type('ARRAY_%s_%s' % (t, d), (b,), {'_type_': wintypes.LPVOID, 'inarg': di, 'outarg': do}) for t, b in (('LPWSTR', _ARRAY_LPWSTR), ('LPSTR', _ARRAY_LPSTR)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _COM_IRpcProxyBuffer(_COM_IUnknown):
   _iids.add(GUID(0xd5f56a34, 0x593b, 0x101a, 0xb5, 0x69, 0x08, 0x00, 0x2b, 0x2d, 0xbf, 0x7a))
@@ -2622,7 +2627,6 @@ class _ARRAY_BSTR(_ARRAY_STR):
     s = int.from_bytes(ctypes.string_at(o, 4), 'little')
     p = BSTR.from_ubuffer(o + 4, s // ctypes.sizeof(wintypes.WCHAR), _needsfree=f)
     return p, s + 4
-globals().update({'ARRAY_BSTR_%s' % d: type('ARRAY_BSTR_%s' % d, (_ARRAY_BSTR,), {'_type_': wintypes.LPVOID, 'inarg': di, 'outarg': do}) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class _DT:
   def __new__(cls, dt=0):
@@ -3310,6 +3314,8 @@ class _ARRAY_BVARIANT:
       cls._vsize = ctypes.sizeof(bt)
       cls.Serialize = _IUtil._wrap('StgSerializePropVariant', (t, 1), (wintypes.PLPVOID, 2), (wintypes.PULONG, 2), p=propsys)
       cls.Deserialize = _IUtil._wrap('StgDeserializePropVariant', (wintypes.LPVOID, 1), (wintypes.UINT, 1), (t, 2), p=propsys)
+      for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True)):
+        globals()['ARRAY_%s_%s' % (bt.__name__, d)] = type('ARRAY_%s_%s' % (bt.__name__, d), (cls,), {'_type_': bt, 'inarg': di, 'outarg': do})
   @classmethod
   def Marshal(cls, a, f=False):
     if (b_o := cls.Serialize(a)) is None:
@@ -3333,7 +3339,6 @@ class _ARRAY_VARIANT(_ARRAY_BVARIANT, PVARIANT):
   pass
 class _ARRAY_PROPVARIANT(_ARRAY_BVARIANT, PPROPVARIANT):
   pass
-globals().update({'ARRAY_%s_%s' % (t, d): type('ARRAY_%s_%s' % (t, d), (b,), {'_type_': b.vcls, 'inarg': di, 'outarg': do}) for t, b in (('VARIANT', _ARRAY_VARIANT), ('PROPVARIANT', _ARRAY_PROPVARIANT)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class IWICStream(IStream):
   IID = GUID(0x135ff860, 0x22b7, 0x4ddf, 0xb0, 0xf6, 0x21, 0x8f, 0x4f, 0x29, 0x9a, 0x43)
