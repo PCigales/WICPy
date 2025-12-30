@@ -1173,7 +1173,7 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
             b, o = arg.__class__.Marshal(a, False)
             if o is None:
               break
-            vmarsh.append((b, o))
+            vmarsh.append((b, o - _ARRAY_BVARIANT._ulsize))
             s += o
           else:
             continue
@@ -1276,8 +1276,9 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
               ar = ()
             for a in ar:
               b, s = next(vmarsh)
-              ctypes.memmove(o, (s - (uls := _ARRAY_BVARIANT._ulsize)).to_bytes(uls, 'little'), uls)
-              ctypes.memmove(o + uls, b, s)
+              ctypes.memmove(o, s.to_bytes((uls := _ARRAY_BVARIANT._ulsize), 'little'), uls)
+              o += uls
+              ctypes.memmove(o, b, s)
               o += s
               _IUtil.CoTaskMemFree(b)
           elif isinstance(arg, ctypes._Pointer):
@@ -1865,7 +1866,7 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
             if o is None:
               e = True
             else:
-              vmarsh.append((b, o))
+              vmarsh.append((b, o - _ARRAY_BVARIANT._ulsize))
               s += o
       elif issubclass(argtype, ctypes._Pointer):
         if arg:
@@ -1927,8 +1928,9 @@ class _COM_IRpcStub(_COM_IRpcStubBuffer):
         if argtype.outarg and arg:
           for a in arg:
             b, s = next(vmarsh)
-            ctypes.memmove(o, (s - (uls := _ARRAY_BVARIANT._ulsize)).to_bytes(uls, 'little'), uls)
-            ctypes.memmove(o + uls, b, s)
+            ctypes.memmove(o, s.to_bytes((uls := _ARRAY_BVARIANT._ulsize), 'little'), uls)
+            o += uls
+            ctypes.memmove(o, b, s)
             _IUtil.CoTaskMemFree(b)
             o += s
       elif issubclass(argtype, ctypes._Pointer):
@@ -3299,7 +3301,15 @@ class _ARRAY_BVARIANT:
   def __setitem__(self, k, v):
     if k < 0 or k >= self.number:
       raise IndexError('index out of range')
-    super().__setitem__(k, v)
+    super().__setitem__(k, self.__class__.vcls.from_buffer(v))
+  @classmethod
+  def __init_subclass__(cls):
+    if cls.__bases__[0] == _ARRAY_BVARIANT:
+      t = cls.__bases__[1]
+      cls.vcls = bt = t._type_
+      cls._vsize = ctypes.sizeof(bt)
+      cls.Serialize = _IUtil._wrap('StgSerializePropVariant', (t, 1), (wintypes.PLPVOID, 2), (wintypes.PULONG, 2), p=propsys)
+      cls.Deserialize = _IUtil._wrap('StgDeserializePropVariant', (wintypes.LPVOID, 1), (wintypes.UINT, 1), (t, 2), p=propsys)
   @classmethod
   def Marshal(cls, a, f=False):
     if (b_o := cls.Serialize(a)) is None:
@@ -3320,15 +3330,9 @@ class _ARRAY_BVARIANT:
     else:
       return None, s + uls
 class _ARRAY_VARIANT(_ARRAY_BVARIANT, PVARIANT):
-  vcls = VARIANT
-  _vsize = ctypes.sizeof(VARIANT)
-  Serialize = _IUtil._wrap('StgSerializePropVariant', (PVARIANT, 1), (wintypes.PLPVOID, 2), (wintypes.PULONG, 2), p=propsys)
-  Deserialize = _IUtil._wrap('StgDeserializePropVariant', (wintypes.LPVOID, 1), (wintypes.UINT, 1), (PVARIANT, 2), p=propsys)
+  pass
 class _ARRAY_PROPVARIANT(_ARRAY_BVARIANT, PPROPVARIANT):
-  vcls = PROPVARIANT
-  _vsize = ctypes.sizeof(PROPVARIANT)
-  Serialize = _IUtil._wrap('StgSerializePropVariant', (PPROPVARIANT, 1), (wintypes.PLPVOID, 2), (wintypes.PULONG, 2), p=propsys)
-  Deserialize = _IUtil._wrap('StgDeserializePropVariant', (wintypes.LPVOID, 1), (wintypes.UINT, 1), (PPROPVARIANT, 2), p=propsys)
+  pass
 globals().update({'ARRAY_%s_%s' % (t, d): type('ARRAY_%s_%s' % (t, d), (b,), {'_type_': b.vcls, 'inarg': di, 'outarg': do}) for t, b in (('VARIANT', _ARRAY_VARIANT), ('PROPVARIANT', _ARRAY_PROPVARIANT)) for d, di, do in (('IN', True, False), ('OUT', False, True), ('INOUT', True, True))})
 
 class IWICStream(IStream):
