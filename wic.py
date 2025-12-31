@@ -1038,7 +1038,7 @@ class _ARRAY_LPWSTR(_ARRAY_STR):
     return b, o
   @staticmethod
   def Unmarshal(o, l, f=False):
-    p = ctypes.cast(o, wintypes.PWCHAR) 
+    p = ctypes.cast(o, wintypes.PWCHAR)
     if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.WCHAR)) if p[i] == '\x00'), None)) is None:
       return None, None
     if f:
@@ -1061,7 +1061,7 @@ class _ARRAY_LPSTR(_ARRAY_STR):
     return b, o
   @staticmethod
   def Unmarshal(o, l, f=False):
-    p = ctypes.cast(o, wintypes.PCHAR) 
+    p = ctypes.cast(o, wintypes.PCHAR)
     if (s := next((i for i in range((l - o) // ctypes.sizeof(wintypes.CHAR)) if p[i] == b'\x00'), None)) is None:
       return None, None
     if f:
@@ -8959,7 +8959,7 @@ class IShellItemArray(IUnknown):
       return _WShUtil._set_factory(cls.SHCreateShellItemArrayFromShellItem(clsid_component, cls), factory)
     if isinstance(clsid_component, str):
       if (clsid_component := IShellItem.SHCreateItemFromParsingName(clsid_component, IShellItem)) is not None:
-        clsid_component = clsid_component.AsFolder()
+        clsid_component = clsid_component.AsFolder
     if isinstance(clsid_component, WSPITEMIDLIST):
       clsid_component = IShellFolder(clsid_component)
     if isinstance(clsid_component, IShellFolder):

@@ -9,7 +9,11 @@ INT py_ini = 1;
 
 HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
   LPOLESTR pclsid;
-  if (! py_wmod || StringFromCLSID(rclsid, &pclsid) || wcslen(pclsid) != 38) {return E_FAIL;}
+  if (! py_wmod || StringFromCLSID(rclsid, &pclsid)) {return E_FAIL;}
+  if (wcslen(pclsid) != 38) {
+    CoTaskMemFree(pclsid);
+    return E_FAIL;
+  }
   WCHAR rpath[60] = L"CLSID\\                                      \\InprocServer32";
   wcsncpy(rpath + 6, pclsid, 38);
   CoTaskMemFree(pclsid);
@@ -26,23 +30,9 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
   PyGILState_STATE state = PyGILState_Ensure();
   PyObject *py_mod = NULL;
   if (mpath) {
-    PyObject *py_mname = NULL;
     WCHAR *mname = wcsrchr(mpath, L'\\');
     if (mname) {
       *(mname++) = 0;
-      PyObject *py_path = PySys_GetObject("path");
-      PyObject *py_mpath = PyUnicode_FromWideChar(mpath, -1);
-      if (! py_path || ! py_mpath) {
-        free(mpath);
-        Py_XDECREF(py_mpath);
-        PyErr_Clear();
-        PyGILState_Release(state);
-        return E_FAIL;
-      }
-      if (! PySequence_Contains(py_path, py_mpath)) {
-        PyList_Append(py_path, py_mpath);
-      }
-      Py_XDECREF(py_mpath);
     } else {
       mname = mpath;
     }
@@ -50,17 +40,23 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
     if (mext && ! _wcsicmp(mext, L".py")) {
       *mext = 0;
     }
-    py_mname = PyUnicode_FromWideChar(mname, -1);
+    PyObject *py_mname = PyUnicode_FromWideChar(mname, -1);
+    if (py_mname && ! (py_mod = PyImport_GetModule(py_mname)) && ! PyErr_Occurred()) {
+      if (mname != mpath) {
+        PyObject *py_path = PySys_GetObject("path");
+        PyObject *py_mpath = PyUnicode_FromWideChar(mpath, -1);
+        if (py_path && py_mpath) {
+          if (! PySequence_Contains(py_path, py_mpath)) {
+            PyList_Append(py_path, py_mpath);
+          }
+          py_mod = PyImport_Import(py_mname);
+        }
+        Py_XDECREF(py_mpath);
+      } else {
+        py_mod = PyImport_Import(py_mname);
+      }
+    }
     free(mpath);
-    if (! py_mname) {
-      PyErr_Clear();
-      PyGILState_Release(state);
-      return E_FAIL;
-    }
-    if (! (py_mod = PyImport_GetModule(py_mname)) &&  ! PyErr_Occurred()) {
-      py_mod = PyImport_Import(py_mname);
-    }
-    Py_XDECREF(py_mname);
     if (! py_mod) {
       PyErr_Clear();
       PyGILState_Release(state);
