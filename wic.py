@@ -1197,11 +1197,13 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
           s += 1
           if arg:
             s += ctypes.sizeof(arg._type_)
-        else:
-          if isinstance(arg, ctypes.Array):
+        elif isinstance(arg, ctypes.Array):
             s += 1
             if ctypes.addressof(arg):
               s += 4 if len(arg) <= 0xffffffff else 8
+              if arg:
+                s += ctypes.sizeof(arg)
+        else:
           s += ctypes.sizeof(arg)
       else:
         if (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], s, method)) is None:
@@ -1390,8 +1392,8 @@ class _COM_IRpcProxy(_COM_IUnknown_aggregatable):
                     smarsh.append(p)
                     o += s
                   else:
-                    arg[a] = None
                     o += 1
+                    arg[a] = None
                 else:
                   continue
                 break
@@ -3339,7 +3341,10 @@ class _ARRAY_BVARIANT:
     if o + (uls := _ARRAY_BVARIANT._ulsize) > l:
       return None, None
     s = int.from_bytes(ctypes.string_at(o, uls), 'little')
-    if (p := cls.Deserialize(o + uls, s)):
+    o += uls
+    if o + s > l:
+      return None, None
+    if (p := cls.Deserialize(o, s)):
       p._needsclear = f
       return p, s + uls
     else:
