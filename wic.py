@@ -9621,6 +9621,11 @@ class COMRegistration:
       winreg.SetValueEx(skey, 'ThreadingModel', 0, winreg.REG_SZ, 'Both')
       if file != wfile:
         winreg.SetValueEx(skey, 'PyModule', 0, winreg.REG_SZ, os.path.abspath(file))
+      else:
+        try:
+          winreg.DeleteValue(skey, 'PyModule')
+        except:
+          pass
       winreg.CloseKey(skey)
       winreg.SetValue(key, 'ProgID', winreg.REG_SZ, qname)
       if local:
