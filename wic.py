@@ -34,6 +34,10 @@ import os, os.path
 import winreg
 import json
 import time
+try:
+  from concurrent import interpreters
+except:
+  interpreters = None
 
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 user32 = ctypes.WinDLL('user32', use_errno=True, use_last_error=True)
@@ -1472,7 +1476,7 @@ class _COM_IRpcInProcProxy(_COM_IUnknown_aggregatable):
   def _send_message(cls, self, method, args):
     if not (channel := self.pRpcChannelBuffer):
       r = 0x80004003
-    elif (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], _COMMeta._psize + 4, method)) is None:
+    elif (message := channel.GetBuffer(self.__class__._siids[getattr(cls, '_ovtbl', 0) // cls.__class__._psize], _COMMeta._psize, method)) is None:
       r =  IGetLastError().code or 0x80004005
     else:
       r = 0
@@ -9775,7 +9779,7 @@ class COMSharing:
     lpMsg = ctypes.byref((msg := wintypes.MSG()))
     Window.PeekMessage(lpMsg, None, 0x8000, 0x8000, 0)
     (r := self._response)[1] = None
-    r[2] = 0 if icls is None or (to := COMRegistration.RegisterCOMFactory(icls, 4)) is not None else IGetLastError() | 0x80040154
+    r[2] = 0 if icls is None or (to := COMRegistration.RegisterCOMFactory(icls, 4)) is not None else IGetLastError().code or 0x80040154
     r[0].set()
     if r[2]:
       Uninitialize()
@@ -9859,13 +9863,13 @@ class COMSharing:
     if icls is not None:
       COMRegistration.RevokeFactory(to)
     Uninitialize()
-  def Start(self, icls=None):
+  def StartInCurrentInterpreter(self, icls=None):
     with self._lock:
       (r := self._response)[0].clear()
       if self._thread:
         return False
       self._code_dir[0] = icls
-      self._thread = threading.Thread(target=self._message_loop, args=(icls,), daemon=True)
+      self._thread = threading.Thread(target=self._message_loop, args=(icls,), daemon=interpreters is None or interpreters.get_current() == interpreters.get_main())
       self._thread.start()
       r[0].wait()
       r[0].clear()
@@ -9874,6 +9878,63 @@ class COMSharing:
         self._thread = None
         return False
       return True
+  if interpreters is not None:
+    class COMSharingProxy:
+      @staticmethod
+      def _start(cls):
+        globals()['CS'] = cls()
+        CS.Start()
+        return CS.tid
+      def __init__(self, cls, ole):
+        self._lock = threading.Lock()
+        self.interpreter = interpreters.create()
+        self.tid = self.interpreter.call(self._start, cls)
+      @staticmethod
+      def _stop():
+        return CS.Stop()
+      def Stop(self):
+        with self._lock:
+          if self.interpreter is None:
+            return False
+          r = self.interpreter.call(self._stop)
+          self.tid = None
+          self.interpreter.close()
+          self.interpreter = None
+          return r
+      def _invoke(self, func, *args, **kwargs):
+        with self._lock:
+          if self.interpreter is None:
+            return False
+          return self.interpreter.call(func, *args, **kwargs)
+      @staticmethod
+      def _record_code(code, gen, impl):
+        return CS.RecordCode(code, gen if impl is None else (lambda *args, **kwargs: gen(impl, *args, **kwargs)))
+      def RecordCode(self, code, gen=None):
+        return self._invoke(self._record_code, code, gen, gen._impl if isinstance(gen, _IMeta) else None)
+      @staticmethod
+      def _register_com_factory(impl):
+        return CS.RegisterCOMFactory(impl)
+      def RegisterCOMFactory(self, icls_impl):
+        return self._invoke(self._register_com_factory, icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl)
+      @staticmethod
+      def _register_ps_factory(ps_impl):
+        return CS.RegisterPSFactory(ps_impl)
+      def RegisterPSFactory(self, icls_ps_impl):
+        return self._invoke(self._register_ps_factory, icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl)
+      @staticmethod
+      def _revoke_factory(token):
+        return CS.RevokeFactory(token)
+      def RevokeFactory(self, token):
+        return self._invoke(self._revoke_factory, token)
+      def __del__(self):
+        self.Stop()
+  @classmethod
+  def StartInSubInterpreter(cls, ole=False):
+    return None if interpreters is None else cls.COMSharingProxy(cls, ole)
+  class Start:
+    def __get__(self, obj, cls=None):
+      return cls.StartInSubInterpreter if obj is None else obj.StartInCurrentInterpreter
+  Start = Start()
   def Stop(self):
     with self._lock:
       if (tid := self.tid) is None:
