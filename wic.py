@@ -6003,7 +6003,6 @@ class IDXGIOutputDuplication(IDXGIObject):
   def ReleaseFrame(self):
     return self._protos['ReleaseFrame'](self.pI)
 
-
 D3D11ResourceDimension = {'Unknown': 0, 'Buffer': 1, 'Texture1D': 2, 'Texture2D': 3, 'Texture3D': 4}
 D3D11RESOURCEDIMENSION = type('D3D11RESOURCEDIMENSION', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11ResourceDimension.items()}, '_tab_cn': {c: n for n, c in D3D11ResourceDimension.items()}, '_def': 0})
 D3D11PRESOURCEDIMENSION = ctypes.POINTER(D3D11RESOURCEDIMENSION)
@@ -9511,7 +9510,7 @@ class HWND(wintypes.HWND):
   def Style(self, value):
     Window.SetWindowLongPtr(self, 'Style', WNDWINDOWSTYLE.from_param(value))
   @property
-  def Monitor(self):
+  def HMonitor(self):
     return Window.MonitorFromWindow(self, 0)
   @property
   def DwmFrameBounds(self):
@@ -9544,12 +9543,12 @@ class HWND(wintypes.HWND):
   def GetDXGIOutput(self, device):
     if (isinstance(device, ID2D1Device) and (device := device.GetDXGIDevice()) is None) or (adapter := device.GetAdapter()) is None:
       return None
-    monitor = self.Monitor
+    hm = self.HMonitor
     index = 0
     while True:
       if (output := adapter.EnumOutputs(index)) is None or (desc := output.GetDesc()) is None:
         return None
-      if desc.get('Monitor') == monitor:
+      if desc.get('Monitor') == hm:
         return output
       index += 1
   def GetDXGIOutputDuplication(self, device):
@@ -9657,9 +9656,9 @@ class Window(metaclass=_WndMeta):
   GetWindowText = _WndUtil._wrap('GetWindowTextW', wintypes.INT, wintypes.HWND, wintypes.LPWSTR, wintypes.INT)
   SetWindowText = _WndUtil._wrap('SetWindowTextW', wintypes.BOOLE, wintypes.HWND, wintypes.LPCWSTR)
   GetWindowThreadProcessId = _WndUtil._wrap('GetWindowThreadProcessId', wintypes.DWORD, wintypes.HWND, wintypes.PDWORD)
-  GetWindowLongPtr = _WndUtil._wrap('GetWindowLongPtrW', wintypes.HMONITOR, wintypes.HWND, WNDMONITORFLAG)
+  GetWindowLongPtr = _WndUtil._wrap('GetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX)
   SetWindowLongPtr = _WndUtil._wrap('SetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX, wintypes.LPARAM)
-  MonitorFromWindow = _WndUtil._wrap('MonitorFromWindow', wintypes.LPARAM, wintypes.HWND, WNDINDEX)
+  MonitorFromWindow = _WndUtil._wrap('MonitorFromWindow', wintypes.HMONITOR, wintypes.HWND, WNDMONITORFLAG)
   DwmGetWindowAttribute = _IUtil._wrap('DwmGetWindowAttribute', (wintypes.HWND, 1), (wintypes.DWORD, 1), (wintypes.LPVOID, 1), (wintypes.DWORD, 1), p=dwm)
   PeekMessage = _WndUtil._wrap('PeekMessageW', wintypes.BOOLE, wintypes.LPMSG, wintypes.HWND, wintypes.UINT, wintypes.UINT, WNDREMOVEMSG)
   GetMessage = _WndUtil._wrap('GetMessageW', wintypes.LONG, wintypes.LPMSG, wintypes.HWND, wintypes.UINT, wintypes.UINT)
