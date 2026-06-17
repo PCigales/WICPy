@@ -5229,7 +5229,7 @@ class IWICImageEncoder(IUnknown):
     return self.__class__._protos['WriteFrame'](self.pI, image, frame_encode, image_parameters)
   def WriteFrameThumbnail(self, image, frame_encode, image_parameters=None):
     return self.__class__._protos['WriteFrameThumbnail'](self.pI, image, frame_encode, image_parameters)
-  def SaveImageTo(self, image, path, format=None, color_space=None, encoder_options=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
+  def SaveD2D1ImageTo(self, image, path, format=None, color_space=None, encoder_options=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
     if pixel_format or alpha_mode or dpiX or dpiY or top or left or width or height:
       if (width == 0 or height == 0) and (not isinstance(image, ID2D1Bitmap) or not (s := image.GetSize())):
         return False
@@ -5249,7 +5249,7 @@ class IWICImageEncoder(IUnknown):
   def SaveDXGIResourceTo(self, d2d1_device_context, resource, path, format=None, color_space=None, encoder_options=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
     if (s := resource.GetSurface()) is None or (b := d2d1_device_context.CreateBitmapFromDxgiSurface(s)) is None:
       return False
-    return self.SaveImageTo(b, path, format, color_space, encoder_options, pixel_format, alpha_mode, dpiX, dpiY, left, top, width, height)
+    return self.SaveD2D1ImageTo(b, path, format, color_space, encoder_options, pixel_format, alpha_mode, dpiX, dpiY, left, top, width, height)
 
 class IWICFormatConverter(IWICBitmapSource):
   IID = GUID(0x00000301, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -5826,6 +5826,13 @@ class DXGIOUTDUPLFRAMEINFO(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('LastPresentTime', wintypes.LARGE_INTEGER), ('LastMouseUpdateTime', wintypes.LARGE_INTEGER), ('AccumulatedFrames', wintypes.UINT), ('RectsCoalesced', wintypes.BOOLE), ('ProtectedContentMaskedOut', wintypes.BOOLE), ('PointerPosition', DXGIOUTDUPLPOINTERPOSITION), ('TotalMetadataBufferSize', wintypes.UINT), ('PointerShapeBufferSize', wintypes.UINT)]
 DXGIPOUTDUPLFRAMEINFO = ctypes.POINTER(DXGIOUTDUPLFRAMEINFO)
 
+DXGIOutduplPointerShapeType = {'Monochrome': 1, 'Color': 2, 'MaskedColor': 4}
+DXGIOUTDUPLPOINTERSHAPETYPE = type('DXGIOUTDUPLPOINTERSHAPETYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in DXGIOutduplPointerShapeType.items()}, '_tab_cn': {c: n for n, c in DXGIOutduplPointerShapeType.items()}, '_def': 1})
+
+class DXGIOUTDUPLPOINTERSHAPEINFO(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('Type', DXGIOUTDUPLPOINTERSHAPETYPE), ('Width', wintypes.UINT), ('Height', wintypes.UINT), ('Pitch', wintypes.UINT), ('HotSpot', POINT)]
+DXGIPOUTDUPLPOINTERSHAPEINFO = ctypes.POINTER(DXGIOUTDUPLPOINTERSHAPEINFO)
+
 class IDXGIObject(IUnknown):
   _lightweight = True
   IID = GUID(0xaec22fb8, 0x76f3, 0x4639, 0x9b, 0xe0, 0x28, 0xeb, 0x43, 0xa6, 0x7a, 0x2e)
@@ -5995,6 +6002,7 @@ class IDXGIOutputDuplication(IDXGIObject):
   IID = GUID(0x191cfac3, 0xa341, 0x470d, 0xb2, 0x6e, 0xa8, 0x64, 0xf4, 0x28, 0x31, 0x9c)
   _protos['GetDesc'] = 7, (), (DXGIPOUTDUPLDESC,)
   _protos['AcquireNextFrame'] = 8, (wintypes.UINT,), (DXGIPOUTDUPLFRAMEINFO, wintypes.PLPVOID,)
+  _protos['GetFramePointerShape'] = 11, (wintypes.UINT, wintypes.LPVOID, wintypes.PUINT, DXGIPOUTDUPLPOINTERSHAPEINFO), (), wintypes.ULONG
   _protos['ReleaseFrame'] = 14, (), ()
   def GetDesc(self):
     return self._protos['GetDesc'](self.pI)
@@ -6002,6 +6010,91 @@ class IDXGIOutputDuplication(IDXGIObject):
     return None if (fi_dr := self._protos['AcquireNextFrame'](self.pI, (0xffffffff if timeout is None else timeout))) is None else (fi_dr[0], IDXGIResource(fi_dr[1]))
   def ReleaseFrame(self):
     return self._protos['ReleaseFrame'](self.pI)
+  def GetFramePointerShape(self, buffer_size=None):
+    if isinstance(buffer_size, dict):
+      buffer_size = buffer_size.get('PointerShapeBufferSize')
+    s = wintypes.UINT(256 if buffer_size is None else buffer_size)
+    b = ctypes.create_string_buffer(s.value)
+    i = DXGIOUTDUPLPOINTERSHAPEINFO()
+    if ISetLastError(r := self.__class__._protos['GetFramePointerShape'](self.pI, s, b, s, i)):
+      if r == 0x887a0003:
+        b = ctypes.create_string_buffer(s.value)
+        ISetLastError(r := self.__class__._protos['GetFramePointerShape'](self.pI, s, b, s, i))
+    return None if r or not s else (i.value, ((wintypes.BYTE * i.Pitch) * i.Height).from_buffer(b))
+  def MonochromePointerToBitmap(self, d2d1_device_context, pointer):
+    w = pointer._type_._length_ * 8
+    h = pointer._length_ // 2
+    b = ((wintypes.UINT * w) * h)()
+    for l in range(h):
+      bl = b[l]
+      pandl = iter(pointer[l])
+      pxorl = iter(pointer[l + h])
+      m = 0
+      for c in range(w):
+        m = m >> 1
+        if m == 0:
+          pand = next(pandl)
+          pxor = next(pxorl)
+          m = 0x80
+        if pand & m:
+          if pxor & m:
+            bl[c] = 0xffffffff
+          else:
+            bl[c] = 0x00000000
+        else:
+          if pxor & m:
+            bl[c] = 0x00ffffff
+          else:
+            bl[c] = 0xff000000
+    return d2d1_device_context.CreateBitmap(w, h, (('B8G8R8A8_UNORM', 'Premultiplied'), 0, 0), b, w * 4)
+  def ColorPointerToBitmap(self, d2d1_device_context, pointer):
+    return d2d1_device_context.CreateBitmap(pointer._type_._length_ // 4, pointer._length_, (('B8G8R8A8_UNORM', 'Premultiplied'), 0, 0), pointer, pointer._type_._length_)
+  def _DrawPointerOnFrame(self, d2d1_device_context, frame, pointer, position, ptype):
+    if isinstance(frame, IDXGIResource) and (frame := frame.GetSurface()) is None:
+      return False
+    if isinstance(frame, IDXGISurface) and (frame := d2d1_device_context.CreateBitmapFromDxgiSurface(frame)) is None:
+      return False
+    if isinstance(position, dict) and (position := position.get('PointerPosition')):
+      position = position.get('Position')
+    if ptype < 3:
+      if not isinstance(pointer, ID2D1Bitmap) and (pointer := (self.MonochromePointerToBitmap if ptype == 1 else self.ColorPointerToBitmap)(d2d1_device_context, pointer)) is None:
+        return False
+      d2d1_device_context.SetTarget(frame)
+      d2d1_device_context.BeginDraw()
+      d2d1_device_context.DrawImage(pointer, target_offset=position, composite_mode=('MaskInvert' if ptype == 1 else 'SourceOver'))
+      r = d2d1_device_context.EndDraw()
+      d2d1_device_context.SetTarget()
+    else:
+      w = pointer._type_._length_ // 4
+      h = pointer._length_
+      if (a := d2d1_device_context.CreateBitmap(w, h, (('B8G8R8A8_UNORM', 'Premultiplied'), 0, 0, 'CPURead | CannotDraw'))) is None:
+        return False
+      r = position[0], position[1], position[0] + w, position[1] + h
+      if not a.CopyFromBitmap(frame, source_ltrb=r):
+        return False
+      if (b := a.Map('read')) is None:
+        return False
+      for l in range(h):
+        bl = b[l]
+        pl = pointer[l]
+        for c in range(0, 4 * w, 4):
+          if bl[c + 3]:
+            bl[c] ^= pl[c]
+            bl[c + 1] ^= pl[c + 1]
+            bl[c + 2] ^= pl[c + 2]
+          else:
+            bl[c] = pl[c]
+            bl[c + 1] = pl[c + 1]
+            bl[c + 2] = pl[c + 2]
+      r = frame.CopyFromMemory(b, b._type_._length_, r)
+      a.Unmap()
+    return r is not None
+  def DrawMonochromePointerOnFrame(self, d2d1_device_context, frame, pointer, position):
+    return self._DrawPointerOnFrame(d2d1_device_context, frame, pointer, position, 1)
+  def DrawColorPointerOnFrame(self, d2d1_device_context, frame, pointer, position):
+    return self._DrawPointerOnFrame(d2d1_device_context, frame, pointer, position, 2)
+  def DrawMaskedColorPointerOnFrame(self, d2d1_device_context, frame, pointer, position):
+    return self._DrawPointerOnFrame(d2d1_device_context, frame, pointer, position, 3)
 
 D3D11ResourceDimension = {'Unknown': 0, 'Buffer': 1, 'Texture1D': 2, 'Texture2D': 3, 'Texture3D': 4}
 D3D11RESOURCEDIMENSION = type('D3D11RESOURCEDIMENSION', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11ResourceDimension.items()}, '_tab_cn': {c: n for n, c in D3D11ResourceDimension.items()}, '_def': 0})
@@ -7267,7 +7360,7 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
   _protos['GetPrimitiveBlend'] = 79, (), (), D2D1PRIMITIVEBLEND
   _protos['SetUnitMode'] = 80, (D2D1UNITMODE,), (), None
   _protos['GetUnitMode'] = 81, (), (), D2D1UNITMODE
-  _protos['DrawImage'] = 83, (wintypes.LPVOID, D2D1POINT2F, D2D1PRECTF, D2D1INTERPOLATIONMODE, D2D1COMPOSITEMODE), (), None
+  _protos['DrawImage'] = 83, (wintypes.LPVOID, D2D1PPOINT2F, D2D1PRECTF, D2D1INTERPOLATIONMODE, D2D1COMPOSITEMODE), (), None
   _protos['DrawBitmap'] = 85, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1INTERPOLATIONMODE, D2D1PRECTF, D2D1PMATRIX4X4F), (), None
   def CreateBitmap(self, width, height, properties, source_data=None, source_pitch=0):
     return ID2D1Bitmap(self.__class__._protos['CreateBitmap'](self.pI, (width, height), source_data, source_pitch, properties), self.factory)
@@ -9341,17 +9434,43 @@ class _WndUtil:
       self._d2d1_device_context = d2d1_device_context
       self._dxgi_output_duplication = d
       self._image_encoder = image_encoder
+      self._pointer_type = None
+      self._pointer = None
+      self._pointer_position = None
       return self
-    def SaveTo(self, path, format=None, color_space=None, encoder_options=None):
+    def SaveTo(self, path, format=None, color_space=None, encoder_options=None, pointer=False):
       if self._dxgi_output_duplication is None:
         return None
       self._dxgi_output_duplication.ReleaseFrame()
       if ((r := self._hwnd.DwmFrameBounds) is None and (self._hwnd != Window.DesktopWindow or (r := self._hwnd.Rect) is None)) or (i_r := self._dxgi_output_duplication.AcquireNextFrame(None)) is None:
         return False
       r = r.value
+      if i_r[0]['LastMouseUpdateTime']:
+        if i_r[0]['PointerPosition']['Visible']:
+          self._pointer_position = i_r[0]['PointerPosition']['Position']
+          if i_r[0]['PointerShapeBufferSize']:
+            if (i_p := self._dxgi_output_duplication.GetFramePointerShape(i_r[0])):
+              self._pointer_type = i_p[0]['Type'].code
+              self._pointer = i_p[1]
+            else:
+              self._pointer_type = None
+              self._pointer = None
+              self._pointer_position = None
+        else:
+          self._pointer_type = None
+          self._pointer = None
+          self._pointer_position = None
+      if pointer and self._pointer:
+        if self._pointer_type < 3 and not isinstance(self._pointer, ID2D1Bitmap):
+          self._pointer = (self._dxgi_output_duplication.MonochromePointerToBitmap if self._pointer_type == 1 else self._dxgi_output_duplication.ColorPointerToBitmap)(self._d2d1_device_context, self._pointer)
+        if self._pointer:
+          self._dxgi_output_duplication._DrawPointerOnFrame(self._d2d1_device_context, i_r[1], self._pointer, self._pointer_position, self._pointer_type)
       return self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, i_r[1], path, format, color_space, encoder_options, left=r[0], top=r[1], width=r[2]-r[0], height=r[3]-r[1])
     def Close(self):
+      if self._dxgi_output_duplication is not None:
+        self._dxgi_output_duplication.ReleaseFrame()
       self._d2d1_device_context = self._dxgi_output_duplication = self._image_encoder = None
+      self._pointer_type = self._pointer = self._pointer_position = None
 
 WNDPROC = ctypes.WINFUNCTYPE(wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM, use_last_error=True)
 
