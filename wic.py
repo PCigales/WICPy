@@ -5267,10 +5267,10 @@ class IWICImageEncoder(IUnknown):
     if color_space is not None and ((cc := self.factory.CreateColorContext()) is None or not cc.InitializeFromExifColorSpace(color_space) or not fenc.SetColorContexts((cc,))):
       return False
     if metadata is not None:
-      qw = fenc.GetMetadataQueryWriter()
-      for n, v in metadata.items():
-        if (s := getattr(qw, 'Set' + n, None)) is not None:
-          s(v)
+      if (qw := fenc.GetMetadataQueryWriter()) is not None:
+        for n, v in metadata.items():
+          if (s := getattr(qw, 'Set' + n, None)) is not None:
+            s(v)
     return bool(self.WriteFrame(image.GetOutput() if isinstance(image, ID2D1Effect) else image, fenc, image_parameters) and fenc.Commit() and enc.Commit())
   def SaveDXGIResourceTo(self, d2d1_device_context, resource, path, format=None, color_space=None, encoder_options=None, metadata=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
     if (s := resource.GetSurface()) is None or (b := d2d1_device_context.CreateBitmapFromDxgiSurface(s)) is None:
