@@ -4462,7 +4462,7 @@ class _WICMetadataQuery:
   def __get__(self, obj, cls=None):
     q = self.query
     if (f := obj.GetContainerFormat()) is not None:
-      f = {'Thumbnail': '/thumb/', 'JpegLuminance': '/luminance/', 'JpegChrominance': '/chrominance/'}.get(f.name, '/%s/' % f.name.lower())
+      f = {'Thumbnail': '/thumb/', 'JpegLuminance': '/luminance/', 'JpegChrominance': '/chrominance/', 'ChunktEXt': '/tEXt/'}.get(f.name, '/%s/' % f.name.lower())
       p = next((s[2] for p_ in q[0] if (s := p_.partition(f))[1]), None)
     else:
       p = None
@@ -4511,6 +4511,17 @@ class _IWICMQRMeta(_IMeta):
     '8BIMIPTC': (('/jpeg/app13/irb/8bimiptc',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     '8BIMResolutionInfo': (('/jpeg/app13/irb/8bimResInfo',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     'XMP': (('/jpeg/xmp', '/tiff/ifd/xmp'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'tEXt': (('/png/tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '0tEXt': (('/png/[0]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '1tEXt': (('/png/[1]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '2tEXt': (('/png/[2]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '3tEXt': (('/png/[3]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '4tEXt': (('/png/[4]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '5tEXt': (('/png/[5]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '6tEXt': (('/png/[6]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '7tEXt': (('/png/[7]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '8tEXt': (('/png/[8]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    '9tEXt': (('/png/[9]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     'JpegComment':  (('/jpeg/com/TextEntry',), 'VT_LPSTR', bytes.decode, str.encode),
     'Luminance': (('/jpeg/luminance/TableEntry',), 'VT_VECTOR | VT_UI2', None, None),
     'Chrominance': (('/jpeg/chrominance/TableEntry',), 'VT_VECTOR | VT_UI2', None, None),
@@ -4579,6 +4590,16 @@ class _IWICMQRMeta(_IMeta):
     'DateStamp': (('/jpeg/app1/ifd/gps/{ushort=29}', '/tiff/ifd/gps/{ushort=29}'), 'VT_LPSTR', bytes.decode, str.encode),
     'ThumbnailBytes': (('/jpeg/app1/thumb/{}', '/tiff/ifd/thumb/{}'), 'VT_BLOB', None, None),
     'ICCProfile': (('/jpeg/unknown/{}', '/tiff/ifd/{ushort=34675}'), 'VT_BLOB', None, None),
+    'PngCreationTime': (('/png/tEXt/{str=Creation Time}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngDescription': (('/png/tEXt/{str=Description}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngSoftware': (('/png/tEXt/{str=Software}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngYear': (('/png/tIME/Year',), 'VT_UI2', None, None),
+    'PngMonth': (('/png/tIME/Month',), 'VT_UI1', None, None),
+    'PngMonth': (('/png/tIME/Month',), 'VT_UI1', None, None),
+    'PngDay': (('/png/tIME/Day',), 'VT_UI1', None, None),
+    'PngHour': (('/png/tIME/Hour',), 'VT_UI1', None, None),
+    'PngMinute': (('/png/tIME/Minute',), 'VT_UI1', None, None),
+    'PngSecond': (('/png/tIME/Second',), 'VT_UI1', None, None)
   }
   @classmethod
   def __prepare__(mcls, name, bases, **kwds):
@@ -5229,7 +5250,7 @@ class IWICImageEncoder(IUnknown):
     return self.__class__._protos['WriteFrame'](self.pI, image, frame_encode, image_parameters)
   def WriteFrameThumbnail(self, image, frame_encode, image_parameters=None):
     return self.__class__._protos['WriteFrameThumbnail'](self.pI, image, frame_encode, image_parameters)
-  def SaveD2D1ImageTo(self, image, path, format=None, color_space=None, encoder_options=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
+  def SaveD2D1ImageTo(self, image, path, format=None, color_space=None, encoder_options=None, metadata=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
     if pixel_format or alpha_mode or dpiX or dpiY or top or left or width or height:
       if (width == 0 or height == 0) and (not isinstance(image, ID2D1Bitmap) or not (s := image.GetSize())):
         return False
@@ -5245,11 +5266,16 @@ class IWICImageEncoder(IUnknown):
       return False
     if color_space is not None and ((cc := self.factory.CreateColorContext()) is None or not cc.InitializeFromExifColorSpace(color_space) or not fenc.SetColorContexts((cc,))):
       return False
+    if metadata is not None:
+      qw = fenc.GetMetadataQueryWriter()
+      for n, v in metadata.items():
+        if (s := getattr(qw, 'Set' + n, None)) is not None:
+          s(v)
     return bool(self.WriteFrame(image.GetOutput() if isinstance(image, ID2D1Effect) else image, fenc, image_parameters) and fenc.Commit() and enc.Commit())
-  def SaveDXGIResourceTo(self, d2d1_device_context, resource, path, format=None, color_space=None, encoder_options=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
+  def SaveDXGIResourceTo(self, d2d1_device_context, resource, path, format=None, color_space=None, encoder_options=None, metadata=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
     if (s := resource.GetSurface()) is None or (b := d2d1_device_context.CreateBitmapFromDxgiSurface(s)) is None:
       return False
-    return self.SaveD2D1ImageTo(b, path, format, color_space, encoder_options, pixel_format, alpha_mode, dpiX, dpiY, left, top, width, height)
+    return self.SaveD2D1ImageTo(b, path, format, color_space, encoder_options, metadata, pixel_format, alpha_mode, dpiX, dpiY, left, top, width, height)
 
 class IWICFormatConverter(IWICBitmapSource):
   IID = GUID(0x00000301, 0xa8f2, 0x4877, 0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94)
@@ -5874,6 +5900,9 @@ class IDXGIDevice(IDXGIObject):
     return super().GetParent(IDXGIAdapter)
   def GetAdapter(self):
     return self.GetParent()
+  @property
+  def Adapter(self):
+    return self.GetAdapter()
   def GetMaximumFrameLatency(self):
     return self._protos['GetMaximumFrameLatency'](self.pI)
   def SetMaximumFrameLatency(self, max_latency):
@@ -5884,6 +5913,9 @@ class IDXGIDevice(IDXGIObject):
     return self._protos['SetGPUThreadPriority'](self.pI, priority)
   def GetD3D11Device(self):
     return self.QueryInterface(ID3D11Device, False)
+  @property
+  def AsD3D11Device(self):
+    return self.GetD3D11Device()
 IDXGIDevice2 = IDXGIDevice
 
 class IDXGIDeviceSubObject(IDXGIObject):
@@ -5891,6 +5923,9 @@ class IDXGIDeviceSubObject(IDXGIObject):
   _protos['GetDevice'] = 7, (PUUID,), (wintypes.PLPVOID,)
   def GetDevice(self):
     return IDXGIDevice(self._protos['GetDevice'](self.pI, IDXGIDevice.IID), self.factory)
+  @property
+  def Device(self):
+    return self.GetDevice()
   def GetParent(self):
     return self.GetDevice()
 
@@ -5901,6 +5936,9 @@ class IDXGIResource(IDXGIDeviceSubObject):
     return self._protos['GetUsage'](self.pI)
   def GetSurface(self):
     return self.QueryInterface(IDXGISurface)
+  @property
+  def AsSurface(self):
+    return self.GetSurface()
 IDXGIResource1 = IDXGIResource
 
 class IDXGISurface(IDXGIDeviceSubObject):
@@ -5917,6 +5955,14 @@ class IDXGISurface(IDXGIDeviceSubObject):
     return d.get('Format')
   def GetResource(self):
     return None if (r_i := self._protos['GetResource'](self.pI, IDXGIResource.IID)) is None else IDXGIResource(r_i[0], self.factory)
+  @property
+  def AsResource(self):
+    return self.GetResource()
+  def GetTexture2D(self):
+    return self.QueryInterface(ID3D11Texture2D, False)
+  @property
+  def AsTexture2D(self):
+    return self.GetTexture2D()
   def GetUsage(self):
     return None if (r := self.GetResource()) is None else r.GetUsage()
   def Map(self, map_flags):
@@ -5936,6 +5982,9 @@ class IDXGIOutput(IDXGIObject):
     return super().GetParent(IDXGIAdapter)
   def GetAdapter(self):
     return self.GetParent()
+  @property
+  def Adapter(self):
+    return self.GetAdapter()
   def GetDesc(self):
     return self._protos['GetDesc'](self.pI)
   def DuplicateOutput(self, device):
@@ -6014,6 +6063,13 @@ class IDXGIOutputDuplication(IDXGIObject):
   _protos['AcquireNextFrame'] = 8, (wintypes.UINT,), (DXGIPOUTDUPLFRAMEINFO, wintypes.PLPVOID,)
   _protos['GetFramePointerShape'] = 11, (wintypes.UINT, wintypes.LPVOID, wintypes.PUINT, DXGIPOUTDUPLPOINTERSHAPEINFO), (), wintypes.ULONG
   _protos['ReleaseFrame'] = 14, (), ()
+  def GetParent(self):
+    return super().GetParent(IDXGIOutput)
+  def GetOutput(self):
+    return self.GetParent()
+  @property
+  def Output(self):
+    return self.GetOutput()
   def GetDesc(self):
     return self._protos['GetDesc'](self.pI)
   def AcquireNextFrame(self, timeout=0):
@@ -6131,6 +6187,9 @@ class ID3D11DeviceChild(IUnknown):
   _protos['GetDevice'] = 3, (), (wintypes.PLPVOID,), None
   def GetDevice(self):
     return ID3D11Device(self._protos['GetDevice'](self.pI), self.factory)
+  @property
+  def Device(self):
+    return self.GetDevice()
 
 class ID3D11Resource(ID3D11DeviceChild):
   IID = GUID(0xdc8e63f3, 0xd12b, 0x4952, 0xb4, 0x7b, 0x5e, 0x45, 0x02, 0x6a, 0x86, 0x2d)
@@ -6145,6 +6204,9 @@ class ID3D11Texture2D(ID3D11Resource):
     return self._protos['GetDesc'](self.pI)
   def GetSurface(self):
     return self.QueryInterface(IDXGISurface, False)
+  @property
+  def AsSurface(self):
+    return self.GetSurface()
 
 class ID3D11Device(IUnknown):
   _lightweight = True
@@ -6178,6 +6240,9 @@ class ID3D11Device(IUnknown):
     return self.CreateDXGISurface(width, height, format, sample_count, sample_quality, bind_flags=('RenderTarget | ShaderResource' if drawable else 'RenderTarget'))
   def GetDXGIDevice(self):
     return self.QueryInterface(IDXGIDevice, False)
+  @property
+  def AsDXGIDevice(self):
+    return self.GetDXGIDevice()
 
 D2D1ColorSpace = {'Custom': 0, 'sRGB': 1, 'scRGB': 2}
 D2D1COLORSPACE = type('D2D1COLORSPACE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1ColorSpace.items()}, '_tab_cn': {c: n for n, c in D2D1ColorSpace.items()}, '_def': 1})
@@ -6589,6 +6654,9 @@ class ID2D1Bitmap(ID2D1Image):
     return self._protos['CopyFromMemory'](self.pI, destination_ltrb, source_data, source_pitch)
   def GetSurface(self):
     return IDXGISurface(self._protos['GetSurface'](self.pI))
+  @property
+  def Surface(self):
+    return self.GetSurface()
   def Map(self, map_options):
     if (s := self.GetPixelSize()) is None:
       return None
@@ -7328,6 +7396,9 @@ class ID2D1RenderTarget(ID2D1Resource):
     return ID2D1BitmapRenderTarget(self.__class__._protos['CreateCompatibleRenderTarget'](self.pI, size, pixel_size, pixel_format, options), self.factory)
   def GetDeviceContext(self):
     return self.QueryInterface(ID2D1DeviceContext, self.factory)
+  @property
+  def AsDeviceContext(self):
+    return self.GetDeviceContext()
 
 class ID2D1CommandList(ID2D1Image):
   IID = GUID(0xb4f34a19, 0x2383, 0x4d76, 0x94, 0xf6, 0xec, 0x34, 0x36, 0x57, 0xc3, 0xdc)
@@ -7528,6 +7599,9 @@ class ID2D1Device(ID2D1Resource):
     if self.factory is None or (dxgi_device := getattr(self.factory, 'dxgi_device', None)) is None:
       return None
     return dxgi_device
+  @property
+  def DXGIDevice(self):
+    return self.GetDXGIDevice()
 
 class ID2D1Factory(IUnknown):
   _lightweight = True
@@ -9439,7 +9513,7 @@ class _WndUtil:
       else:
         if (d := hwnd_or_dxgi_output.GetDXGIOutputDuplication(d)) is None:
           return None
-        if hwnd_or_dxgi_output == Window.DesktopWindow:
+        if hwnd_or_dxgi_output.DwmFrameBounds is None:
           hwnd_or_dxgi_output = None
       self = object.__new__(cls)
       self._hwnd = hwnd_or_dxgi_output
@@ -9450,7 +9524,7 @@ class _WndUtil:
       self._pointer = None
       self._pointer_position = None
       return self
-    def SaveTo(self, path, format=None, color_space=None, encoder_options=None, pointer=False):
+    def SaveTo(self, path, format=None, color_space=None, encoder_options=None, metadata=None, pointer=False):
       if self._dxgi_output_duplication is None:
         return None
       self._dxgi_output_duplication.ReleaseFrame()
@@ -9472,7 +9546,15 @@ class _WndUtil:
           self._pointer = (self._dxgi_output_duplication.MonochromePointerToBitmap if ptype == 1 else self._dxgi_output_duplication.ColorPointerToBitmap)(self._d2d1_device_context, self._pointer_infos, self._pointer)
         if self._pointer:
           self._dxgi_output_duplication.DrawPointerOnFrame(self._d2d1_device_context, i_r[1], self._pointer_infos, self._pointer, self._pointer_position)
-      return self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, i_r[1], path, format, color_space, encoder_options) if self._hwnd is None else self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, i_r[1], path, format, color_space, encoder_options, left=r[0], top=r[1], width=r[2]-r[0], height=r[3]-r[1])
+      if not format:
+        format = p[2] if (p := path.rpartition('.'))[1] == '.' else 'png'
+      if metadata is True:
+        dt = datetime.datetime.today()
+        dts = dt.strftime('%Y:%m:%d %H:%M:%S')
+        metadata = {'PngCreationTime': dts, 'PngYear': dt.year, 'PngMonth': dt.month, 'PngDay': dt.day, 'PngHour': dt.hour, 'PngMinute': dt.minute, 'PngSecond': dt.second} if format.lower() == 'png' else {'DateTime': dts, 'DateTimeOriginal': dts, 'DateTimeDigitized': dts}
+      elif metadata is False:
+        metadata = None
+      return self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, i_r[1], path, format, color_space, encoder_options, metadata) if self._hwnd is None else self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, i_r[1], path, format, color_space, encoder_options, metadata, left=r[0], top=r[1], width=r[2]-r[0], height=r[3]-r[1])
     def Close(self):
       if self._dxgi_output_duplication is not None:
         self._dxgi_output_duplication.ReleaseFrame()
@@ -9540,6 +9622,13 @@ class HWND(wintypes.HWND):
     return HWND(Window.GetWindow(self, cmd))
   def FindChildWindow(self, previous_hwnd=None, class_name=None, window_name=None):
     return HWND(Window.FindWindowEx(self, previous_hwnd, class_name, window_name))
+  @property
+  def Children(self):
+    hwnd = None
+    def w():
+      nonlocal hwnd
+      return (hwnd := self.FindChildWindow(hwnd))
+    return iter(w, None)
   def GetAncestor(self, flag=1):
     return HWND(Window.GetAncestor(self, flag))
   @property
@@ -9666,6 +9755,8 @@ class HWND(wintypes.HWND):
     return None if not (r := Window.SendMessage(self, Msg, wParam, lParam)) and ctypes.get_last_error() else r
   def SendNotifyMessage(self, Msg, wParam, lParam):
     return Window.SendNotifyMessage(self, Msg, wParam, lParam)
+  def __repr__(self):
+    return '<%s.%s(%s) object at 0x%016X>' % (self.__class__.__module__, self.__class__.__qualname__, self.hwnd, id(self))
   def CreateSwapChainAndBitmap(self, d2d1_device_context, drawable=False):
     return d2d1_device_context.CreateSwapChainAndBitmapFromHwnd(self, drawable=drawable)
   def GetDXGIOutput(self, device):
