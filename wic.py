@@ -9546,11 +9546,10 @@ class _WndUtil:
                 self._pointer_infos = self._pointer = self._pointer_position = None
           else:
             self._pointer_infos = self._pointer = self._pointer_position = None
-        if not self._presented:
-          if i['LastPresentTime']:
-            self._presented = True
-            break
-        else:
+        if self._presented:
+          break
+        elif i['LastPresentTime']:
+          self._presented = True
           break
       if pointer and self._pointer is not None:
         ptype = self._pointer_infos['Type'].code
