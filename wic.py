@@ -9548,8 +9548,10 @@ class _WndUtil:
             self._pointer_infos = self._pointer = self._pointer_position = None
         if not self._presented:
           if i['LastPresentTime']:
-            self_presented = True
+            self._presented = True
             break
+        else:
+          break
       if pointer and self._pointer is not None:
         ptype = self._pointer_infos['Type'].code
         if ptype < 3 and not isinstance(self._pointer, ID2D1Bitmap):

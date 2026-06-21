@@ -1400,7 +1400,7 @@ DXGICapturer.Close()
 #Managing the message queue until the window is closed
 print('Waiting for the closure of the resizable pop-up window...')
 hwnd.WaitShutdown()
-tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, IImageEncoder, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
+tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
 
 #Creating a COM interface provider thread
 CS = COMSharing()
