@@ -4462,7 +4462,7 @@ class _WICMetadataQuery:
   def __get__(self, obj, cls=None):
     q = self.query
     if (f := obj.GetContainerFormat()) is not None:
-      f = {'Thumbnail': '/thumb/', 'JpegLuminance': '/luminance/', 'JpegChrominance': '/chrominance/', 'ChunktEXt': '/tEXt/', 'ChunktIME': '/tIME'}.get(f.name, '/%s/' % f.name.lower())
+      f = {'Thumbnail': '/thumb/', 'JpegLuminance': '/luminance/', 'JpegChrominance': '/chrominance/', 'ChunktEXt': '/[*]tEXt/', 'ChunktIME': '/tIME'}.get(f.name, '/%s/' % f.name.lower())
       p = next((s[2] for p_ in q[0] if (s := p_.partition(f))[1]), None)
     else:
       p = None
