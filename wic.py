@@ -4462,7 +4462,7 @@ class _WICMetadataQuery:
   def __get__(self, obj, cls=None):
     q = self.query
     if (f := obj.GetContainerFormat()) is not None:
-      f = {'Thumbnail': '/thumb/', 'JpegLuminance': '/luminance/', 'JpegChrominance': '/chrominance/', 'ChunktEXt': '/tEXt/'}.get(f.name, '/%s/' % f.name.lower())
+      f = {'Thumbnail': '/thumb/', 'JpegLuminance': '/luminance/', 'JpegChrominance': '/chrominance/', 'ChunktEXt': '/tEXt/', 'ChunktIME': '/tIME'}.get(f.name, '/%s/' % f.name.lower())
       p = next((s[2] for p_ in q[0] if (s := p_.partition(f))[1]), None)
     else:
       p = None
@@ -4512,6 +4512,7 @@ class _IWICMQRMeta(_IMeta):
     '8BIMResolutionInfo': (('/jpeg/app13/irb/8bimResInfo',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     'XMP': (('/jpeg/xmp', '/tiff/ifd/xmp'), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     'tEXt': (('/png/tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
+    'tIME': (('/png/tIME',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     '0tEXt': (('/png/[0]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     '1tEXt': (('/png/[1]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
     '2tEXt': (('/png/[2]tEXt',), 'VT_UNKNOWN', None, _IWICMQRUtil._writer),
@@ -4590,11 +4591,13 @@ class _IWICMQRMeta(_IMeta):
     'DateStamp': (('/jpeg/app1/ifd/gps/{ushort=29}', '/tiff/ifd/gps/{ushort=29}'), 'VT_LPSTR', bytes.decode, str.encode),
     'ThumbnailBytes': (('/jpeg/app1/thumb/{}', '/tiff/ifd/thumb/{}'), 'VT_BLOB', None, None),
     'ICCProfile': (('/jpeg/unknown/{}', '/tiff/ifd/{ushort=34675}'), 'VT_BLOB', None, None),
-    'PngCreationTime': (('/png/tEXt/{str=Creation Time}',), 'VT_LPSTR', bytes.decode, str.encode),
-    'PngDescription': (('/png/tEXt/{str=Description}',), 'VT_LPSTR', bytes.decode, str.encode),
-    'PngSoftware': (('/png/tEXt/{str=Software}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngTitle': (('/png/[*]tEXt/{str=Title}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngDescription': (('/png/[*]tEXt/{str=Description}',), 'VT_LPSTR', bytes.decode, str.encode),    
+    'PngCreationTime': (('/png/[*]tEXt/{str=Creation Time}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngSoftware': (('/png/[*]tEXt/{str=Software}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngSource': (('/png/[*]tEXt/{str=Source}',), 'VT_LPSTR', bytes.decode, str.encode),
+    'PngComment': (('/png/[*]tEXt/{str=Comment}',), 'VT_LPSTR', bytes.decode, str.encode),
     'PngYear': (('/png/tIME/Year',), 'VT_UI2', None, None),
-    'PngMonth': (('/png/tIME/Month',), 'VT_UI1', None, None),
     'PngMonth': (('/png/tIME/Month',), 'VT_UI1', None, None),
     'PngDay': (('/png/tIME/Day',), 'VT_UI1', None, None),
     'PngHour': (('/png/tIME/Hour',), 'VT_UI1', None, None),
@@ -9520,6 +9523,7 @@ class _WndUtil:
       self._d2d1_device_context = d2d1_device_context
       self._dxgi_output_duplication = d
       self._image_encoder = image_encoder
+      self._presented = False
       self._pointer_infos = None
       self._pointer = None
       self._pointer_position = None
@@ -9527,25 +9531,31 @@ class _WndUtil:
     def SaveTo(self, path, format=None, color_space=None, encoder_options=None, metadata=None, pointer=False):
       if self._dxgi_output_duplication is None:
         return None
-      self._dxgi_output_duplication.ReleaseFrame()
-      if (self._hwnd is not None and (r := getattr(self._hwnd.DwmFrameBounds, 'value', None)) is None) or (i_r := self._dxgi_output_duplication.AcquireNextFrame(None)) is None:
-        return False
-      if i_r[0]['LastMouseUpdateTime']:
-        if i_r[0]['PointerPosition']['Visible']:
-          self._pointer_position = i_r[0]['PointerPosition']['Position']
-          if i_r[0]['PointerShapeBufferSize']:
-            if (i_p := self._dxgi_output_duplication.GetFramePointerShape(i_r[0])):
-              self._pointer_infos, self._pointer = i_p
-            else:
-              self._pointer_infos = self._pointer = self._pointer_position = None
-        else:
-          self._pointer_infos = self._pointer = self._pointer_position = None
+      while True:
+        self._dxgi_output_duplication.ReleaseFrame()
+        if (self._hwnd is not None and (w := getattr(self._hwnd.DwmFrameBounds, 'value', None)) is None) or (i_r := self._dxgi_output_duplication.AcquireNextFrame(None)) is None:
+          return False
+        i, r = i_r
+        if i['LastMouseUpdateTime']:
+          if i['PointerPosition']['Visible']:
+            self._pointer_position = i['PointerPosition']['Position']
+            if i['PointerShapeBufferSize']:
+              if (i_p := self._dxgi_output_duplication.GetFramePointerShape(i)):
+                self._pointer_infos, self._pointer = i_p
+              else:
+                self._pointer_infos = self._pointer = self._pointer_position = None
+          else:
+            self._pointer_infos = self._pointer = self._pointer_position = None
+        if not self._presented:
+          if i['LastPresentTime']:
+            self_presented = True
+            break
       if pointer and self._pointer is not None:
         ptype = self._pointer_infos['Type'].code
         if ptype < 3 and not isinstance(self._pointer, ID2D1Bitmap):
           self._pointer = (self._dxgi_output_duplication.MonochromePointerToBitmap if ptype == 1 else self._dxgi_output_duplication.ColorPointerToBitmap)(self._d2d1_device_context, self._pointer_infos, self._pointer)
         if self._pointer:
-          self._dxgi_output_duplication.DrawPointerOnFrame(self._d2d1_device_context, i_r[1], self._pointer_infos, self._pointer, self._pointer_position)
+          self._dxgi_output_duplication.DrawPointerOnFrame(self._d2d1_device_context, r, self._pointer_infos, self._pointer, self._pointer_position)
       if not format:
         format = p[2] if (p := path.rpartition('.'))[1] == '.' else 'png'
       if metadata is True:
@@ -9554,7 +9564,7 @@ class _WndUtil:
         metadata = {'PngCreationTime': dts, 'PngYear': dt.year, 'PngMonth': dt.month, 'PngDay': dt.day, 'PngHour': dt.hour, 'PngMinute': dt.minute, 'PngSecond': dt.second} if format.lower() == 'png' else {'DateTime': dts, 'DateTimeOriginal': dts, 'DateTimeDigitized': dts}
       elif metadata is False:
         metadata = None
-      return self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, i_r[1], path, format, color_space, encoder_options, metadata) if self._hwnd is None else self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, i_r[1], path, format, color_space, encoder_options, metadata, left=r[0], top=r[1], width=r[2]-r[0], height=r[3]-r[1])
+      return self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, r, path, format, color_space, encoder_options, metadata) if self._hwnd is None else self._image_encoder.SaveDXGIResourceTo(self._d2d1_device_context, r, path, format, color_space, encoder_options, metadata, left=w[0], top=w[1], width=w[2]-w[0], height=w[3]-w[1])
     def Close(self):
       if self._dxgi_output_duplication is not None:
         self._dxgi_output_duplication.ReleaseFrame()
@@ -9786,6 +9796,9 @@ class _WndMeta(type):
   @ForegroundWindow.setter
   def ForegroundWindow(cls, value):
     cls.SetForegroundWindow(value)
+  @property
+  def ConsoleWindow(cls):
+    return HWND(cls.GetConsoleWindow())
   def DefMessageLoop(cls, hwnd):
     lpMsg = ctypes.byref(wintypes.MSG())
     while cls.GetMessage(lpMsg, hwnd, 0, 0) > 0:
@@ -9855,6 +9868,7 @@ class Window(metaclass=_WndMeta):
   GetDesktopWindow = _WndUtil._wrap('GetDesktopWindow', wintypes.HWND)
   GetForegroundWindow = _WndUtil._wrap('GetForegroundWindow', wintypes.HWND)
   SetForegroundWindow = _WndUtil._wrap('SetForegroundWindow', wintypes.BOOLE, wintypes.HWND)
+  GetConsoleWindow = _WndUtil._wrap('GetConsoleWindow', wintypes.HWND, p=kernel32)
   GetTopWindow = _WndUtil._wrap('GetTopWindow', wintypes.HWND, wintypes.HWND)
   BringWindowToTop = _WndUtil._wrap('BringWindowToTop', wintypes.BOOLE, wintypes.HWND)
   GetWindowRect = _WndUtil._wrap('GetWindowRect', wintypes.BOOLE, wintypes.HWND, wintypes.LPRECT)

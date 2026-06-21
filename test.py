@@ -1273,7 +1273,7 @@ D2D1RenderTarget = D2D1Factory.CreateDxgiSurfaceRenderTarget(DXGISurface2, {'pix
 #Other way to do the same
 #D2D1RenderTarget = D2D1Factory.CreateRenderTarget(DXGISurface2, format='B8G8R8A8_UNORM', alpha_mode='premultiplied')
 #Shorter way to do the same
-# DXGISurface2, D2D1RenderTarget = D2D1Factory.CreateSurfaceAndRenderTarget(320, 200, 'B8G8R8A8_UNORM', 'premultiplied')
+# DXGISurface2, D2D1RenderTarget = D2D1Factory.CreateSurfaceAndRenderTarget(320, 200, 'B8G8R8A8_UNORM', 'premultiplied', render_type='software')
 print(D2D1RenderTarget.GetSize(), D2D1RenderTarget.GetPixelSize(), D2D1RenderTarget.GetPixelFormat(), D2D1RenderTarget.GetDpi(), D2D1RenderTarget.GetAntialiasMode(), D2D1RenderTarget.GetMaximumBitmapSize())
 print(D2D1RenderTarget.GetDeviceContext().GetTarget())
 #Starting to draw
@@ -1376,6 +1376,8 @@ DXGISurface2 = DXGISwapChain.GetSurface()
 D2D1Bitmap3 = D2D1DeviceContext.CreateBitmapFromDxgiSurface(DXGISurface2)
 #Short way to do the same
 # DXGISwapChain, D2D1Bitmap3 = D2D1DeviceContext.CreateSwapChainAndBitmapFromHwnd(hwnd, 'B8G8R8A8_UNORM')
+#Other short way to do the same
+# DXGISwapChain, D2D1Bitmap3 = hwnd.CreateSwapChainAndBitmap(D2D1DeviceContext)
 #Setting the D2D1 bitmap as the target of the D2D1 device context
 D2D1DeviceContext.SetTarget(D2D1Bitmap3)
 #Creating and drawing a D2D1 bitmap from the WIC bitmap
@@ -1390,10 +1392,15 @@ D2D1Bitmap3.Release()
 DXGISurface2.Release()
 #Presenting the rendered image of the DXGI swap chain
 DXGISwapChain.Present()
+#Capturing and saving the window content with cursor, date and time
+DXGICapturer = hwnd.GetDXGICapturer(D2D1DeviceContext)
+time.sleep(0.5)
+print(DXGICapturer.SaveTo(path + r'\test_d.png', pointer=True, metadata=True))
+DXGICapturer.Close()
 #Managing the message queue until the window is closed
 print('Waiting for the closure of the resizable pop-up window...')
 hwnd.WaitShutdown()
-tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
+tuple(map(IUnknown.Release, (IBitmapCache, DXGISurface2, D3D11Texture2D, D3D11Device2, D2D1Bitmap3, D2D1Bitmap4, D2D1Bitmap2, DXGISurface, D2D1Bitmap, D2D1ColorContext, IImageEncoder, D2D1DeviceContext, D2D1Device, D2D1Factory, DXGIDevice, D3D11Device, DXGISwapChain, DXGIFactory)))
 
 #Creating a COM interface provider thread
 CS = COMSharing()
