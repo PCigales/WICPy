@@ -63,8 +63,8 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID r
       return E_FAIL;
     }
   }
-  PyObject *py_func = PyObject_GetAttrString(py_mod ? py_mod : py_wmod, "DllGetClassObject");
   Py_XDECREF(py_mod);
+  PyObject *py_func = PyObject_GetAttrString(py_wmod, "DllGetClassObject");
   if (! (py_func )) {
     PyErr_Clear();
     PyGILState_Release(state);
@@ -115,6 +115,70 @@ HRESULT DLLEXPORT WINAPI DllCanUnloadNow(void) {
     Py_DECREF(py_res);
   }
   Py_DECREF(py_func);
+  PyGILState_Release(state);
+  return res;
+}
+
+HRESULT WINAPI _dll_ru(const CHAR *name) {
+  if (! py_wmod) {return E_FAIL;}
+  PyGILState_STATE state = PyGILState_Ensure();
+  PyObject *py_func = PyObject_GetAttrString(py_wmod, name);
+  if (! (py_func )) {
+    PyErr_Clear();
+    PyGILState_Release(state);
+    return E_FAIL;
+  }
+  long res = E_FAIL;
+  PyObject *py_res = PyObject_CallFunctionObjArgs(py_func, NULL);
+  if (py_res) {
+    res = PyLong_AsLong(py_res);
+    if (PyErr_Occurred()) {
+      PyErr_Clear();
+      res = E_FAIL;
+    }
+    Py_DECREF(py_res);
+  }
+  Py_DECREF(py_func);
+  PyGILState_Release(state);
+  return res;
+}
+
+HRESULT DLLEXPORT WINAPI DllRegisterServer() {
+  return _dll_ru("DllRegisterServer");
+}
+
+HRESULT DLLEXPORT WINAPI DllUnregisterServer() {
+  return _dll_ru("DllUnregisterServer");
+}
+
+HRESULT DLLEXPORT WINAPI DllInstall(const BOOL bInstall, const PCWSTR pszCmdLine) {
+  if (! py_wmod) {return E_FAIL;}
+  PyGILState_STATE state = PyGILState_Ensure();
+  PyObject *py_func = PyObject_GetAttrString(py_wmod, "DllInstall");
+  if (! (py_func )) {
+    PyErr_Clear();
+    PyGILState_Release(state);
+    return E_FAIL;
+  }
+  long res = E_FAIL;
+  PyObject *py_bInstall = PyBool_FromLong(bInstall);
+  PyObject *py_pszCmdLine = PyUnicode_FromWideChar(pszCmdLine, -1);
+  if (py_bInstall && py_pszCmdLine) {
+    PyObject *py_res = PyObject_CallFunctionObjArgs(py_func, py_bInstall, py_pszCmdLine, NULL);
+    if (py_res) {
+      res = PyLong_AsLong(py_res);
+      if (PyErr_Occurred()) {
+        PyErr_Clear();
+        res = E_FAIL;
+      }
+      Py_DECREF(py_res);
+    }
+  } else {
+    PyErr_Clear();
+  }
+  Py_DECREF(py_func);
+  Py_XDECREF(py_bInstall);
+  Py_XDECREF(py_pszCmdLine);
   PyGILState_Release(state);
   return res;
 }
