@@ -351,7 +351,6 @@ class _IUtil:
   @staticmethod
   def _import_module(module):
     if module and (module := os.path.abspath(module)) != __file__:
-      import importlib
       mname = 'wic_' + GUID.from_name(module).to_string().replace('-', '_')
       if mname not in sys.modules:
         spec = importlib.util.spec_from_file_location(mname, module)
