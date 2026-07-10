@@ -10220,10 +10220,10 @@ def DllUnregisterServer():
   user = os.environ.get('WIC_Py_User', 't').lower() not in {'f', 'false'}
   return ISetLastError(0x80009e41 if False in COMRegistration.RegistryRemoveModuleClasses(module, user).values() else 0)
 def DllInstall(bInstall, pszCmdLine):
-  if (l := len(pszCmdLine := pszCmdLine.split('|'))) >= 4 or (module := _IUtil._import_module(pszCmdLine[0])) is None:
+  if (l := len(cmdline := ctypes.wstring_at(pszCmdLine).split('|'))) >= 4 or (module := _IUtil._import_module(cmdline[0])) is None:
     return ISetLastError(0x8000ffff)
-  user = pszCmdLine[1].lower() not in {'f', 'false'} if l >= 2 else True
-  local = pszCmdLine[2].lower() in {'t', 'true'} if l == 3 else False
+  user = cmdline[1].lower() not in {'f', 'false'} if l >= 2 else True
+  local = cmdline[2].lower() in {'t', 'true'} if l == 3 else False
   return ISetLastError(0x80009e41 if False in (COMRegistration.RegistryAddModuleClasses(module, user, local) if bInstall else COMRegistration.RegistryRemoveModuleClasses(module, user)).values() else 0)
 
 class COMSharing:

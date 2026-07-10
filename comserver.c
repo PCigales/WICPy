@@ -7,7 +7,7 @@
 PyObject *py_wmod = NULL;
 INT py_ini = 1;
 
-HRESULT DLLEXPORT WINAPI DllGetClassObject(const REFCLSID rclsid, const REFIID riid, LPVOID *ppv) {
+HRESULT DLLEXPORT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv) {
   LPOLESTR pclsid;
   if (! py_wmod || StringFromCLSID(rclsid, &pclsid)) {return E_FAIL;}
   if (wcslen(pclsid) != 38) {
@@ -151,7 +151,7 @@ HRESULT DLLEXPORT WINAPI DllUnregisterServer() {
   return _dll_ru("DllUnregisterServer");
 }
 
-HRESULT DLLEXPORT WINAPI DllInstall(const BOOL bInstall, const PCWSTR pszCmdLine) {
+HRESULT DLLEXPORT WINAPI DllInstall(BOOL bInstall, PCWSTR pszCmdLine) {
   if (! py_wmod) {return E_FAIL;}
   PyGILState_STATE state = PyGILState_Ensure();
   PyObject *py_func = PyObject_GetAttrString(py_wmod, "DllInstall");
@@ -161,8 +161,8 @@ HRESULT DLLEXPORT WINAPI DllInstall(const BOOL bInstall, const PCWSTR pszCmdLine
     return E_FAIL;
   }
   long res = E_FAIL;
-  PyObject *py_bInstall = PyBool_FromLong(bInstall);
-  PyObject *py_pszCmdLine = PyUnicode_FromWideChar(pszCmdLine, -1);
+  PyObject *py_bInstall = PyLong_FromInt32(bInstall);
+  PyObject *py_pszCmdLine = PyLong_FromVoidPtr((void*) pszCmdLine);
   if (py_bInstall && py_pszCmdLine) {
     PyObject *py_res = PyObject_CallFunctionObjArgs(py_func, py_bInstall, py_pszCmdLine, NULL);
     if (py_res) {
