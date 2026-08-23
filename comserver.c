@@ -229,19 +229,21 @@ BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOI
         return FALSE;
       }
       PyGILState_Release(state);
+      if (! py_ini) {
+        PyThreadState_Clear(PyThreadState_Get());
+        PyThreadState_DeleteCurrent();
+      }
     break;
     case DLL_PROCESS_DETACH:
       if (! lpvReserved) {
         PyGILState_STATE state = PyGILState_Ensure();
         Py_XDECREF(py_wmod);
         py_wmod = NULL;
-        PyGILState_Release(state);
-        if (! py_ini) {
+        if (py_ini) {
+          PyGILState_Release(state);
+        } else  {
           py_ini = 1;
           Py_FinalizeEx();
-          if (PyErr_Occurred()) {
-            PyErr_Clear();
-          }
         }
       }
     break;

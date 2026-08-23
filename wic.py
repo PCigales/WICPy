@@ -8603,7 +8603,7 @@ class WSPITEMIDLIST(ctypes.POINTER(WSITEMIDLIST), metaclass=_WSPIIDLMeta):
     return WSPITEMIDLIST.ILCreateFromPath(path.rstrip('\\'))
   @property
   def content(self):
-    return None if self is None else self.contents.value
+    return self.contents.value if self else None
   def GetName(self, name_form=0):
     return WSPITEMIDLIST.SHGetNameFromIDList(self, name_form)
   @property
