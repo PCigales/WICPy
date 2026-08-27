@@ -50,6 +50,7 @@ d2d1 = ctypes.WinDLL('d2d1', use_last_error=True)
 d3d11 = ctypes.WinDLL('d3d11', use_last_error=True)
 gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
 dwm = ctypes.WinDLL('dwmapi', use_last_error=True)
+comctl32 = ctypes.WinDLL('comctl32', use_last_error=True)
 
 class WError(int):
   def __new__(cls, code):
@@ -541,7 +542,6 @@ class _COMMeta(type):
     for iid in cls._iids:
       mcls._iids.setdefault(iid, cls)
     return cls
-
   @staticmethod
   def _new(cls, iid, **kwargs):
     if hasattr(cls, '_ovtbl'):
@@ -2810,18 +2810,20 @@ class _WSUtil:
     return tuple(s.value for s in arr)
 
 class _WSMeta(ctypes.Structure.__class__):
-  def __init__(cls, *args, **kwargs):
-    super(_WSMeta, _WSMeta).__init__(cls, *args, **kwargs)
-    for n, t in cls._fields_:
-      if (b := issubclass(t, _BGUID)) or issubclass(t, (_BCode, COMPONENTS)):
-        setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property(lambda s, _n='_'+n, _t=t: _t(getattr(s, _n)), lambda s, v, _n='_'+n, _c=(t.to_bytes if b else t.to_int): setattr(s, _n, _c(v)), getattr(cls, '_' + n).__delete__))
-      elif (b := issubclass(t, wintypes.BOOLE)) or issubclass(t, (PCOM, BSTRING, DATE)):
-        setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property((lambda s, _n='_'+n, _t=t: getattr(s, _n).value) if b else (lambda s, _n='_'+n, _t=t: getattr(s, _n).content), lambda s, v, _n='_'+n, _t=t: setattr(s, _n, (v if isinstance(v, _t) else _t(v))), getattr(cls, '_' + n).__delete__))
-      elif issubclass(t, (PBUFFER, _BPStruct, _BPAStruct)):
-        setattr(cls, '_' + n, getattr(cls, n))
-        setattr(cls, n, property(getattr(cls, '_' + n).__get__, lambda s, v, _n='_'+n, _t=t: setattr(s, _n, ctypes.cast(_t.from_param(v, True), _t)), getattr(cls, '_' + n).__delete__))
+  def __setattr__(cls, name, value):
+    r = super().__setattr__(name, value)
+    if name == '_fields_':
+      for n, t in cls._fields_:
+        if (b := issubclass(t, _BGUID)) or issubclass(t, (_BCode, COMPONENTS)):
+          setattr(cls, '_' + n, getattr(cls, n))
+          setattr(cls, n, property(lambda s, _n='_'+n, _t=t: _t(getattr(s, _n)), lambda s, v, _n='_'+n, _c=(t.to_bytes if b else t.to_int): setattr(s, _n, _c(v)), getattr(cls, '_' + n).__delete__))
+        elif (b := issubclass(t, wintypes.BOOLE)) or issubclass(t, (PCOM, BSTRING, DATE)):
+          setattr(cls, '_' + n, getattr(cls, n))
+          setattr(cls, n, property((lambda s, _n='_'+n, _t=t: getattr(s, _n).value) if b else (lambda s, _n='_'+n, _t=t: getattr(s, _n).content), lambda s, v, _n='_'+n, _t=t: setattr(s, _n, (v if isinstance(v, _t) else _t(v))), getattr(cls, '_' + n).__delete__))
+        elif issubclass(t, (PBUFFER, _BPStruct, _BPAStruct)):
+          setattr(cls, '_' + n, getattr(cls, n))
+          setattr(cls, n, property(getattr(cls, '_' + n).__get__, lambda s, v, _n='_'+n, _t=t: setattr(s, _n, ctypes.cast(_t.from_param(v, True), _t)), getattr(cls, '_' + n).__delete__))
+    return r
   def __mul__(bcls, size):
     return _WSUtil._mul_cache.get((bcls, size)) or _WSUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _WSUtil._asitem, 'value': property(_WSUtil._avalue)}))
 
@@ -8092,6 +8094,12 @@ class _WShUtil:
     s = pwstr.value
     _IUtil.CoTaskMemFree(pwstr)
     return s
+  GlobalLock = _IUtil._wrap('GlobalLock', (wintypes.LPVOID, 0), (wintypes.HGLOBAL, 1), p=kernel32)
+  GlobalUnlock = _IUtil._wrap('GlobalUnlock', (wintypes.BOOLE, 0), (wintypes.HGLOBAL, 1), p=kernel32)
+  RegisterClipboardFormat = _IUtil._wrap('RegisterClipboardFormatW', (wintypes.UINT, 0), (wintypes.LPCWSTR, 1), p=user32)
+  GetClipboardFormatName = _IUtil._wrap('GetClipboardFormatNameW', (wintypes.UINT, 0), (wintypes.UINT, 1), (wintypes.LPWSTR, 1), (wintypes.UINT, 0), p=user32)
+  DragQueryFile = _wrap('DragQueryFileW', (wintypes.UINT, 0), (wintypes.HDROP, 1), (wintypes.UINT, 1), (wintypes.LPWSTR, 1), (wintypes.UINT, 1))
+
 
 WSBindFlags = {'MayBotherUser': 1, 'JustTestExistence': 2}
 WSBINDFLAGS = type('WSBINDFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSBindFlags.items()}, '_tab_cn': {c: n for n, c in WSBindFlags.items()}, '_def': 0})
@@ -8209,15 +8217,13 @@ class WSCFFORMAT(_BCode, wintypes.WORD):
   _tab_nc = {n.lower(): c for n, c in WSCfFormat.items()}
   _tab_cn = {c: n for n, c in WSCfFormat.items()}
   _def = 1
-  user32.RegisterClipboardFormatW.restype = wintypes.UINT
-  user32.GetClipboardFormatNameW.restype = wintypes.INT
   @staticmethod
   def wname_code(n):
-    return user32.RegisterClipboardFormatW(wintypes.LPCWSTR(WSCfFormatEq.get(n.lower(), n))) or None
+    return _WShUtil.RegisterClipboardFormat(WSCfFormatEq.get(n.lower(), n)) or None
   @staticmethod
   def code_wname(c):
     b = ctypes.create_unicode_buffer(1024)
-    return b.value if user32.GetClipboardFormatNameW(wintypes.UINT(c), ctypes.byref(b), 1024) else None
+    return b.value if _WShUtil.GetClipboardFormatName(c, b, 1024) else None
   @classmethod
   def name_code(cls, n):
     return cls._tab_nc.get(n.lower(), (cls.wname_code(n) or cls._def)) if isinstance(n, str) else n
@@ -8320,8 +8326,6 @@ WSPCIDA = type('WSPCIDA', (_BPStruct, ctypes.POINTER(WSCIDA)),  {'_type_': WSCID
 
 WSKeyState = {'LButton': 0x1, 'RButton': 0x2, 'MButton': 0x10, 'Shift': 0x4, 'Ctrl': 0x8, 'Control': 0x8, 'Alt': 0x20}
 WSKEYSTATE = type('WSKEYSTATE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSKeyState.items()}, '_tab_cn': {c: n for n, c in WSKeyState.items()}, '_def': 0})
-
-POINT = _WSMeta('POINT', (_BTStruct, wintypes.POINT), {})
 
 WSDropEffect = {'None': 0, 'Copy': 0x1, 'Move': 0x2, 'Link': 0x4, 'Scroll': 0x80000000}
 WSDROPEFFECT = type('WSDROPEFFECT', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSDropEffect.items()}, '_tab_cn': {c: n for n, c in WSDropEffect.items()}, '_def': 0})
@@ -8809,28 +8813,27 @@ class IDataObject(IUnknown):
   @property
   def SupportedSetFormatEtc(self):
     return None if (ief := self.EnumFormatEtc(2)) is None else tuple(ief)
-  kernel32.GlobalLock.restype = wintypes.LPVOID
-  kernel32.GlobalUnlock.restype = wintypes.BOOLE
-  sh32.DragQueryFileW.restype = wintypes.UINT
   @staticmethod
-  def RetrieveFileNames(stg_medium):
+  def RetrieveFileNames(stg_medium, indexes=None):
     if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None:
       return None
     fa = []
-    for i in range(sh32.DragQueryFileW(g, 0xffffffff, None, 0)):
-      fl = sh32.DragQueryFileW(g, wintypes.UINT(i), None, wintypes.UINT(0)) + 1
+    for i in (range(_WShUtil.DragQueryFile(g, 0xffffffff, None, 0)) if indexes is None else indexes):
+      fl = _WShUtil.DragQueryFile(g, i, None, 0) + 1
       f = ctypes.create_unicode_buffer(fl)
-      sh32.DragQueryFileW(g, wintypes.UINT(i), ctypes.byref(f), wintypes.UINT(fl))
+      _WShUtil.DragQueryFile(g, i, f, fl)
       fa.append(f)
     return tuple(f.value for f in fa)
   def GetFileNames(self):
     return self.RetrieveFileNames(self.GetData((15, None, 1, -1, 1)))
+  def GetFileName(self, index):
+    return None if (fa := self.RetrieveFileNames(self.GetData((15, None, 1, -1, 1)), (index,))) is None else fa[0]
   @staticmethod
   def RetrieveFileDescriptors(stg_medium):
-    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
+    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := _WShUtil.GlobalLock(g)):
       return None
     fds = ctypes.cast(h, WSPFILEGROUPDESCRIPTOR).contents.value
-    kernel32.GlobalUnlock(g)
+    _WShUtil.GlobalUnlock(g)
     return fds
   def GetFileDescriptors(self):
     return self.RetrieveFileDescriptors(self.GetData(('FileGroupDescriptorW', None, 1, -1, 1)))
@@ -8841,20 +8844,20 @@ class IDataObject(IUnknown):
     return None if (fds := self.GetFileDescriptors()) is None or index >= len(fds) else self.RetrieveFileContent(self.GetData(('FileContents', None, 1, index, 4)))
   @staticmethod
   def RetrieveShIDLists(stg_medium):
-    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
+    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := _WShUtil.GlobalLock(g)):
       return None
     idls = ctypes.cast(h, WSPCIDA).contents.value
-    kernel32.GlobalUnlock(g)
+    _WShUtil.GlobalUnlock(g)
     return idls
   def GetShIDLists(self):
     return self.RetrieveShIDLists(self.GetData(('ShIDListArray', None, 1, -1, 1)))
   GetPIDLs = GetShIDLists
   @staticmethod
   def RetrieveURL(stg_medium):
-    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := kernel32.GlobalLock(g)):
+    if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := _WShUtil.GlobalLock(g)):
       return None
     url = ctypes.cast(h, wintypes.LPSTR).value
-    kernel32.GlobalUnlock(g)
+    _WShUtil.GlobalUnlock(g)
     return url.decode()
   def GetURL(self):
     return self.RetrieveURL(self.GetData(('UniformResourceLocator', None, 1, -1, 1)))
@@ -9718,6 +9721,16 @@ class HWND(wintypes.HWND):
     return Window.MoveWindow(self, *ltwh, repaint)
   def SetPos(self, insert_after, ltwh, flags=0):
     return Window.SetWindowPos(self, getattr(insert_after, 'value', insert_after) or 0, *ltwh, flags)
+  def MapPoint(self, point, hwnd_from=None):
+    point = POINT.from_param(point)
+    ctypes.set_last_error(0)
+    return None if not Window.MapWindowPoints(hwnd_from, self, point, 1) and ctypes.get_last_error() else point
+  def MapRect(self, rect, hwnd_from=None):
+    rect = RECT.from_param(rect)
+    ctypes.set_last_error(0)
+    return None if not Window.MapWindowPoints(hwnd_from, self, ctypes.cast(PRECT(rect), PPOINT), 2) and ctypes.get_last_error() else rect
+  def Update(self):
+    return Window.UpdateWindow(self)
   @property
   def ClassName(self):
     cn = ctypes.create_unicode_buffer(257)
@@ -9906,6 +9919,8 @@ class Window(metaclass=_WndMeta):
   AdjustWindowRectEx = _WndUtil._wrap('AdjustWindowRectEx', wintypes.BOOLE, wintypes.LPRECT, WNDWINDOWSTYLE, wintypes.BOOL, wintypes.DWORD)
   MoveWindow = _WndUtil._wrap('MoveWindow', wintypes.BOOLE, wintypes.HWND, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.BOOL)
   SetWindowPos = _WndUtil._wrap('SetWindowPos', wintypes.BOOLE, wintypes.HWND, WNDPOSHWND, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, WNDPOSFLAGS)
+  MapWindowPoints = _WndUtil._wrap('MapWindowPoints', wintypes.INT, wintypes.HWND, wintypes.HWND, PPOINT, wintypes.UINT)
+  UpdateWindow = _WndUtil._wrap('UpdateWindow', wintypes.BOOLE, wintypes.HWND)
   GetClassName = _WndUtil._wrap('GetClassNameW', wintypes.INT, wintypes.HWND, wintypes.LPWSTR, wintypes.INT)
   GetWindowTextLength = _WndUtil._wrap('GetWindowTextLengthW', wintypes.INT, wintypes.HWND)
   GetWindowText = _WndUtil._wrap('GetWindowTextW', wintypes.INT, wintypes.HWND, wintypes.LPWSTR, wintypes.INT)
@@ -9932,6 +9947,255 @@ class Window(metaclass=_WndMeta):
       Window.PostQuitMessage(0)
     return Window.DefWindowProc(hWnd, Msg, wParam, lParam)
   CallWindowProc = _WndUtil._wrap('CallWindowProcW', wintypes.LRESULT, WNDPROC, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+DLGBoxStyle = {**WNDWindowStyle, '3DLook': 0x4, 'AbsAlign': 0x1, 'Center': 0x800, 'CenterMouse': 0x1000, 'ContextHelp': 0x2000, 'Control': 0x400, 'FixedSys': 0x8, 'LocalEdit': 0x20, 'ModalFrame': 0x80, 'NoFailCreate': 0x10, 'NoIdleMsg': 0x100, 'SetFont': 0x40, 'SetForeground': 0x200, 'ShellFont': 0x48, 'SysModal': 0x2}
+DLGBOXSTYLE = type('DLGBOXSTYLE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in DLGBoxStyle.items()}, '_tab_cn': {c: n for n, c in DLGBoxStyle.items()}, '_def': 0})
+
+DLGScrollInfoFlags = {'Range': 0x1, 'Page': 0x2, 'Pos': 0x4, 'DisableNoScroll': 0x8, 'TrackPos': 0x10, 'All': 0x17}
+DLGSCROLLINFOFLAGS = type('DLGSCROLLINFOFLAGS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DLGScrollInfoFlags.items()}, '_tab_cn': {c: n for n, c in DLGScrollInfoFlags.items()}, '_def': 4})
+
+class DLGSCROLLINFO(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cbSize', wintypes.UINT), ('fMask', DLGSCROLLINFOFLAGS), ('nMin', wintypes.INT), ('nMax', wintypes.INT), ('nPage', wintypes.UINT), ('nPos', wintypes.INT), ('nTrackPos', wintypes.INT)]
+DLGPSCROLLINFO = type('DLGPSCROLLINFO', (_BPStruct, ctypes.POINTER(DLGSCROLLINFO)),  {'_type_': DLGSCROLLINFO})
+
+DLGScrollFlags = {'Erase': 0x4, 'Invalidate': 0x2, 'ScrollChildren': 0x1}
+DLGSCROLLFLAGS = type('DLGSCROLLFLAGS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DLGScrollFlags.items()}, '_tab_cn': {c: n for n, c in DLGScrollFlags.items()}, '_def': 7})
+
+class DLGTEMPLATE(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _pack_ = 2
+  _fields_ = [('style', DLGBOXSTYLE), ('dwExtendedStyle', wintypes.DWORD), ('cdit', wintypes.WORD), ('x', wintypes.SHORT), ('y', wintypes.SHORT), ('cx', wintypes.SHORT), ('cy', wintypes.SHORT)]
+DLGPTEMPLATE = type('DLGPTEMPLATE', (_BPStruct, ctypes.POINTER(DLGTEMPLATE)),  {'_type_': DLGTEMPLATE})
+
+class DLGITEMTEMPLATE(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _pack_ = 2
+  _fields_ = [('style', WNDWINDOWSTYLE), ('dwExtendedStyle', wintypes.DWORD), ('x', wintypes.SHORT), ('y', wintypes.SHORT), ('cx', wintypes.SHORT), ('cy', wintypes.SHORT), ('id', wintypes.WORD)]
+DLGPITEMTEMPLATE = type('DLGPITEMTEMPLATE', (_BPStruct, ctypes.POINTER(DLGITEMTEMPLATE)),  {'_type_': DLGITEMTEMPLATE})
+
+DLGPROC = ctypes.WINFUNCTYPE(wintypes.ULONG_PTR, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+PSPFlags = {'Default': 0x0, 'DlgIndirect': 0x1, 'HasHelp': 0x20, 'HideHeader': 0x800, 'Premature': 0x400, 'RtLReading': 0x10, 'UseCallback': 0x80, 'UseFusionContext': 0x4000, 'UseHeaderSubtitle': 0x2000, 'UseHeaderTitle': 0x1000, 'UseHIcon': 0x2, 'UseIconID': 0x4, 'UseRefParent': 0x40, 'UseTitle': 0x8}
+PSPFLAGS = type('PSPFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in PSPFlags.items()}, '_tab_cn': {c: n for n, c in PSPFlags.items()}, '_def': 0})
+
+class SPSPROPSHEETPAGE(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
+  pass
+SPSPPROPSHEETPAGE = type('SPSPPROPSHEETPAGE', (_BPStruct, ctypes.POINTER(SPSPROPSHEETPAGE)),  {'_type_': SPSPROPSHEETPAGE})
+SPSFNADDSPSPROPSHEETPAGE = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, wintypes.LPARAM)
+SPSFNPSPCALLBACK = ctypes.WINFUNCTYPE(wintypes.UINT, wintypes.HWND, wintypes.UINT, SPSPPROPSHEETPAGE)
+SPSPROPSHEETPAGE._fields_ = [('dwSize', wintypes.DWORD), ('dwFlags', PSPFLAGS), ('hInstance', wintypes.HINSTANCE), ('pResource', DLGPTEMPLATE), ('hIcon', wintypes.HICON), ('pszTitle', wintypes.LPCWSTR), ('pfnDlgProc', DLGPROC), ('lParam', wintypes.LPARAM), ('pfnCallback', SPSFNPSPCALLBACK), ('pcRefParent', wintypes.PUINT), ('pszHeaderTitle', wintypes.LPCWSTR), ('pszHeaderSubTitle', wintypes.LPCWSTR), ('hActCtx', wintypes.HANDLE), ('hbmHeader', wintypes.HBITMAP)]
+
+class PCOMDATAOBJECT(PCOM):
+  icls = IDataObject
+  def GetFileNames(self):
+    return None if not self else IDataObject.RetrieveFileNames(IDataObject._protos['GetData'](self, (15, None, 1, -1, 1)))
+  def GetFileName(self, index):
+    return None if not self or (fa := IDataObject.RetrieveFileNames(IDataObject._protos['GetData'](self, (15, None, 1, -1, 1)), (index,))) is None else fa[0]
+  def GetFileDescriptors(self):
+    return None if not self else IDataObject.RetrieveFileDescriptors(IDataObject._protos['GetData'](self, ('FileGroupDescriptorW', None, 1, -1, 1)))
+
+class _SPSUtil:
+  CreatePropertySheetPage = _WndUtil._wrap('CreatePropertySheetPageW', wintypes.HANDLE, SPSPPROPSHEETPAGE, p=comctl32)
+  DestroyPropertySheetPage = _WndUtil._wrap('DestroyPropertySheetPage', wintypes.BOOLE, wintypes.HANDLE, p=comctl32)
+  GetScrollInfo = _WndUtil._wrap('GetScrollInfo', wintypes.BOOLE, wintypes.HANDLE, wintypes.INT, DLGPSCROLLINFO)
+  SetScrollInfo = _WndUtil._wrap('SetScrollInfo', wintypes.INT, wintypes.HANDLE, wintypes.INT, DLGPSCROLLINFO, wintypes.BOOL)
+  ScrollWindowEx = _WndUtil._wrap('ScrollWindowEx', wintypes.INT, wintypes.HANDLE, wintypes.INT, wintypes.INT, PRECT, PRECT, wintypes.HRGN, PRECT, DLGSCROLLFLAGS)
+  SetDlgItemText = _WndUtil._wrap('SetDlgItemTextW', wintypes.BOOLE, wintypes.HANDLE, wintypes.INT, wintypes.LPCWSTR)
+  MapDialogRect = _WndUtil._wrap('MapDialogRect', wintypes.BOOLE, wintypes.HANDLE, wintypes.PRECT)
+  @staticmethod
+  def GetTabDisplayRect(hwnd):
+    if not ((d := hwnd if isinstance(hwnd, HWND) else HWND(hwnd)) and (p := d.Parent) and (t := p.FindChildWindow(class_name='SysTabControl32')) and (r := t.Rect)):
+      return None
+    t.SendMessage(4904, False, ctypes.addressof(r))
+    if p.MapRect(r) is None:
+      return None
+    return r
+
+class _COM_IShellExtInit(_COM_IUnknown):
+  _iids.add(GUID('000214e8-0000-0000-c000-000000000046'))
+  _vtbl['Initialize'] = (wintypes.ULONG, wintypes.LPVOID, WSPITEMIDLIST, PCOMDATAOBJECT, wintypes.HKEY)
+  _vars['pdtobj'] = PCOMDATAOBJECT
+  _vars['nelts'] = wintypes.UINT
+  _vars['ppsp'] = SPSPPROPSHEETPAGE
+  @classmethod
+  def _Initialize(cls, pI, pidlFolder, pdtobj, hkeyProgID):
+    with cls[pI] as self:
+      if not self or not pdtobj:
+        return 0x80004003
+      if self.pdtobj:
+        return 0x8000ffff
+      if not ((fa := pdtobj.GetFileNames()) and ((exts := getattr(self.__class__, 'Exts', None)) is None or all(any(f.lower().endswith(e) for e in exts) for f in fa))):
+        return 0x80070057
+      self.pdtobj = pdtobj
+      pdtobj.AddRef()
+      self.nelts = len(fa)
+      self.ppsp = (SPSPROPSHEETPAGE * self.nelts)()
+      return 0
+
+class _ISPSMeta(_COMMeta):
+  def __init__(cls, *args, interfaces=None):
+    super().__init__(*args)
+    cls.DlgProc = DLGPROC(cls._DlgProc)
+    cls.CallbackProc = SPSFNPSPCALLBACK(cls._CallbackProc)
+
+class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
+  _iids.add(GUID('000214e9-0000-0000-c000-000000000046'))
+  _vtbl['AddPages'] = (wintypes.ULONG, wintypes.LPVOID, SPSFNADDSPSPROPSHEETPAGE, wintypes.LPARAM)
+  _vtbl['ReplacePages'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.UINT, SPSFNADDSPSPROPSHEETPAGE, wintypes.LPARAM)
+  Title = 'Ext'
+  @staticmethod
+  def _header_size(t, tf=None):
+    return (ctypes.sizeof(DLGITEMTEMPLATE) + (2 * ctypes.sizeof(wintypes.WORD) if tf is None else 3 * ctypes.sizeof(wintypes.WORD) + ctypes.sizeof(tf)) + ctypes.sizeof(t) + 3) & -4
+  @staticmethod
+  def _header(b, st, est, ci, x, y, cx, cy, t, f=None):
+    o = 0
+    dt = DLGTEMPLATE.from_buffer(b)
+    dt.__init__(st, est, ci, x, y, cx, cy)
+    o += ctypes.sizeof(dt) + 2 * ctypes.sizeof(wintypes.WORD)
+    ctypes.memmove(ctypes.addressof(b) + o, t, ctypes.sizeof(t))
+    o += ctypes.sizeof(t)
+    if f:
+      wintypes.WORD.from_buffer(b, o).value = f[0]
+      o += ctypes.sizeof(wintypes.WORD)
+      f = f[1]
+      ctypes.memmove(ctypes.addressof(b) + o, f, ctypes.sizeof(f))
+      o += ctypes.sizeof(f)
+    o = (o + 3) & -4
+    return dt, o
+  @staticmethod
+  def _text_item_size(t=None):
+    return (ctypes.sizeof(DLGITEMTEMPLATE) + (4 * ctypes.sizeof(wintypes.WORD) if t is None else 3 * ctypes.sizeof(wintypes.WORD) + ctypes.sizeof(t)) + 3) & -4
+  @staticmethod
+  def _text_item(b, o, st, est, x, y, cx, cy, i, cl, t=None):
+    dit = DLGITEMTEMPLATE.from_buffer(b, o)
+    dit.__init__(st, est, x, y, cx, cy, i)
+    o += ctypes.sizeof(dit)
+    wintypes.WORD.from_buffer(b, o).value = 0xffff
+    o += ctypes.sizeof(wintypes.WORD)
+    wintypes.WORD.from_buffer(b, o).value = cl
+    o += ctypes.sizeof(wintypes.WORD)
+    if t is None:
+      o += 2 * ctypes.sizeof(wintypes.WORD)
+    else:
+      ctypes.memmove(ctypes.addressof(b) + o, t, ctypes.sizeof(t))
+      o += ctypes.sizeof(t) + ctypes.sizeof(wintypes.WORD)
+    o = (o + 3) & -4
+    return dit, o
+  @classmethod
+  def Template(cls):
+    t = ctypes.create_unicode_buffer(cls.Title)
+    tf = ctypes.create_unicode_buffer('MS Shell Dlg')
+    b = ctypes.create_string_buffer(cls._header_size(t, tf))
+    dt, o = cls._header(b, 'Child | Visible | Caption | VScroll | ModalFrame | SetFont', 0, 0, 0, 0, 150, 250, t, (9, tf))
+    return DLGPTEMPLATE(dt)
+  @classmethod
+  def _DlgProc(cls, hWnd, uMsg, wParam, lParam):
+    d = HWND(hWnd)
+    if uMsg == 272:
+      d.PostMessage(1024, 0, 0)
+    elif uMsg == 1024:
+      if (rd := d.Rect) is not None:
+        si = DLGSCROLLINFO('Range | Page | Pos', 0, max((r.bottom for c in d.Children if (r := c.Rect) is not None), default=0) - rd.top, rd.bottom - rd.top, 0, 0)
+        _SPSUtil.SetScrollInfo(d, 1, si, True)
+    elif uMsg == 277:
+      req = wParam & 0xffff
+      si = DLGSCROLLINFO(7)
+      _SPSUtil.GetScrollInfo(d, 1, si)
+      pos = si.nPos
+      if req == 0:
+        si.nPos -= 15
+      elif req == 1:
+        si.nPos += 15
+      elif req == 2:
+        si.nPos -= si.nPage
+      elif req == 3:
+        si.nPos += si.nPage
+      elif req in (4, 5):
+        si.nPos = wParam >> 16
+      elif req == 6:
+        si.nPos = 0
+      elif req == 7:
+        si.nPos = si.nMax - si.nPage
+      si.nPos = max(min(si.nPos, si.nMax - si.nPage), si.nMin)
+      if pos != si.nPos:
+        _SPSUtil.ScrollWindowEx(d, 0, pos - si.nPos, None, None, None, None, 7)
+        d.Update()
+        si.fMask = 4
+        _SPSUtil.SetScrollInfo(d, 1, si, True)
+    elif uMsg == 522:
+      wParam >>= 31
+      d.SendMessage(277, wParam, 0)
+      d.SendMessage(277, wParam, 0)
+    return 0
+  @classmethod
+  def _CallbackProc(cls, hwnd, uMsg, ppsp):
+    pI = ppsp.contents.lParam
+    if uMsg == 0:
+      PCOM.AddRef(wintypes.LPVOID(pI))
+    elif uMsg == 2:
+      return 1
+    elif uMsg == 1:
+      PCOM.Release(wintypes.LPVOID(pI))
+    return 0
+  @classmethod
+  def _AddPages(cls, pI, pfnAddPage, lParam):
+    with cls[pI] as self:
+      if not self or not pfnAddPage:
+        return 0x80004003
+      hPages = []
+      for i in range(self.nelts):
+        self.ppsp[i].__init__('DlgIndirect | UseCallback | UseTitle', None, cls.Template(), None, (cls.Title if self.nelts <= 1 else '%s %d' % (cls.Title, (i + 1))), cls.DlgProc, pI, cls.CallbackProc, None, None, None, None, None)
+        if not (hPage := _SPSUtil.CreatePropertySheetPage(self.ppsp[i])):
+          for hPage in hPages:
+            _SPSUtil.DestroyPropertySheetPage(hPage)
+          return 0x80004005
+        hPages.append(hPage)
+      r = 0
+      for hPage in hPages:
+        if not pfnAddPage(hPage, lParam):
+          _SPSUtil.DestroyPropertySheetPage(hPage)
+          r = 0x80004005
+      return r
+  @classmethod
+  def _ReplacePages(cls, pI, upageID, pfnReplaceWith, lParam):
+    with cls[pI] as self:
+      if not self or not pfnReplaceWith:
+        return 0x80004003
+      return 0x80004001
+
+class _COM_IShellPropSheetExt_impl(metaclass=_COMMeta, interfaces=(_COM_IShellExtInit, _COM_IShellPropSheetExt)):
+  Exts = ()
+  def _destroy(self):
+    if self.pdtobj:
+      self.pdtobj.Release()
+      self.pdtobj = None
+      for i in range(self.nelts):
+        self.ppsp[i].pResource = None
+      self.ppsp = None
+      self.nelts = 0
+
+def SPSRegisterHandler(clsid_impl, name, user=True):
+  if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta):
+    try:
+      if not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(GUID(clsid_impl))), _COMMeta._COMImplMeta):
+        return False
+    except:
+      return False
+  if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
+    return False
+  clsid = ('{%s}' % GUID(clsid)).upper()
+  r = True
+  for ext in exts:
+    try:
+      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext)
+      if not (pid := winreg.QueryValue(key, None)):
+        winreg.SetValue(key, None, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
+      winreg.CloseKey(key)
+      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE),r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers\%s' % (pid, name))
+      winreg.SetValue(key, None, winreg.REG_SZ, clsid)
+      winreg.CloseKey(key)
+    except:
+      r = False
+      continue
+  return r
 
 
 def Initialize(mode=6, ole=False):
