@@ -1,4 +1,4 @@
-# WICPy v1.3.2 (https://github.com/PCigales/WICPy)
+# WICPy v1.3.3 (https://github.com/PCigales/WICPy)
 # Copyright © 2024 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -84,6 +84,12 @@ class GUID(bytes):
   @classmethod
   def from_name(cls, name):
     return cls(md5(name.encode(), usedforsecurity=False).digest())
+  @classmethod
+  def from_try(cls, *g):
+    try:
+      return GUID(*g)
+    except:
+      return None
   def __str__(self):
     return self.to_string()
   def __repr__(self):
@@ -205,6 +211,12 @@ PUUID = type('PUUID', (_BPGUID, ctypes.POINTER(UUID)), {'_type_': UUID})
 
 class _BCode:
   @classmethod
+  def __init_subclass__(cls, _dict=None, _def=0):
+    if _dict:
+      cls._tab_nc = {n.lower(): c for n, c in _dict.items()}
+      cls._tab_cn = {c: n for n, c in _dict.items()}
+      cls._def = _def
+  @classmethod
   def name_code(cls, n):
     return cls._tab_nc.get(n.lower(), cls._def) if isinstance(n, str) else n
   @classmethod
@@ -303,17 +315,17 @@ class _BCodeU(_BCodeOr):
     return ' | '.join((n_ for c_, n_ in cls._tab_cn.items() if c_ & c == c_) if c & 15 == 0 else (n_ for c_, n_ in cls._tab_cn.items() if c_ & c == c_ and c_ != 0))
 
 COMMshCtx = {'Local': 0, 'NoSharedMem': 1, 'DifferentMachine': 2, 'InProc': 3, 'CrossCtx': 4}
-COMMSHCTX = type('COMMSHCTX', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMMshCtx.items()}, '_tab_cn': {c: n for n, c in COMMshCtx.items()}, '_def': 3})
+COMMSHCTX = type('COMMSHCTX', (_BCode, wintypes.DWORD), {}, _dict=COMMshCtx, _def=3)
 COMPMSHCTX = ctypes.POINTER(COMMSHCTX)
 
 COMClsCtx = {'InProcServer': 0x1, 'InProcHandler': 0x2, 'LocalServer': 0x4, 'RemoteServer': 0x10, 'DisableAaA': 0x8000, 'EnableAaA': 0x10000, 'FromDefaultContext': 0x20000, 'EnableCloaking': 0x100000, 'PSDll': 0x80000000}
-COMCLSCTX = type('COMCLSCTX', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMClsCtx.items()}, '_tab_cn': {c: n for n, c in COMClsCtx.items()}, '_def': 1})
+COMCLSCTX = type('COMCLSCTX', (_BCodeOr, wintypes.DWORD), {}, _dict=COMClsCtx, _def=1)
 
 COMRegCls = {'SingleUse': 0, 'MultipleUse': 1, 'MultiSeparate': 2, 'Suspended': 4, 'Surrogate': 8, 'Agile': 16}
-COMREGCLS = type('COMREGCLS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMRegCls.items()}, '_tab_cn': {c: n for n, c in COMRegCls.items()}, '_def': 1})
+COMREGCLS = type('COMREGCLS', (_BCodeOr, wintypes.DWORD), {}, _dict=COMRegCls, _def=1)
 
 COMMshlFlags = {'Normal': 0, 'TableStrong': 1, 'TableWeak': 2, 'NoPing': 4}
-COMMSHLFLAGS = type('COMMSHLFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in COMMshlFlags.items()}, '_tab_cn': {c: n for n, c in COMMshlFlags.items()}, '_def': 0})
+COMMSHLFLAGS = type('COMMSHLFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=COMMshlFlags)
 
 class _IUtil:
   _local = threading.local()
@@ -476,8 +488,6 @@ class _COMMeta(type):
       return cls
     @staticmethod
     def _is_mta():
-      a_t = wintypes.INT()
-      a_q = wintypes.INT()
       return None if (atq := _IUtil.CoGetApartmentType()) is None else atq[0] == 1 or (atq[0] == 2 and atq[1] in (2, 4))
     @staticmethod
     def _new(cls, iid=0, isize=None, **kwargs):
@@ -697,6 +707,13 @@ class _PCOMUtil:
       return None
     i.AddRef(False)
     return i
+  @staticmethod
+  def _detach(pcom):
+    if (interface := pcom._interface) is not None:
+      interface.AddRef(False)
+      interface.Release()
+      pcom._interface = None
+    return pcom
 
 class _PCOMMeta(wintypes.LPVOID.__class__):
   def __mul__(bcls, size):
@@ -741,8 +758,8 @@ class PCOM(wintypes.LPVOID, metaclass=_PCOMMeta):
     return IUnknown._protos['AddRef'](self) if self else 0
   def Release(self):
     return IUnknown._protos['Release'](self) if self else 0
-  def QueryInterface(self, riid):
-    return IUnknown._protos['QueryInterface'](self, (ctypes.cast(riid, wintypes.LPCSTR) if isinstance(riid, (wintypes.PBYTES16, wintypes.PGUID, PUUID, wintypes.LPCSTR, wintypes.LPVOID)) else GUID(riid))) if self else None
+  def QueryInterface(self, pcom_riid):
+    return (pcom_riid(IUnknown._protos['QueryInterface'](self, pcom_riid.icls.IID)) if isinstance(pcom_riid, _PCOMMeta) else IUnknown._protos['QueryInterface'](self, (ctypes.cast(pcom_riid, wintypes.LPCSTR) if isinstance(pcom_riid, (wintypes.PBYTES16, wintypes.PGUID, PUUID, wintypes.LPCSTR, wintypes.LPVOID)) else GUID(pcom_riid)))) if self else None
   def __ctypes_from_outparam__(self):
     self.pcom = ctypes.cast(self, wintypes.LPVOID)
     return self
@@ -2438,108 +2455,74 @@ class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM
 _PS_IEnumInterfaceFactory_impl.proxy_impl.iiid = property(lambda self: self._iiid if any(self._iiid) else ((setattr(self, '_iiid', wintypes.BYTES16()) or self._iiid) if _COM_IEnumInterface_Proxy._offsetted[_PS_IEnumInterfaceFactory_impl.proxy_impl._iids[IEnumInterface.IID]]._call(self, 7, (ctypes.pointer(self._iiid),)) else self._iiid))
 _COM_IEnumInterface._ps_impl = _PS_IEnumInterfaceFactory_impl
 
-class IStream(IUnknown):
-  IID = GUID(0x0000000c, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
-  _protos['Read'] = 3, (PBUFFER, wintypes.ULONG), (wintypes.PULONG,)
-  _protos['Write'] = 4, (PBUFFER, wintypes.ULONG), (wintypes.PULONG,)
-  _protos['Seek'] = 5, (wintypes.LARGE_INTEGER, wintypes.DWORD), (wintypes.PLARGE_INTEGER,)
-  _protos['SetSize'] = 6, (wintypes.LARGE_INTEGER,), ()
-  _protos['CopyTo'] = 7, (wintypes.LPVOID, wintypes.LARGE_INTEGER), (wintypes.PLARGE_INTEGER, wintypes.PLARGE_INTEGER)
-  _protos['Commit'] = 8, (wintypes.DWORD,), ()
-  _protos['Clone'] = 13, (), (wintypes.PLPVOID,)
-  def Read(self, buffer, number=None):
-    if number is None or number > PBUFFER.length(buffer):
-      number = PBUFFER.length(buffer)
-    return self.__class__._protos['Read'](self.pI, buffer, number)
-  def Write(self, buffer, number=None):
-    if number is None or number > PBUFFER.length(buffer):
-      number = PBUFFER.length(buffer)
-    return self.__class__._protos['Write'](self.pI, buffer, number)
-  def Seek(self, move=0, origin=1):
-    if isinstance(origin, str):
-      origin = {'b': 0, 'beginning': 0, 'c': 1, 'current': 1, 'e': 2, 'end': 2}.get(origin.lower(), 1)
-    return self.__class__._protos['Seek'](self.pI, move, origin)
-  def SetSize(self, size):
-    return self.__class__._protos['SetSize'](self.pI, size) and size
-  def CopyTo(self, istream, number):
-    return self.__class__._protos['CopyTo'](self.pI, istream, number)
-  def Commit(self):
-    return self.__class__._protos['Commit'](self.pI, 0)
-  def Clone(self):
-    return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
-  shl.SHCreateStreamOnFileEx.restype = wintypes.ULONG
-  @classmethod
-  def CreateOnFile(cls, file_name, desired_access=0x20, factory=None):
-    if isinstance(desired_access, str):
-      desired_access = {'read': 0x20, 'write': 0x1021, 'readwrite': 0x12}.get(desired_access.lower(), 0x20)
-    pIStream = wintypes.LPVOID()
-    r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), False, None, ctypes.byref(pIStream))
-    if r == 0x80070002 and desired_access == 0x12:
-      r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), True, None, ctypes.byref(pIStream))
-    if ISetLastError(r):
-      return None
-    return cls(pIStream, factory)
-  shl.SHCreateMemStream.restype = wintypes.LPVOID
-  @classmethod
-  def CreateInMemory(cls, initializer=None, factory=None):
-    return cls(wintypes.LPVOID(shl.SHCreateMemStream(PBUFFER.from_param(initializer), wintypes.UINT(PBUFFER.length(initializer)))), factory)
-  @classmethod
-  def CreateOnMemory(cls, handle, delete_on_release=False, factory=None):
-    pIStream = wintypes.LPVOID()
-    ole32.CreateStreamOnHGlobal(handle, wintypes.BOOL(delete_on_release), ctypes.byref(pIStream))
-    if not pIStream:
-      return None
-    return cls(pIStream, factory)
-  def Get(self, number):
-    b = bytearray(number)
-    n = self.__class__._protos['Read'](self.pI, b, number)
-    return None if n is None else memoryview(b)[:n]
-  def GetContent(self):
-    if (p := self.Seek(0)) is None or (l := self.Seek(0, 'end')) is None:
-      return None
-    if self.Seek(0, 'beginning') is None:
-      return None
-    b = bytearray(l)
-    if self.Read(b, l) is None:
-      return None
-    self.Seek(p, 'beginning')
-    return b
+class _WSMeta(ctypes.Structure.__class__):
+  def __setattr__(cls, name, value):
+    r = super().__setattr__(name, value)
+    if name == '_fields_':
+      for n, t in cls._fields_:
+        if issubclass(t, _BGUID):
+          setattr(cls, '_' + n, getattr(cls, n))
+          setattr(cls, n, property(lambda s, _n='_'+n, _t=t: _t.from_buffer(s, getattr(cls, _n).offset), lambda s, v, _n='_'+n, _t=t: _t.from_buffer(s, getattr(cls, _n).offset).__setitem__(slice(None), _t.to_bytes(v)), getattr(cls, '_' + n).__delete__))
+        elif issubclass(t, (_BCode, COMPONENTS)):
+          setattr(cls, '_' + n, getattr(cls, n))
+          setattr(cls, n, property(lambda s, _n='_'+n, _t=t: _t(getattr(s, _n)), lambda s, v, _n='_'+n, _c=t.to_int: setattr(s, _n, _c(v)), getattr(cls, '_' + n).__delete__))
+        elif (b := issubclass(t, wintypes.BOOLE)) or issubclass(t, (PCOM, BSTRING, DATE)):
+          setattr(cls, '_' + n, getattr(cls, n))
+          setattr(cls, n, property((lambda s, _n='_'+n, _t=t: getattr(s, _n).value) if b else (lambda s, _n='_'+n, _t=t: getattr(s, _n).content), lambda s, v, _n='_'+n, _t=t: setattr(s, _n, (v if isinstance(v, _t) else _t(v))), getattr(cls, '_' + n).__delete__))
+        elif issubclass(t, (PBUFFER, _BPStruct, _BPAStruct)):
+          setattr(cls, '_' + n, getattr(cls, n))
+          setattr(cls, n, property(getattr(cls, '_' + n).__get__, lambda s, v, _n='_'+n, _t=t: setattr(s, _n, ctypes.cast(_t.from_param(v, True), _t)), getattr(cls, '_' + n).__delete__))
+    return r
+  def __mul__(bcls, size):
+    return _WSUtil._mul_cache.get((bcls, size)) or _WSUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _WSUtil._asitem, 'value': property(_WSUtil._avalue)}))
 
-class PCOMSTREAM(PCOM):
-  icls = IStream
-  def Read(self, buffer, number=None):
-    return IStream._protos['Read'](self, buffer, (PBUFFER.length(buffer) if number is None else number)) if self else None
-  def Write(self, buffer, number=None):
-    return IStream._protos['Write'](self, buffer, (PBUFFER.length(buffer) if number is None else number)) if self else None
-  def Seek(self, move=0, origin=1):
-    return IStream._protos['Seek'](self, move, ({'b': 0, 'beginning': 0, 'c': 1, 'current': 1, 'e': 2, 'end': 2}.get(origin.lower(), 1) if isinstance(origin, str) else origin)) if self else None
-  def SetSize(self, size):
-    return IStream._protos['SetSize'](self, size) and size if self else None
-  @staticmethod
-  def CreateInMemory(initializer=None, size=None):
-    return PCOMSTREAM(shl.SHCreateMemStream(PBUFFER.from_param(initializer), wintypes.UINT(PBUFFER.length(initializer) if size is None else size)))
-  @staticmethod
-  def MarshalInterface(riid, pI, context=0):
-    if not pI or not (istream := PCOMSTREAM.CreateInMemory()):
-      return None
-    if _IUtil.CoMarshalInterface(istream, riid, pI, context, None, 0) is None:
-      istream.Release()
-      return None
-    return istream
-  @staticmethod
-  def UnmarshalInterface(buffer, size, riid, pI=None):
-    if not (istream := PCOMSTREAM.CreateInMemory(buffer, size)):
-      return None
-    pI = _IUtil.CoUnmarshalInterfaceInto(istream, riid, ((pI := wintypes.LPVOID()) if pI is None else pI)) and pI
-    istream.Release()
-    return pI
-  @staticmethod
-  def ReleaseMarshalData(buffer, size):
-    if not (istream := PCOMSTREAM.CreateInMemory(buffer, size)):
-      return False
-    r = _IUtil.CoReleaseMarshalData(istream)
-    istream.Release()
-    return bool(r)
+class _BDStruct:
+  @classmethod
+  def from_param(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, dict):
+      return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, ctypes.Structure) else obj.get(n, 0)) for n, t in cls._fields_))
+    else:
+      return cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
+  def to_dict(self):
+    return {n: (getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n)) for n, t in self.__class__._fields_}
+  @property
+  def value(self):
+    return self.to_dict()
+  def __ctypes_from_outparam__(self):
+    return self.to_dict()
+  _for_json = value
+
+class _BTStruct:
+  @classmethod
+  def from_param(cls, obj):
+    return obj if obj is None or isinstance(obj, cls) else cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
+  def to_tuple(self):
+    return tuple(getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n) for n, t in self.__class__._fields_)
+  @property
+  def value(self):
+    return self.to_tuple()
+  def __ctypes_from_outparam__(self):
+    return self.to_tuple()
+  _for_json = value
+
+class _BPStruct:
+  @classmethod
+  def from_param(cls, obj, pointer=False):
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else cls._type_.from_param(obj))
+  @property
+  def value(self):
+    return getattr((s := self.contents), 'value', s) if self else None
+  _for_json = value
+
+class _BPAStruct:
+  @classmethod
+  def from_param(cls, obj, pointer=False):
+    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else (cls._type_ * len(obj))(*obj))
+  def value(self, count):
+    return getattr((a := ctypes.cast(self, ctypes.POINTER(self.__class__._type_ * count)).contents), 'value', a) if self else None
+  _for_json = value
 
 class _BSTRUtil:
   _mul_cache = {}
@@ -2800,6 +2783,187 @@ class COMPONENTS(wintypes.DWORD):
     return str(self)
   _for_json = code
 
+ISStgTy = {'Storage': 1, 'Stream': 2, 'LockBytes': 3, 'Property': 4}
+ISSTGTY = type('ISSTGTY', (_BCode, wintypes.INT), {}, _dict=ISStgTy, _def=1)
+
+ISLockTy = {'None': 0, 'Write': 1, 'Exclusive': 2, 'OnlyOnce': 3}
+ISLOCKTY = type('ISLOCKTY', (_BCode, wintypes.INT), {}, _dict=ISLockTy)
+
+ISStgm = (
+  {'Read': 0x0, 'Write': 0x1, 'ReadWrite': 0x2},
+  {'DenyNone': 0x40, 'DenyRead': 0x30, 'DenyWrite': 0x20, 'Exclusive': 0x10, 'Priority': 0x40000},
+  {'Create': 0x1000, 'Convert': 0x20000, 'FailIfThere': 0x0},
+  {'Direct': 0x0, 'Transacted': 0x10000},
+  {'NoScratch': 0x100000, 'NoSnapshot': 0x200000},
+  {'Simple': 0x8000000, 'DirectSWMR': 0x400000},
+  {'DeleteOnRelease': 0x4000000}
+)
+_ISSTGMs = tuple(type(('ISSTGM%d' % g), (_BCode, wintypes.DWORD), {}, _dict=group) for g, group in enumerate(ISStgm))
+class ISSTGM(_BCodeOr, wintypes.DWORD):
+  @classmethod
+  def name_code(cls, n):
+    if not isinstance(n, str):
+      return n
+    c = 0
+    for n_ in filter(None, n.lower().replace(' ', '|').replace('+', '|').split('|')):
+      for _ISSTGM in _ISSTGMs:
+        c |= _ISSTGM.name_code(n_)
+    return c
+  @classmethod
+  def code_name(cls, c):
+    n = []
+    for _ISSTGM in _ISSTGMs:
+      o = 0
+      for c_ in _ISSTGM._tab_nc.values():
+        o |= c_
+      if not (n_ := _ISSTGM.code_name(c & o)).isdecimal():
+        n.append(n_)
+    return ' | '.join(n)
+
+class ISSTATSTG(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('pwcsName', wintypes.LPOLESTR), ('type', ISSTGTY), ('cbSize', wintypes.ULARGE_INTEGER), ('mtime', FILETIME), ('ctime', FILETIME), ('atime', FILETIME), ('grfMode', ISSTGM), ('grfLocksSupported', ISLOCKTY), ('clsid', UUID), ('grfStateBits', wintypes.DWORD), ('reserved', wintypes.DWORD)]
+  def  __del__(self):
+    if self.pwcsName and getattr(self, '_needsclear', False):
+      _IUtil.CoTaskMemFree(wintypes.LPVOID.from_buffer(self, self.__class__.pwcsName.offset))
+      self.pwcsName = None
+  def __ctypes_from_outparam__(self):
+    self._needsclear = True
+    return super().__ctypes_from_outparam__()
+ISPSTATSTG = type('ISPSTATSTG', (_BPStruct, ctypes.POINTER(ISSTATSTG)),  {'_type_': ISSTATSTG})
+
+ISStatFlag = {'Default': 0, 'NoName': 1, 'NoOpen': 2}
+ISSTATFLAG = type('ISSTATFLAG', (_BCodeOr, wintypes.INT), {}, _dict=ISStatFlag)
+
+class IStream(IUnknown):
+  IID = GUID(0x0000000c, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+  _protos['Read'] = 3, (PBUFFER, wintypes.ULONG), (wintypes.PULONG,)
+  _protos['Write'] = 4, (PBUFFER, wintypes.ULONG), (wintypes.PULONG,)
+  _protos['Seek'] = 5, (wintypes.LARGE_INTEGER, wintypes.DWORD), (wintypes.PLARGE_INTEGER,)
+  _protos['SetSize'] = 6, (wintypes.LARGE_INTEGER,), ()
+  _protos['CopyTo'] = 7, (wintypes.LPVOID, wintypes.LARGE_INTEGER), (wintypes.PLARGE_INTEGER, wintypes.PLARGE_INTEGER)
+  _protos['Commit'] = 8, (wintypes.DWORD,), ()
+  _protos['Stat'] = 12, (ISPSTATSTG, ISSTATFLAG), ()
+  _protos['Clone'] = 13, (), (wintypes.PLPVOID,)
+  def Stat(self, flag=0):
+    stat = ISSTATSTG()
+    return None if self.__class__._protos['Stat'](self.pI, stat, flag) is None else stat.__ctypes_from_outparam__()
+  def Read(self, buffer, number=None):
+    if number is None or number > PBUFFER.length(buffer):
+      number = PBUFFER.length(buffer)
+    return self.__class__._protos['Read'](self.pI, buffer, number)
+  def Write(self, buffer, number=None):
+    if number is None or number > PBUFFER.length(buffer):
+      number = PBUFFER.length(buffer)
+    return self.__class__._protos['Write'](self.pI, buffer, number)
+  def Seek(self, move=0, origin=1):
+    if isinstance(origin, str):
+      origin = {'b': 0, 'beginning': 0, 'c': 1, 'current': 1, 'e': 2, 'end': 2}.get(origin.lower(), 1)
+    return self.__class__._protos['Seek'](self.pI, move, origin)
+  def SetSize(self, size):
+    return self.__class__._protos['SetSize'](self.pI, size) and size
+  def CopyTo(self, istream, number):
+    return self.__class__._protos['CopyTo'](self.pI, istream, number)
+  def Commit(self):
+    return self.__class__._protos['Commit'](self.pI, 0)
+  def Clone(self):
+    return self.__class__(self.__class__._protos['Clone'](self.pI), self.factory)
+  shl.SHCreateStreamOnFileEx.restype = wintypes.ULONG
+  @classmethod
+  def CreateOnFile(cls, file_name, desired_access=0x20, factory=None):
+    if isinstance(desired_access, str):
+      desired_access = {'read': 0x20, 'write': 0x1021, 'readwrite': 0x12}.get(desired_access.lower(), 0x20)
+    pIStream = wintypes.LPVOID()
+    r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), False, None, ctypes.byref(pIStream))
+    if r == 0x80070002 and desired_access == 0x12:
+      r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), True, None, ctypes.byref(pIStream))
+    if ISetLastError(r):
+      return None
+    return cls(pIStream, factory)
+  shl.SHCreateMemStream.restype = wintypes.LPVOID
+  @classmethod
+  def CreateInMemory(cls, initializer=None, factory=None):
+    return cls(wintypes.LPVOID(shl.SHCreateMemStream(PBUFFER.from_param(initializer), wintypes.UINT(PBUFFER.length(initializer)))), factory)
+  @classmethod
+  def CreateOnMemory(cls, handle, delete_on_release=False, factory=None):
+    pIStream = wintypes.LPVOID()
+    ole32.CreateStreamOnHGlobal(handle, wintypes.BOOL(delete_on_release), ctypes.byref(pIStream))
+    if not pIStream:
+      return None
+    return cls(pIStream, factory)
+  def Get(self, number):
+    b = bytearray(number)
+    n = self.__class__._protos['Read'](self.pI, b, number)
+    return None if n is None else memoryview(b)[:n]
+  def GetContent(self):
+    if (p := self.Seek(0)) is None or (l := self.Seek(0, 'end')) is None:
+      return None
+    if self.Seek(0, 'beginning') is None:
+      return None
+    b = bytearray(l)
+    if self.Read(b, l) is None:
+      return None
+    self.Seek(p, 'beginning')
+    return b
+
+class PCOMSTREAM(PCOM):
+  icls = IStream
+  def Stat(self, flag=0):
+    stat = ISSTATSTG()
+    return (None if IStream._protos['Stat'](self, stat, flag) is None else stat.__ctypes_from_outparam__()) if self else None
+  def Read(self, buffer, number=None):
+    return IStream._protos['Read'](self, buffer, (PBUFFER.length(buffer) if number is None else number)) if self else None
+  def Write(self, buffer, number=None):
+    return IStream._protos['Write'](self, buffer, (PBUFFER.length(buffer) if number is None else number)) if self else None
+  def Seek(self, move=0, origin=1):
+    return IStream._protos['Seek'](self, move, ({'b': 0, 'beginning': 0, 'c': 1, 'current': 1, 'e': 2, 'end': 2}.get(origin.lower(), 1) if isinstance(origin, str) else origin)) if self else None
+  def SetSize(self, size):
+    return IStream._protos['SetSize'](self, size) and size if self else None
+  def Commit(self, flags=0):
+    return IStream._protos['Commit'](self, flags) if self else None
+  @staticmethod
+  def CreateOnFile(file_name, desired_access=0x20):
+    if isinstance(desired_access, str):
+      desired_access = {'read': 0x20, 'write': 0x1021, 'readwrite': 0x12}.get(desired_access.lower(), 0x20)
+    pIStream = wintypes.LPVOID()
+    r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), False, None, ctypes.byref(pIStream))
+    if r == 0x80070002 and desired_access == 0x12:
+      r = shl.SHCreateStreamOnFileEx(wintypes.LPCWSTR(file_name), wintypes.DWORD(desired_access), wintypes.DWORD(0x20), True, None, ctypes.byref(pIStream))
+    if ISetLastError(r):
+      return None
+    return PCOMSTREAM(pIStream)
+  @staticmethod
+  def CreateInMemory(initializer=None, size=None):
+    return PCOMSTREAM(shl.SHCreateMemStream(PBUFFER.from_param(initializer), wintypes.UINT(PBUFFER.length(initializer) if size is None else size)))
+  def GetContent(self):
+    return IStream.GetContent(self)
+  @staticmethod
+  def MarshalInterface(riid, pI, context=0):
+    if not pI or not (istream := PCOMSTREAM.CreateInMemory()):
+      return None
+    if _IUtil.CoMarshalInterface(istream, riid, pI, context, None, 0) is None:
+      istream.Release()
+      return None
+    return istream
+  @staticmethod
+  def UnmarshalInterface(buffer, size, riid, pI=None):
+    if not (istream := PCOMSTREAM.CreateInMemory(buffer, size)):
+      return None
+    pI = _IUtil.CoUnmarshalInterfaceInto(istream, riid, ((pI := wintypes.LPVOID()) if pI is None else pI)) and pI
+    istream.Release()
+    return pI
+  @staticmethod
+  def ReleaseMarshalData(buffer, size):
+    if not (istream := PCOMSTREAM.CreateInMemory(buffer, size)):
+      return False
+    r = _IUtil.CoReleaseMarshalData(istream)
+    istream.Release()
+    return bool(r)
+  def GetDestinationStream(self):
+    pstreamfactory = self.QueryInterface(PCOMDESTINATIONSTREAMFACTORY)
+    pdeststream = pstreamfactory.GetDestinationStream()
+    pstreamfactory.Release()
+    return pdeststream
+
 class _WSUtil:
   _mul_cache = {}
   @staticmethod
@@ -2808,72 +2972,6 @@ class _WSUtil:
   @staticmethod
   def _avalue(arr):
     return tuple(s.value for s in arr)
-
-class _WSMeta(ctypes.Structure.__class__):
-  def __setattr__(cls, name, value):
-    r = super().__setattr__(name, value)
-    if name == '_fields_':
-      for n, t in cls._fields_:
-        if (b := issubclass(t, _BGUID)) or issubclass(t, (_BCode, COMPONENTS)):
-          setattr(cls, '_' + n, getattr(cls, n))
-          setattr(cls, n, property(lambda s, _n='_'+n, _t=t: _t(getattr(s, _n)), lambda s, v, _n='_'+n, _c=(t.to_bytes if b else t.to_int): setattr(s, _n, _c(v)), getattr(cls, '_' + n).__delete__))
-        elif (b := issubclass(t, wintypes.BOOLE)) or issubclass(t, (PCOM, BSTRING, DATE)):
-          setattr(cls, '_' + n, getattr(cls, n))
-          setattr(cls, n, property((lambda s, _n='_'+n, _t=t: getattr(s, _n).value) if b else (lambda s, _n='_'+n, _t=t: getattr(s, _n).content), lambda s, v, _n='_'+n, _t=t: setattr(s, _n, (v if isinstance(v, _t) else _t(v))), getattr(cls, '_' + n).__delete__))
-        elif issubclass(t, (PBUFFER, _BPStruct, _BPAStruct)):
-          setattr(cls, '_' + n, getattr(cls, n))
-          setattr(cls, n, property(getattr(cls, '_' + n).__get__, lambda s, v, _n='_'+n, _t=t: setattr(s, _n, ctypes.cast(_t.from_param(v, True), _t)), getattr(cls, '_' + n).__delete__))
-    return r
-  def __mul__(bcls, size):
-    return _WSUtil._mul_cache.get((bcls, size)) or _WSUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.Structure.__class__.__mul__(bcls, size),), {'__setitem__': _WSUtil._asitem, 'value': property(_WSUtil._avalue)}))
-
-class _BDStruct:
-  @classmethod
-  def from_param(cls, obj):
-    if obj is None or isinstance(obj, cls):
-      return obj
-    if isinstance(obj, dict):
-      return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, ctypes.Structure) else obj.get(n, 0)) for n, t in cls._fields_))
-    else:
-      return cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
-  def to_dict(self):
-    return {n: (getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n)) for n, t in self.__class__._fields_}
-  @property
-  def value(self):
-    return self.to_dict()
-  def __ctypes_from_outparam__(self):
-    return self.to_dict()
-  _for_json = value
-
-class _BTStruct:
-  @classmethod
-  def from_param(cls, obj):
-    return obj if obj is None or isinstance(obj, cls) else cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t), o in zip(cls._fields_, obj)))
-  def to_tuple(self):
-    return tuple(getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n) for n, t in self.__class__._fields_)
-  @property
-  def value(self):
-    return self.to_tuple()
-  def __ctypes_from_outparam__(self):
-    return self.to_tuple()
-  _for_json = value
-
-class _BPStruct:
-  @classmethod
-  def from_param(cls, obj, pointer=False):
-    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else cls._type_.from_param(obj))
-  @property
-  def value(self):
-    return getattr((s := self.contents), 'value', s) if self else None
-  _for_json = value
-
-class _BPAStruct:
-  @classmethod
-  def from_param(cls, obj, pointer=False):
-    return obj if obj is None or isinstance(obj, (cls.__bases__[1], wintypes.LPVOID, ctypes.CArgObject)) else (ctypes.pointer if pointer else ctypes.byref)(obj if isinstance(obj, ctypes.Array) and issubclass(obj._type_, cls._type_) else (cls._type_ * len(obj))(*obj))
-  def value(self, count):
-    return getattr((a := ctypes.cast(self, ctypes.POINTER(self.__class__._type_ * count)).contents), 'value', a) if self else None
-  _for_json = value
 
 class _BLOBUtil:
   _mul_cache = {}
@@ -3390,6 +3488,12 @@ class _ARRAY_VARIANT(_ARRAY_BVARIANT, PVARIANT):
 class _ARRAY_PROPVARIANT(_ARRAY_BVARIANT, PPROPVARIANT):
   pass
 
+class PROPERTYKEY(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('fmtid', UUID), ('pid', wintypes.DWORD)]
+  def to_key(self):
+    return (GUID(self.fmtid), self.pid)
+PPROPERTYKEY = type('PPROPERTYKEY', (_BPStruct, ctypes.POINTER(PROPERTYKEY)),  {'_type_': PROPERTYKEY})
+
 class IWICStream(IStream):
   IID = GUID(0x135ff860, 0x22b7, 0x4ddf, 0xb0, 0xf6, 0x21, 0x8f, 0x4f, 0x29, 0x9a, 0x43)
   _protos['InitializeFromIStream'] = 14, (wintypes.LPVOID,), ()
@@ -3709,47 +3813,47 @@ WICCOMPONENT = _GMeta('WICCOMPONENT', (_BGUID, wintypes.GUID), {'_type_': ctypes
 WICPCOMPONENT = type('WICPCOMPONENT', (_BPGUID, ctypes.POINTER(WICCOMPONENT)), {'_type_': WICCOMPONENT})
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
-WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WICColorContextType.items()}, '_tab_cn': {c: n for n, c in WICColorContextType.items()}, '_def': 0})
+WICCOLORCONTEXTTYPE = type('WICCOLORCONTEXTTYPE', (_BCode, wintypes.INT), {}, _dict=WICColorContextType)
 WICPCOLORCONTEXTTYPE = ctypes.POINTER(WICCOLORCONTEXTTYPE)
 
 WICEXIFColorSpace = {'sRGB': 1, 'AdobeRGB': 2, 'Adobe RGB': 2, 'Uncalibrated': 65535}
-WICEXIFCOLORSPACE = type('WICEXIFCOLORSPACE', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WICEXIFColorSpace.items()}, '_tab_cn': {c: n for n, c in WICEXIFColorSpace.items()}, '_def': 1})
+WICEXIFCOLORSPACE = type('WICEXIFCOLORSPACE', (_BCode, wintypes.UINT), {}, _dict=WICEXIFColorSpace, _def=1)
 WICPEXIFCOLORSPACE = ctypes.POINTER(WICEXIFCOLORSPACE)
 
 WICPaletteType = {'Custom': 0, 'MedianCut': 1, 'FixedBW': 2, 'FixedHalftone8': 3, 'FixedHalftone27': 4, 'FixedHalftone64': 5, 'FixedHalftone125': 6, 'FixedHalftone216': 7, 'FixedHalftone252': 8, 'FixedHalftone256': 9, 'FixedGray4': 10, 'FixedGray16': 11, 'FixedGray256': 12}
-WICPALETTETYPE = type('WICPALETTETYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPaletteType.items()}, '_tab_cn': {c: n for n, c in WICPaletteType.items()}, '_def': 0})
+WICPALETTETYPE = type('WICPALETTETYPE', (_BCode, wintypes.DWORD), {}, _dict=WICPaletteType)
 WICPPALETTETYPE = ctypes.POINTER(WICPALETTETYPE)
 
 WICDecoderCapabilities = {'None': 0, 'SameEncoder': 1, 'CanDecodeAllImages': 2, 'CanDecodeSomeImages': 4, 'CanEnumerateMetadata': 8, 'CanDecodeThumbnail': 16}
-WICDECODERCAPABILITIES = type('WICDECODERCAPABILITIES', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecoderCapabilities.items()}, '_tab_cn': {c: n for n, c in WICDecoderCapabilities.items()}, '_def': 0})
+WICDECODERCAPABILITIES = type('WICDECODERCAPABILITIES', (_BCodeOr, wintypes.DWORD), {}, _dict=WICDecoderCapabilities)
 WICPDECODERCAPABILITIES = ctypes.POINTER(WICDECODERCAPABILITIES)
 
 WICDecodeOption = {'Demand': 0, 'OnDemand': 0, 'Load': 1, 'OnLoad': 1}
-WICDECODEOPTION = type('WICDECODEOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDecodeOption.items()}, '_tab_cn': {c: n for n, c in WICDecodeOption.items()}, '_def': 0})
+WICDECODEOPTION = type('WICDECODEOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICDecodeOption)
 
 WICBitmapEncoderCacheOption = {'InMemory': 0, 'TempFile': 1, 'None': 2, 'No': 2}
-WICBITMAPENCODERCACHEOPTION = type('WICBITMAPENCODERCACHEOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICBitmapEncoderCacheOption.items()}, '_tab_cn': {c: n for n, c in WICBitmapEncoderCacheOption.items()}, '_def': 2})
+WICBITMAPENCODERCACHEOPTION = type('WICBITMAPENCODERCACHEOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICBitmapEncoderCacheOption, _def=2)
 
 WICJpegYCrCbSubsamplingOption = {'Default': 0, '420': 1, '422': 2, '444': 3, '440': 4}
-WICJPEGYCRCBSUBSAMPLINGOPTION = type('WICJPEGYCRCBSUBSAMPLINGOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegYCrCbSubsamplingOption.items()}, '_tab_cn': {c: n for n, c in WICJpegYCrCbSubsamplingOption.items()}, '_def': 0})
+WICJPEGYCRCBSUBSAMPLINGOPTION = type('WICJPEGYCRCBSUBSAMPLINGOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICJpegYCrCbSubsamplingOption)
 
 WICJpegIndexingOption = {'Demand': 0, 'OnDemand': 0, 'Load': 1, 'OnLoad': 1}
-WICJPEGINDEXINGOPTION = type('WICJPEGINDEXINGOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegIndexingOption.items()}, '_tab_cn': {c: n for n, c in WICJpegIndexingOption.items()}, '_def': 0})
+WICJPEGINDEXINGOPTION = type('WICJPEGINDEXINGOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICJpegIndexingOption)
 
 WICJpegTransferMatrix = {'Identity': 0, 'BT601': 1}
-WICJPEGTRANSFERMATRIX = type('WICJPEGTRANSFERMATRIX', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegTransferMatrix.items()}, '_tab_cn': {c: n for n, c in WICJpegTransferMatrix.items()}, '_def': 0})
+WICJPEGTRANSFERMATRIX = type('WICJPEGTRANSFERMATRIX', (_BCode, wintypes.DWORD), {}, _dict=WICJpegTransferMatrix)
 
 WICJpegScanType = {'Interleaved': 0, 'PlanarComponents': 1, 'Progressive': 2}
-WICJPEGSCANTYPE = type('WICJPEGSCANTYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegScanType.items()}, '_tab_cn': {c: n for n, c in WICJpegScanType.items()}, '_def': 0})
+WICJPEGSCANTYPE = type('WICJPEGSCANTYPE', (_BCode, wintypes.DWORD), {}, _dict=WICJpegScanType)
 
 WICJpegSampleFactors = {'One': 0x11, 'Three_420': 0x111122, 'Three_422': 0x111121, 'Three_440': 0x111112, 'Three_444': 0x111111}
-WICJPEGSAMPLEFACTORS = type('WICJPEGSAMPLEFACTORS', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegSampleFactors.items()}, '_tab_cn': {c: n for n, c in WICJpegSampleFactors.items()}, '_def': 0x111122})
+WICJPEGSAMPLEFACTORS = type('WICJPEGSAMPLEFACTORS', (_BCode, wintypes.DWORD), {}, _dict=WICJpegSampleFactors, _def=0x111122)
 
 WICJpegQuantizationBaseline = {'One': 0x0, 'Three': 0x10100}
-WICJPEGQUANTIZATIONBASELINE = type('WICJPEGQUANTIZATIONBASELINE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegQuantizationBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegQuantizationBaseline.items()}, '_def': 0x10100})
+WICJPEGQUANTIZATIONBASELINE = type('WICJPEGQUANTIZATIONBASELINE', (_BCode, wintypes.DWORD), {}, _dict=WICJpegQuantizationBaseline, _def=0x10100)
 
 WICJpegHuffmanBaseline = {'One': 0x0, 'Three': 0x111100}
-WICJPEGHUFFMANBASELINE = type('WICJPEGHUFFMANBASELINE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICJpegHuffmanBaseline.items()}, '_tab_cn': {c: n for n, c in WICJpegHuffmanBaseline.items()}, '_def': 0x111100})
+WICJPEGHUFFMANBASELINE = type('WICJPEGHUFFMANBASELINE', (_BCode, wintypes.DWORD), {}, _dict=WICJpegHuffmanBaseline, _def=0x111100)
 
 class WICJPEGFRAMEHEADER(_BDStruct, ctypes.Structure):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('TransferMatrix', WICJPEGTRANSFERMATRIX), ('ScanType', WICJPEGSCANTYPE), ('cComponents', wintypes.UINT), ('ComponentIdentifiers', COMPONENTS), ('SampleFactors', WICJPEGSAMPLEFACTORS), ('QuantizationTableIndices', WICJPEGQUANTIZATIONBASELINE)]
@@ -3774,13 +3878,13 @@ class WICJPEGSCANHEADER(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 WICPJPEGSCANHEADER = ctypes.POINTER(WICJPEGSCANHEADER)
 
 DXGIFormat = {'UNKNOWN': 0, 'R32G32B32A32_TYPELESS': 1, 'R32G32B32A32_FLOAT': 2, 'R32G32B32A32_UINT': 3, 'R32G32B32A32_SINT': 4, 'R32G32B32_TYPELESS': 5, 'R32G32B32_FLOAT': 6, 'R32G32B32_UINT': 7, 'R32G32B32_SINT': 8, 'R16G16B16A16_TYPELESS': 9, 'R16G16B16A16_FLOAT': 10, 'R16G16B16A16_UNORM': 11, 'R16G16B16A16_UINT': 12, 'R16G16B16A16_SNORM': 13, 'R16G16B16A16_SINT': 14, 'R32G32_TYPELESS': 15, 'R32G32_FLOAT': 16, 'R32G32_UINT': 17, 'R32G32_SINT': 18, 'R32G8X24_TYPELESS': 19, 'D32_FLOAT_S8X24_UINT': 20, 'R32_FLOAT_X8X24_TYPELESS': 21, 'X32_TYPELESS_G8X24_UINT': 22, 'R10G10B10A2_TYPELESS': 23, 'R10G10B10A2_UNORM': 24, 'R10G10B10A2_UINT': 25, 'R11G11B10_FLOAT': 26, 'R8G8B8A8_TYPELESS': 27, 'R8G8B8A8_UNORM': 28, 'R8G8B8A8_UNORM_SRGB': 29, 'R8G8B8A8_UINT': 30, 'R8G8B8A8_SNORM': 31, 'R8G8B8A8_SINT': 32, 'R16G16_TYPELESS': 33, 'R16G16_FLOAT': 34, 'R16G16_UNORM': 35, 'R16G16_UINT': 36, 'R16G16_SNORM': 37, 'R16G16_SINT': 38, 'R32_TYPELESS': 39, 'D32_FLOAT': 40, 'R32_FLOAT': 41, 'R32_UINT': 42, 'R32_SINT': 43, 'R24G8_TYPELESS': 44, 'D24_UNORM_S8_UINT': 45, 'R24_UNORM_X8_TYPELESS': 46, 'X24_TYPELESS_G8_UINT': 47, 'R8G8_TYPELESS': 48, 'R8G8_UNORM': 49, 'R8G8_UINT': 50, 'R8G8_SNORM': 51, 'R8G8_SINT': 52, 'R16_TYPELESS': 53, 'R16_FLOAT': 54, 'D16_UNORM': 55, 'R16_UNORM': 56, 'R16_UINT': 57, 'R16_SNORM': 58, 'R16_SINT': 59, 'R8_TYPELESS': 60, 'R8_UNORM': 61, 'R8_UINT': 62, 'R8_SNORM': 63, 'R8_SINT': 64, 'A8_UNORM': 65, 'R1_UNORM': 66, 'R9G9B9E5_SHAREDEXP': 67, 'R8G8_B8G8_UNORM': 68, 'G8R8_G8B8_UNORM': 69, 'BC1_TYPELESS': 70, 'BC1_UNORM': 71, 'BC1_UNORM_SRGB': 72, 'BC2_TYPELESS': 73, 'BC2_UNORM': 74, 'BC2_UNORM_SRGB': 75, 'BC3_TYPELESS': 76, 'BC3_UNORM': 77, 'BC3_UNORM_SRGB': 78, 'BC4_TYPELESS': 79, 'BC4_UNORM': 80, 'BC4_SNORM': 81, 'BC5_TYPELESS': 82, 'BC5_UNORM': 83, 'BC5_SNORM': 84, 'B5G6R5_UNORM': 85, 'B5G5R5A1_UNORM': 86, 'B8G8R8A8_UNORM': 87, 'B8G8R8X8_UNORM': 88, 'R10G10B10_XR_BIAS_A2_UNORM': 89, 'B8G8R8A8_TYPELESS': 90, 'B8G8R8A8_UNORM_SRGB': 91, 'B8G8R8X8_TYPELESS': 92, 'B8G8R8X8_UNORM_SRGB': 93, 'BC6H_TYPELESS': 94, 'BC6H_UF16': 95, 'BC6H_SF16': 96, 'BC7_TYPELESS': 97, 'BC7_UNORM': 98, 'BC7_UNORM_SRGB': 99, 'AYUV': 100, 'Y410': 101, 'Y416': 102, 'NV12': 103, 'P010': 104, 'P016': 105, '420_OPAQUE': 106, 'YUY2': 107, 'Y210': 108, 'Y216': 109, 'NV11': 110, 'AI44': 111, 'IA44': 112, 'P8': 113, 'A8P8': 114, 'B4G4R4A4_UNORM': 115, 'P208': 130, 'V208': 131, 'V408': 132, 'SAMPLER_FEEDBACK_MIN_MIP_OPAQUE': 189, 'SAMPLER_FEEDBACK_MIP_REGION_USED_OPAQUE': 190, 'A4B4G4R4_UNORM': 191}
-DXGIFORMAT = type('DXGIFORMAT', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIFormat.items()}, '_tab_cn': {c: n for n, c in DXGIFormat.items()}, '_def': 0})
+DXGIFORMAT = type('DXGIFORMAT', (_BCode, wintypes.UINT), {}, _dict=DXGIFormat)
 
 WICDdsDimension = {'1D': 0, '2D': 1, '3D': 2, 'Cube': 3}
-WICDDSDIMENSION = type('WICDDSDIMENSION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDdsDimension.items()}, '_tab_cn': {c: n for n, c in WICDdsDimension.items()}, '_def': 0})
+WICDDSDIMENSION = type('WICDDSDIMENSION', (_BCode, wintypes.DWORD), {}, _dict=WICDdsDimension)
 
 WICDdsAlphaMode = {'Unknown': 0, 'Straight': 1, 'Premultiplied': 2, 'Opaque': 3, 'Custom': 4}
-WICDDSALPHAMODE = type('WICDDSALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDdsAlphaMode.items()}, '_tab_cn': {c: n for n, c in WICDdsAlphaMode.items()}, '_def': 0})
+WICDDSALPHAMODE = type('WICDDSALPHAMODE', (_BCode, wintypes.DWORD), {}, _dict=WICDdsAlphaMode)
 
 class WICDDSFORMATINFO(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('DxgiFormat', DXGIFORMAT), ('BytesPerBlock', wintypes.UINT), ('BlockWidth', wintypes.UINT), ('BlockHeight', wintypes.UINT)]
@@ -3811,14 +3915,14 @@ class WICBITMAPPLANE(ctypes.Structure, metaclass=_WSMeta):
 WICPBITMAPPLANE = ctypes.POINTER(WICBITMAPPLANE)
 
 WICRawCapabilities = {'NotSupported': 0, 'GetSupported': 1, 'FullySupported': 2}
-WICRAWCAPABILITIES = type('WICRAWCAPABILITIES', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawCapabilities.items()}, '_tab_cn': {c: n for n, c in WICRawCapabilities.items()}, '_def': 0})
+WICRAWCAPABILITIES = type('WICRAWCAPABILITIES', (_BCode, wintypes.DWORD), {}, _dict=WICRawCapabilities)
 
 WICNamedWhitePoint = {'None': 0x0, 'Default': 0x1, 'AsShot': 0x1, 'Daylight': 0x2, 'Cloudy': 0x4, 'Shade': 0x8, 'Tungsten': 0x10, 'Fluorescent': 0x20, 'Flash': 0x40, 'Underwater': 0x80, 'Custom': 0x100, 'AutoWhiteBalance': 0x200}
-WICNAMEDWHITEPOINT = type('WICNAMEDWHITEPOINT', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICNamedWhitePoint.items()}, '_tab_cn': {c: n for n, c in WICNamedWhitePoint.items()}, '_def': 0})
+WICNAMEDWHITEPOINT = type('WICNAMEDWHITEPOINT', (_BCodeOr, wintypes.DWORD), {}, _dict=WICNamedWhitePoint)
 WICPNAMEDWHITEPOINT = ctypes.POINTER(WICNAMEDWHITEPOINT)
 
 WICRawRotationCapabilities = {'NotSupported': 0, 'GetSupported': 1, 'NinetyDegreesSupported': 2, 'FullySupported': 3}
-WICRAWROTATIONCAPABILITIES = type('WICRAWROTATIONCAPABILITIES', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawRotationCapabilities.items()}, '_tab_cn': {c: n for n, c in WICRawRotationCapabilities.items()}, '_def': 0})
+WICRAWROTATIONCAPABILITIES = type('WICRAWROTATIONCAPABILITIES', (_BCode, wintypes.DWORD), {}, _dict=WICRawRotationCapabilities)
 
 class WICRAWCAPABILITIESINFO(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbSize', wintypes.UINT), ('CodecMajorVersion', wintypes.UINT), ('CodecMinorVersion', wintypes.UINT), ('ExposureCompensationSupport', WICRAWCAPABILITIES), ('ContrastSupport', WICRAWCAPABILITIES), ('RGBWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupport', WICRAWCAPABILITIES), ('NamedWhitePointSupportMask', WICNAMEDWHITEPOINT), ('KelvinWhitePointSupport', WICRAWCAPABILITIES), ('GammaSupport', WICRAWCAPABILITIES), ('TintSupport', WICRAWCAPABILITIES), ('SaturationSupport', WICRAWCAPABILITIES), ('SharpnessSupport', WICRAWCAPABILITIES), ('NoiseReductionSupport', WICRAWCAPABILITIES), ('NDestinationColorProfileSupport', WICRAWCAPABILITIES), ('ToneCurveSupport', WICRAWCAPABILITIES), ('RotationSupport', WICRAWROTATIONCAPABILITIES), ('RenderModeSupport', WICRAWCAPABILITIES)]
@@ -3834,7 +3938,7 @@ class WICRAWCAPABILITIESINFO(ctypes.Structure, metaclass=_WSMeta):
 WICPRAWCAPABILITIESINFO = ctypes.POINTER(WICRAWCAPABILITIESINFO)
 
 WICRawParameterSet = {'AsShot': 1, 'UserAdjusted': 2, 'AutoAdjusted': 3}
-WICRAWPARAMETERSET = type('WICRAWPARAMETERSET', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawParameterSet.items()}, '_tab_cn': {c: n for n, c in WICRawParameterSet.items()}, '_def': 1})
+WICRAWPARAMETERSET = type('WICRAWPARAMETERSET', (_BCode, wintypes.DWORD), {}, _dict=WICRawParameterSet, _def=1)
 
 class WICRAWTONECURVEPOINT(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Input', wintypes.DOUBLE), ('Output', wintypes.DOUBLE)]
@@ -3848,23 +3952,23 @@ class WICRAWTONECURVE(ctypes.Structure):
     return self.to_tuple()
 
 WICRawRenderMode = {'Draft': 1, 'Normal': 2, 'BestQuality': 3}
-WICRAWRENDERMODE = type('WICRAWRENDERMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICRawRenderMode.items()}, '_tab_cn': {c: n for n, c in WICRawRenderMode.items()}, '_def': 2})
+WICRAWRENDERMODE = type('WICRAWRENDERMODE', (_BCode, wintypes.DWORD), {}, _dict=WICRawRenderMode, _def=2)
 WICPRAWRENDERMODE = ctypes.POINTER(WICRAWRENDERMODE)
 
 WICPngFilterOption = {'Unspecified': 0, 'None': 1, 'Sub': 2, 'Up': 3, 'Average': 4, 'Paeth': 5, 'Adaptive': 6}
-WICPNGFILTEROPTION = type('WICPNGFILTEROPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPngFilterOption.items()}, '_tab_cn': {c: n for n, c in WICPngFilterOption.items()}, '_def': 0})
+WICPNGFILTEROPTION = type('WICPNGFILTEROPTION', (_BCode, wintypes.DWORD), {}, _dict=WICPngFilterOption)
 
 WICTiffCompressionOption = {'DontCare': 0, 'None': 1, 'CCITT3': 2, 'CCITT4': 3, 'LZW': 4, 'RLE': 5, 'ZIP': 6, 'LZWH': 7, 'LZWHDifferencing': 7}
-WICTIFFCOMPRESSIONOPTION = type('WICTIFFCOMPRESSIONOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTiffCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICTiffCompressionOption.items()}, '_def': 0})
+WICTIFFCOMPRESSIONOPTION = type('WICTIFFCOMPRESSIONOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICTiffCompressionOption)
 
 WICHeifCompressionOption = {'DontCare': 0, 'None': 1, 'HEVC': 2, 'AV1': 3}
-WICHEIFCOMPRESSIONOPTION = type('WICHEIFCOMPRESSIONOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICHeifCompressionOption.items()}, '_tab_cn': {c: n for n, c in WICHeifCompressionOption.items()}, '_def': 0})
+WICHEIFCOMPRESSIONOPTION = type('WICHEIFCOMPRESSIONOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICHeifCompressionOption)
 
 WICCreateCacheOption = {'None': 0, 'No': 0, 'Demand': 1, 'OnDemand': 1, 'Load': 2, 'OnLoad': 2}
-WICCREATECACHEOPTION = type('WICCREATECACHEOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICCreateCacheOption.items()}, '_tab_cn': {c: n for n, c in WICCreateCacheOption.items()}, '_def': 0})
+WICCREATECACHEOPTION = type('WICCREATECACHEOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICCreateCacheOption)
 
 D2D1AlphaMode = {'Unknown': 0, 'Premultiplied': 1, 'Straight': 2, 'Ignore': 3}
-D2D1ALPHAMODE = type('D2D1ALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1AlphaMode.items()}, '_tab_cn': {c: n for n, c in D2D1AlphaMode.items()}, '_def': 0})
+D2D1ALPHAMODE = type('D2D1ALPHAMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1AlphaMode)
 
 class D2D1PIXELFORMAT(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('format', DXGIFORMAT), ('alphaMode', D2D1ALPHAMODE)]
@@ -3875,41 +3979,41 @@ class WICIMAGEPARAMETERS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 WICPIMAGEPARAMETERS = type('WICPIMAGEPARAMETERS', (_BPStruct, ctypes.POINTER(WICIMAGEPARAMETERS)), {'_type_': WICIMAGEPARAMETERS})
 
 WICBitmapAlphaChannelOption = {'Use': 0, 'UseAlpha': 0, 'UsePremultiplied': 1, 'UsePremultipliedAlpha': 1, 'Ignore': 2, 'IgnoreAlpha': 2}
-WICBITMAPALPHACHANNELOPTION = type('WICBITMAPALPHACHANNELOPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICBitmapAlphaChannelOption.items()}, '_tab_cn': {c: n for n, c in WICBitmapAlphaChannelOption.items()}, '_def': 0})
+WICBITMAPALPHACHANNELOPTION = type('WICBITMAPALPHACHANNELOPTION', (_BCode, wintypes.DWORD), {}, _dict=WICBitmapAlphaChannelOption)
 
 WICPersistOptions = {'Default': 0, 'LittleEndian': 0, 'BigEndian': 1, 'StrictFormat': 2, 'NoCacheStream': 4, 'PreferUTF8': 8}
-WICPERSISTOPTIONS = type('WICPERSISTOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPersistOptions.items()}, '_tab_cn': {c: n for n, c in WICPersistOptions.items()}, '_def': 0})
+WICPERSISTOPTIONS = type('WICPERSISTOPTIONS', (_BCodeOr, wintypes.DWORD), {}, _dict=WICPersistOptions)
 WICPPERSISTOPTIONS = ctypes.POINTER(WICPERSISTOPTIONS)
 
 WICMetadataCreationOptions = {**WICPersistOptions, 'Default': 0x0, 'AllowUnknown': 0x0, 'FailUnknown': 0x10000}
-WICMETADATACREATIONOPTIONS = type('WICMETADATACREATIONOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICMetadataCreationOptions.items()}, '_tab_cn': {c: n for n, c in WICMetadataCreationOptions.items()}, '_def': 0})
+WICMETADATACREATIONOPTIONS = type('WICMETADATACREATIONOPTIONS', (_BCodeOr, wintypes.DWORD), {}, _dict=WICMetadataCreationOptions)
 
 WICDitherType = {'None': 0, 'Solid': 0, 'Ordered4x4': 1, 'Ordered8x8': 2, 'Ordered16x16': 3, 'Spiral4x4': 4, 'Spiral8x8': 5, 'DualSpiral4x4': 6, 'DualSpiral8x8': 7, 'ErrorDiffusion': 8}
-WICDITHERTYPE = type('WICDITHERTYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICDitherType.items()}, '_tab_cn': {c: n for n, c in WICDitherType.items()}, '_def': 0})
+WICDITHERTYPE = type('WICDITHERTYPE', (_BCode, wintypes.DWORD), {}, _dict=WICDitherType)
 
 WICInterpolationMode = {'Nearest': 0, 'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'Fant': 3, 'HighQualityCubic': 4}
-WICINTERPOLATIONMODE = type('WICINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICInterpolationMode.items()}, '_tab_cn': {c: n for n, c in WICInterpolationMode.items()}, '_def': 3})
+WICINTERPOLATIONMODE = type('WICINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {}, _dict=WICInterpolationMode, _def=3)
 
 WICTransformOptions = {'Rotate0': 0, 'Rotate90': 1, 'Rotate180': 2, 'Rotate270': 3, 'FlipHorizontal': 8, 'FlipVertical': 16}
-WICTRANSFORMOPTIONS = type('WICTRANSFORMOPTIONS', (_BCodeT, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICTransformOptions.items()}, '_tab_cn': {c: n for n, c in WICTransformOptions.items()}, '_def': 0})
+WICTRANSFORMOPTIONS = type('WICTRANSFORMOPTIONS', (_BCodeT, wintypes.DWORD), {}, _dict=WICTransformOptions)
 
 WICPlanarOption = {'Default': 0, 'PreserveSubsampling': 1}
-WICPLANAROPTION = type('WICPLANAROPTION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPlanarOption.items()}, '_tab_cn': {c: n for n, c in WICPlanarOption.items()}, '_def': 0})
+WICPLANAROPTION = type('WICPLANAROPTION', (_BCode, wintypes.DWORD), {}, _dict=WICPlanarOption)
 
 class WICBITMAPPLANEDESCRIPTION(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Format', WICPIXELFORMAT), ('Width', wintypes.UINT), ('Height', wintypes.UINT)]
 WICPBITMAPPLANEDESCRIPTION = ctypes.POINTER(WICBITMAPPLANEDESCRIPTION)
 
 WICComponentType = {'BitmapDecoder': 0x1, 'Decoder': 0x1, 'BitmapEncoder': 0x2, 'Encoder': 0x2, 'FormatConverter': 0x4 , 'PixelFormatConverter': 0x4, 'MetadataReader': 0x8, 'MetadataWriter': 0x10, 'PixelFormat': 0x20, 'Component': 0x3f, 'AllComponents': 0x3f}
-WICCOMPONENTTYPE = type('WICCOMPONENTTYPE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentType.items()}, '_tab_cn': {c: n for n, c in WICComponentType.items()}, '_def': 0x3f})
+WICCOMPONENTTYPE = type('WICCOMPONENTTYPE', (_BCodeOr, wintypes.DWORD), {}, _dict=WICComponentType, _def=0x3f)
 WICPCOMPONENTTYPE = ctypes.POINTER(WICCOMPONENTTYPE)
 
 WICComponentSigning = {'Signed': 0x1, 'Unsigned': 0x2, 'Safe': 0x4, 'Disabled': 0x80000000}
-WICCOMPONENTSIGNING = type('WICCOMPONENTSIGNING', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentSigning.items()}, '_tab_cn': {c: n for n, c in WICComponentSigning.items()}, '_def': 0x4})
+WICCOMPONENTSIGNING = type('WICCOMPONENTSIGNING', (_BCodeOr, wintypes.DWORD), {}, _dict=WICComponentSigning, _def=0x4)
 WICPCOMPONENTSIGNING = ctypes.POINTER(WICCOMPONENTSIGNING)
 
 WICComponentEnumerateOptions = {'Default': 0x0, 'Refresh': 0x1, 'Disabled': 0x80000000, 'Unsigned': 0x40000000, 'BuiltInOnly': 0x20000000}
-WICCOMPONENTENUMERATEOPTIONS = type('WICCOMPONENTENUMERATEOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICComponentEnumerateOptions.items()}, '_tab_cn': {c: n for n, c in WICComponentEnumerateOptions.items()}, '_def': 0x0})
+WICCOMPONENTENUMERATEOPTIONS = type('WICCOMPONENTENUMERATEOPTIONS', (_BCodeOr, wintypes.DWORD), {}, _dict=WICComponentEnumerateOptions)
 
 class WICBITMAPPATTERN(ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Position', wintypes.ULARGE_INTEGER), ('Length', wintypes.ULONG), ('Pattern', wintypes.LPVOID), ('Mask', wintypes.LPVOID), ('EndOfStream', wintypes.BOOLE)]
@@ -3920,7 +4024,7 @@ class WICBITMAPPATTERN(ctypes.Structure, metaclass=_WSMeta):
     return self.to_dict()
 
 WICPixelFormatNumericRepresentation = {'Unspecified': 0, 'Indexed': 1, 'UnsignedInteger': 2, 'SignedInteger': 3, 'Fixed': 4, 'Float': 5}
-WICPIXELFORMATNUMERICREPRESENTATION = type('WICPIXELFORMATNUMERICREPRESENTATION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WICPixelFormatNumericRepresentation.items()}, '_tab_cn': {c: n for n, c in WICPixelFormatNumericRepresentation.items()}, '_def': 0})
+WICPIXELFORMATNUMERICREPRESENTATION = type('WICPIXELFORMATNUMERICREPRESENTATION', (_BCode, wintypes.DWORD), {}, _dict=WICPixelFormatNumericRepresentation)
 WICPPIXELFORMATNUMERICREPRESENTATION = ctypes.POINTER(WICPIXELFORMATNUMERICREPRESENTATION)
 
 class WICMETADATAPATTERN(ctypes.Structure, metaclass=_WSMeta):
@@ -4289,55 +4393,55 @@ class IWICStreamProvider(IUnknown):
     return self.__class__._protos['RefreshStream'](self.pI)
 
 MetadataOrientation = {'TopLeft': 1, 'TopRight': 2, 'BottomRight': 3, 'BottomLeft': 4, 'LeftTop': 5, 'RightTop': 6, 'RightBottom': 7, 'LeftBottom': 8}
-METADATAORIENTATION = type('METADATAORIENTATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataOrientation.items()}, '_tab_cn': {c: n for n, c in MetadataOrientation.items()}, '_def': 1})
+METADATAORIENTATION = type('METADATAORIENTATION', (_BCode, wintypes.WORD), {}, _dict=MetadataOrientation, _def=1)
 
 MetadataResolutionUnit = {'No': 1, 'None': 1, 'Inch': 2, 'Centimeter': 3}
-METADATARESOLUTIONUNIT = type('METADATARESOLUTIONUNIT', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataResolutionUnit.items()}, '_tab_cn': {c: n for n, c in MetadataResolutionUnit.items()}, '_def': 1})
+METADATARESOLUTIONUNIT = type('METADATARESOLUTIONUNIT', (_BCode, wintypes.WORD), {}, _dict=MetadataResolutionUnit, _def=1)
 
 MetadataYCbCrPositioning = {'Centered': 1, 'Cosited': 2}
-METADATAYCBCRPOSITIONING = type('METADATAYCBCRPOSITIONING', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataYCbCrPositioning.items()}, '_tab_cn': {c: n for n, c in MetadataYCbCrPositioning.items()}, '_def': 1})
+METADATAYCBCRPOSITIONING = type('METADATAYCBCRPOSITIONING', (_BCode, wintypes.WORD), {}, _dict=MetadataYCbCrPositioning, _def=1)
 
 MetadataComponentsConfiguration = {'None': 0, 'Y': 1, 'Cb': 2, 'Cr': 3, 'R': 4, 'G': 5, 'B': 6}
-METADATACOMPONENTSCONFIGURATION = type('METADATACOMPONENTSCONFIGURATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataComponentsConfiguration.items()}, '_tab_cn': {c: n for n, c in MetadataComponentsConfiguration.items()}, '_def': 0})
+METADATACOMPONENTSCONFIGURATION = type('METADATACOMPONENTSCONFIGURATION', (_BCode, wintypes.WORD), {}, _dict=MetadataComponentsConfiguration)
 
 MetadataExposureProgram = {'NotDefined': 0, 'Manual': 1, 'Normal': 2, 'AperturePriority': 3, 'ShutterPriority': 4, 'Creative': 5, 'Action': 6, 'Portrait': 7, 'Landscape': 8}
-METADATAEXPOSUREPROGRAM = type('METADATAEXPOSUREPROGRAM', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataExposureProgram.items()}, '_tab_cn': {c: n for n, c in MetadataExposureProgram.items()}, '_def': 0})
+METADATAEXPOSUREPROGRAM = type('METADATAEXPOSUREPROGRAM', (_BCode, wintypes.WORD), {}, _dict=MetadataExposureProgram)
 
 MetadataMeteringMode = {'Unknown': 0, 'Average': 1, 'CenterWeightedAverage': 2, 'Spot': 3, 'MultiSpot': 4, 'MultiSegment': 5, 'Pattern': 5, 'Partial': 6, 'Other': 255}
-METADATAMETERINGMODE = type('METADATAMETERINGMODE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataMeteringMode.items()}, '_tab_cn': {c: n for n, c in MetadataMeteringMode.items()}, '_def': 0})
+METADATAMETERINGMODE = type('METADATAMETERINGMODE', (_BCode, wintypes.WORD), {}, _dict=MetadataMeteringMode)
 
 MetadataLightSource = {'Unknown': 0, 'Daylight': 1, 'Fluorescent': 2, 'Tungsten': 3, 'Flash': 4, 'FineWeather': 9, 'CloudyWeather': 10, 'Shade': 11, 'DaylightFluorescent': 12, 'DayWhiteFluorescent': 13, 'CoolWhiteFluorescent': 14, 'WhiteFluorescent': 15, 'StandardLightA': 17, 'StandardLightB': 18, 'StandardLightC': 19, 'D55': 20, 'D65': 21, 'D75': 22, 'D50': 23, 'ISOStudioTungsten': 24, 'Other': 255}
-METADATALIGHTSOURCE = type('METADATALIGHTSOURCE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataLightSource.items()}, '_tab_cn': {c: n for n, c in MetadataLightSource.items()}, '_def': 0})
+METADATALIGHTSOURCE = type('METADATALIGHTSOURCE', (_BCode, wintypes.WORD), {}, _dict=MetadataLightSource)
 
 MetadataFlash = {'NotFired': 0x0, 'Fired': 0x1, 'Fired-ReturnNotDetected': 0x5, 'Fired-ReturnDetected': 0x7, 'Fired-Compulsory': 0x9, 'Fired-ReturnNotDetected-Compulsory': 0xd, 'Fired-ReturnDetected-Compulsory': 0xf, 'NotFired-Compulsory': 0x10, 'NotFired-Auto': 0x18, 'Fired-Auto': 0x19, 'Fired-ReturnNotDetected-Auto': 0x1d, 'Fired-ReturnDetected-Auto': 0x1f, 'NoFlashFunction': 0x20, 'Fired-RedEyeReduction': 0x41, 'Fired-ReturnNotDetected-RedEyeReduction': 0x45, 'Fired-ReturnDetected-RedEyeReduction': 0x47, 'Fired-Compulsory-RedEyeReduction': 0x49, 'Fired-ReturnNotDetected-Compulsory-RedEyeReduction': 0x4d, 'Fired-ReturnDetected-Compulsory-RedEyeReduction': 0x4f, 'Fired-Auto-RedEyeReduction': 0x59, 'Fired-ReturnNotDetected-Auto-RedEyeReduction': 0x5d, 'Fired-ReturnDetected-Auto-RedEyeReduction': 0x5f}
-METADATAFLASH = type('METADATAFLASH', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataFlash.items()}, '_tab_cn': {c: n for n, c in MetadataFlash.items()}, '_def': 0x20})
+METADATAFLASH = type('METADATAFLASH', (_BCode, wintypes.WORD), {}, _dict=MetadataFlash, _def=0x20)
 
 MetadataExposureMode = {'Auto': 0, 'Manual': 1, 'AutoBracket': 2}
-METADATAEXPOSUREMODE = type('METADATAEXPOSUREMODE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataExposureMode.items()}, '_tab_cn': {c: n for n, c in MetadataExposureMode.items()}, '_def': 0})
+METADATAEXPOSUREMODE = type('METADATAEXPOSUREMODE', (_BCode, wintypes.WORD), {}, _dict=MetadataExposureMode)
 
 MetadataWhiteBalance = {'Auto': 0, 'Manual': 1}
-METADATAWHITEBALANCE = type('METADATAWHITEBALANCE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataWhiteBalance.items()}, '_tab_cn': {c: n for n, c in MetadataWhiteBalance.items()}, '_def': 0})
+METADATAWHITEBALANCE = type('METADATAWHITEBALANCE', (_BCode, wintypes.WORD), {}, _dict=MetadataWhiteBalance)
 
 MetadataSceneCaptureType = {'Standard': 0, 'Landscape': 1, 'Portrait': 2, 'Night': 3}
-METADATASCENECAPTURETYPE = type('METADATASCENECAPTURETYPE', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataSceneCaptureType.items()}, '_tab_cn': {c: n for n, c in MetadataSceneCaptureType.items()}, '_def': 0})
+METADATASCENECAPTURETYPE = type('METADATASCENECAPTURETYPE', (_BCode, wintypes.WORD), {}, _dict=MetadataSceneCaptureType)
 
 MetadataAltitudeRef = {'AboveSeaLevel': 0, 'BelowSeaLevel': 1}
-METADATAALTITUDEREF = type('METADATAALTITUDEREF', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataAltitudeRef.items()}, '_tab_cn': {c: n for n, c in MetadataAltitudeRef.items()}, '_def': 0})
+METADATAALTITUDEREF = type('METADATAALTITUDEREF', (_BCode, wintypes.WORD), {}, _dict=MetadataAltitudeRef)
 
 MetadataTiffCompression = {'Uncompressed': 1, 'CCIT-RLE': 2, 'CCIT-T.4': 3, 'CCIT-T.5': 4, 'LZW': 5, 'OldJpeg': 6, 'Jpeg': 7, 'AdobeDeflate': 8, 'JBIG-T.85': 9, 'JBIG-T.43': 10, 'PKZIPDeflate': 32946, 'PackBits': 32773, 'Jpeg2000': 34712}
-METADATATIFFCOMPRESSION = type('METADATATIFFCOMPRESSION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffCompression.items()}, '_tab_cn': {c: n for n, c in MetadataTiffCompression.items()}, '_def': 5})
+METADATATIFFCOMPRESSION = type('METADATATIFFCOMPRESSION', (_BCode, wintypes.WORD), {}, _dict=MetadataTiffCompression, _def=5)
 
 MetadataTiffPredictor = {'No': 1, 'None': 1, 'HorizontalDifferencing': 2, 'FloatingPointHorizontalDifferencing': 3}
-METADATATIFFPREDICTOR = type('METADATATIFFPREDICTOR', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffPredictor.items()}, '_tab_cn': {c: n for n, c in MetadataTiffPredictor.items()}, '_def': 5})
+METADATATIFFPREDICTOR = type('METADATATIFFPREDICTOR', (_BCode, wintypes.WORD), {}, _dict=MetadataTiffPredictor, _def=1)
 
 MetadataTiffPlanarConfiguration = {'Chunky': 0, 'Interleaved': 0, 'Planar': 1}
-METADATATIFFPLANARCONFIGURATION = type('METADATATIFFPLANARCONFIGURATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffPlanarConfiguration.items()}, '_tab_cn': {c: n for n, c in MetadataTiffPlanarConfiguration.items()}, '_def': 0})
+METADATATIFFPLANARCONFIGURATION = type('METADATATIFFPLANARCONFIGURATION', (_BCode, wintypes.WORD), {}, _dict=MetadataTiffPlanarConfiguration)
 
 MetadataTiffSampleFormat = {'UnsignedInteger': 1, 'SignedInteger': 2, 'FloatingPoint': 3, 'Undefined': 4}
-METADATATIFFSAMPLEFORMAT = type('METADATATIFFSAMPLEFORMAT', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffSampleFormat.items()}, '_tab_cn': {c: n for n, c in MetadataTiffSampleFormat.items()}, '_def': 4})
+METADATATIFFSAMPLEFORMAT = type('METADATATIFFSAMPLEFORMAT', (_BCode, wintypes.WORD), {}, _dict=MetadataTiffSampleFormat, _def=4)
 
 MetadataTiffPhotometricInterpretation = {'WhiteIsZero': 0, 'BlackIsZero': 1, 'RGB': 2, 'Palette': 3, 'Mask': 4, 'CMYK': 5, 'YCbCr': 6, 'CIELab': 8, 'ICCLab': 9, 'ITULab': 10, 'LogL': 32844, 'LogLuv': 32845}
-METADATATIFFPHOTOMETRICINTERPRETATION = type('METADATATIFFPHOTOMETRICINTERPRETATION', (_BCode, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in MetadataTiffPhotometricInterpretation.items()}, '_tab_cn': {c: n for n, c in MetadataTiffPhotometricInterpretation.items()}, '_def': 2})
+METADATATIFFPHOTOMETRICINTERPRETATION = type('METADATATIFFPHOTOMETRICINTERPRETATION', (_BCode, wintypes.WORD), {}, _dict=MetadataTiffPhotometricInterpretation, _def=2)
 
 class _BMFraction(Fraction):
   def __iter__(self):
@@ -5794,24 +5898,24 @@ class DXGISURFACEDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 DXGIPSURFACEDESC = ctypes.POINTER(DXGISURFACEDESC)
 
 DXGIUsage = {'CPUAccessNone': 0, 'CPUAccessDynamic': 1, 'CPUAccessReadWrite': 2, 'CPUAccessScratch': 3, 'BackBuffer': 64, 'DiscardOnPresent': 512, 'ReadOnly': 256, 'RenderTargetOutput': 32, 'ShaderInput': 16, 'Shared': 128, 'UnorderedAccess': 1024}
-DXGIUSAGE = type('DXGIUSAGE', (_BCodeU, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIUsage.items()}, '_tab_cn': {c: n for n, c in DXGIUsage.items()}, '_def': 0})
+DXGIUSAGE = type('DXGIUSAGE', (_BCodeU, wintypes.UINT), {}, _dict=DXGIUsage)
 DXGIPUSAGE = ctypes.POINTER(DXGIUSAGE)
 
 DXGIMapFlags = {'None': 0, 'Read': 1, 'Write': 2, 'Discard': 4}
-DXGIMAPFLAGS = type('DXGIMAPFLAGS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIMapFlags.items()}, '_tab_cn': {c: n for n, c in DXGIMapFlags.items()}, '_def': 0})
+DXGIMAPFLAGS = type('DXGIMAPFLAGS', (_BCodeOr, wintypes.UINT), {}, _dict=DXGIMapFlags)
 
 class DXGIMAPPEDRECT(ctypes.Structure):
   _fields_ = [('Pitch', wintypes.UINT), ('pBits', wintypes.LPVOID)]
 DXGIPMAPPEDRECT = ctypes.POINTER(DXGIMAPPEDRECT)
 
 DXGIScaling = {'Stretch': 0, 'None': 1, 'AspectRatioStretch': 2}
-DXGISCALING = type('DXGIMAPFLAGS', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIScaling.items()}, '_tab_cn': {c: n for n, c in DXGIScaling.items()}, '_def': 0})
+DXGISCALING = type('DXGIMAPFLAGS', (_BCode, wintypes.UINT), {}, _dict=DXGIScaling)
 
 DXGISwapEffect = {'Discard': 0, 'Sequential': 1, 'FlipSequential': 2, 'FlipDiscard': 3}
-DXGISWAPEFFECT = type('DXGISWAPEFFECT', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGISwapEffect.items()}, '_tab_cn': {c: n for n, c in DXGISwapEffect.items()}, '_def': 0})
+DXGISWAPEFFECT = type('DXGISWAPEFFECT', (_BCode, wintypes.UINT), {}, _dict=DXGISwapEffect)
 
 DXGIAlphaMode = {'Unspecified': 0, 'Premultiplied': 1, 'Straight': 2, 'Ignore': 3}
-DXGIALPHAMODE = type('DXGIALPHAMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in DXGIAlphaMode.items()}, '_tab_cn': {c: n for n, c in DXGIAlphaMode.items()}, '_def': 0})
+DXGIALPHAMODE = type('DXGIALPHAMODE', (_BCode, wintypes.DWORD), {}, _dict=DXGIAlphaMode)
 
 class DXGISWAPCHAINDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('Format', DXGIFORMAT), ('Stereo', wintypes.BOOLE), ('SampleDesc', DXGISAMPLEDESC), ('BufferUsage', DXGIUSAGE), ('BufferCount', wintypes.UINT), ('Scaling', DXGISCALING), ('SwapEffect', DXGISWAPEFFECT), ('AlphaMode', DXGIALPHAMODE), ('Flags', wintypes.UINT)]
@@ -5824,17 +5928,17 @@ class DXGIRATIONAL(_BTStruct, ctypes.Structure):
     return super().from_param(tuple(_BMFraction(obj).limit()) if isinstance(obj, (int, float)) else obj)
 
 DXGIModeScanlineOrder = {'Unspecified': 0, 'Progressive': 1, 'UpperFieldFirst': 2, 'LowerFieldFirst': 3}
-DXGIMODESCANLINEORDER = type('DXGIMODESCANLINEORDER', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIModeScanlineOrder.items()}, '_tab_cn': {c: n for n, c in DXGIModeScanlineOrder.items()}, '_def': 0})
+DXGIMODESCANLINEORDER = type('DXGIMODESCANLINEORDER', (_BCode, wintypes.UINT), {}, _dict=DXGIModeScanlineOrder)
 
 DXGIModeScaling = {'Unspecified': 0, 'Centered': 1, 'Stretched': 2}
-DXGIMODESCALING = type('DXGIMODESCALING', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIModeScaling.items()}, '_tab_cn': {c: n for n, c in DXGIModeScaling.items()}, '_def': 0})
+DXGIMODESCALING = type('DXGIMODESCALING', (_BCode, wintypes.UINT), {}, _dict=DXGIModeScaling)
 
 class DXGISWAPCHAINDESCFULLSCREEN(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('RefreshRate', DXGIRATIONAL), ('ScanlineOrdering', DXGIMODESCANLINEORDER), ('Scaling', DXGIMODESCALING), ('Windowed', wintypes.BOOLE)]
 DXGIPSWAPCHAINDESCFULLSCREEN = type('DXGIPSWAPCHAINDESCFULLSCREEN', (_BPStruct, ctypes.POINTER(DXGISWAPCHAINDESCFULLSCREEN)), {'_type_': DXGISWAPCHAINDESCFULLSCREEN})
 
 DXGIPresent = {'Present': 0, 'PresentTest': 0x1, 'DoNotSequence': 0x2, 'PresentRestart': 0x4, 'DoNotWait': 0x8, 'RestrictToOutput': 0x10, 'StereoPreferRight': 0x20, 'StereoTemporaryMono': 0x40, 'UseDuration': 0x100, 'AllowTearing': 2}
-DXGIPRESENT = type('DXGIPRESENT', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DXGIPresent.items()}, '_tab_cn': {c: n for n, c in DXGIPresent.items()}, '_def': 0})
+DXGIPRESENT = type('DXGIPRESENT', (_BCodeOr, wintypes.UINT), {}, _dict=DXGIPresent)
 
 RECT = _WSMeta('RECT', (_BTStruct, wintypes.RECT), {})
 PRECT = type('PRECT', (_BPStruct, ctypes.POINTER(RECT)), {'_type_': RECT})
@@ -5844,7 +5948,7 @@ POINT = _WSMeta('POINT', (_BTStruct, wintypes.POINT), {})
 PPOINT = type('PPOINT', (_BPStruct, ctypes.POINTER(POINT)), {'_type_': POINT})
 
 DXGIModeRotation = {'Unspecified': 0, 'Identity': 1, 'Rotate90': 2, 'Rotate180': 3, 'Rotate270': 4}
-DXGIMODEROTATION = type('DXGIMODEROTATION', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in DXGIModeRotation.items()}, '_tab_cn': {c: n for n, c in DXGIModeRotation.items()}, '_def': 0})
+DXGIMODEROTATION = type('DXGIMODEROTATION', (_BCode, wintypes.INT), {}, _dict=DXGIModeRotation)
 
 class DXGIOUTPUTDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('DeviceName', wintypes.WCHAR * 32), ('DesktopCoordinates', RECT), ('AttachedToDesktop', wintypes.BOOLE), ('Rotation', DXGIMODEROTATION), ('Monitor', wintypes.HMONITOR)]
@@ -5887,7 +5991,7 @@ class DXGIOUTDUPLFRAMEINFO(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 DXGIPOUTDUPLFRAMEINFO = ctypes.POINTER(DXGIOUTDUPLFRAMEINFO)
 
 DXGIOutduplPointerShapeType = {'Monochrome': 1, 'Color': 2, 'MaskedColor': 4}
-DXGIOUTDUPLPOINTERSHAPETYPE = type('DXGIOUTDUPLPOINTERSHAPETYPE', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in DXGIOutduplPointerShapeType.items()}, '_tab_cn': {c: n for n, c in DXGIOutduplPointerShapeType.items()}, '_def': 1})
+DXGIOUTDUPLPOINTERSHAPETYPE = type('DXGIOUTDUPLPOINTERSHAPETYPE', (_BCode, wintypes.INT), {}, _dict=DXGIOutduplPointerShapeType, _def=1)
 
 class DXGIOUTDUPLPOINTERSHAPEINFO(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Type', DXGIOUTDUPLPOINTERSHAPETYPE), ('Width', wintypes.UINT), ('Height', wintypes.UINT), ('Pitch', wintypes.UINT), ('HotSpot', POINT)]
@@ -6188,20 +6292,20 @@ class IDXGIOutputDuplication(IDXGIObject):
     return r is not None
 
 D3D11ResourceDimension = {'Unknown': 0, 'Buffer': 1, 'Texture1D': 2, 'Texture2D': 3, 'Texture3D': 4}
-D3D11RESOURCEDIMENSION = type('D3D11RESOURCEDIMENSION', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11ResourceDimension.items()}, '_tab_cn': {c: n for n, c in D3D11ResourceDimension.items()}, '_def': 0})
+D3D11RESOURCEDIMENSION = type('D3D11RESOURCEDIMENSION', (_BCode, wintypes.UINT), {}, _dict=D3D11ResourceDimension)
 D3D11PRESOURCEDIMENSION = ctypes.POINTER(D3D11RESOURCEDIMENSION)
 
 D3D11Usage = {'Default': 0, 'Immutable': 1, 'Dynamic': 2, 'Staging': 3}
-D3D11USAGE = type('D3D11USAGE', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11Usage.items()}, '_tab_cn': {c: n for n, c in D3D11Usage.items()}, '_def': 0})
+D3D11USAGE = type('D3D11USAGE', (_BCode, wintypes.UINT), {}, _dict=D3D11Usage)
 
 D3D11BindFlag = {'None': 0, 'No': 0, 'VertexBuffer': 0x1, 'IndexBuffer': 0x2, 'ConstantBuffer': 0x4, 'ShaderResource': 0x8, 'StreamOutput': 0x10, 'RenderTarget': 0x20, 'DepthStencil': 0x40, 'UnorderedAccess': 0x80, 'Decoder': 0x200, 'VideoEncoder': 0x400}
-D3D11BINDFLAG = type('D3D11BINDFLAG', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11BindFlag.items()}, '_tab_cn': {c: n for n, c in D3D11BindFlag.items()}, '_def': 0})
+D3D11BINDFLAG = type('D3D11BINDFLAG', (_BCodeOr, wintypes.UINT), {}, _dict=D3D11BindFlag)
 
 D3D11CPUAccessFlag = {'None': 0, 'No': 0, 'Write': 0x10000, 'Read': 0x20000}
-D3D11CPUACCESSFLAG = type('D3D11CPUACCESSFLAG', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11CPUAccessFlag.items()}, '_tab_cn': {c: n for n, c in D3D11CPUAccessFlag.items()}, '_def': 0})
+D3D11CPUACCESSFLAG = type('D3D11CPUACCESSFLAG', (_BCodeOr, wintypes.UINT), {}, _dict=D3D11CPUAccessFlag)
 
 D3D11ResourceMiscFlag = {'None': 0, 'No': 0, 'GenerateMips': 0x1, 'Shared': 0x2, 'TextureCube': 0x4, 'DrawIndirectArgs': 0x10, 'BufferAllowRawViews': 0x20, 'BufferStructured': 0x40, 'ResourceClamp': 0x80, 'SharedKeyedMutex': 0x100, 'GDICompatible': 0x200, 'SharedNTHandle': 0x800, 'RestrictedContent': 0x1000, 'RestrictSharedResource': 0x2000, 'RestrictSharedResourceDriver': 0x4000, 'Guarded': 0x8000, 'TilePool': 0x20000, 'Tiled': 0x40000, 'HWProtected': 0x40000}
-D3D11RESOURCEMISCFLAG = type('D3D11RESOURCEMISCFLAG', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11ResourceMiscFlag.items()}, '_tab_cn': {c: n for n, c in D3D11ResourceMiscFlag.items()}, '_def': 0})
+D3D11RESOURCEMISCFLAG = type('D3D11RESOURCEMISCFLAG', (_BCodeOr, wintypes.UINT), {}, _dict=D3D11ResourceMiscFlag)
 
 class D3D11TEXTURE2DDESC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('Width', wintypes.UINT), ('Height', wintypes.UINT), ('MipLevels', wintypes.UINT), ('ArraySize', wintypes.UINT), ('Format', DXGIFORMAT), ('SampleDesc', DXGISAMPLEDESC), ('Usage', D3D11USAGE), ('BindFlags', D3D11BINDFLAG), ('CPUAccessFlags', D3D11CPUACCESSFLAG), ('MiscFlags', D3D11RESOURCEMISCFLAG)]
@@ -6212,7 +6316,7 @@ class D3D11SUBRESOURCEDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 D3D11PASUBRESOURCEDATA = type('D3D11PASUBRESOURCEDATA', (_BPAStruct, ctypes.POINTER(D3D11SUBRESOURCEDATA)), {'_type_': D3D11SUBRESOURCEDATA})
 
 D3D11FeatureLevel = {'1.0_Generic': 0x100, '1.0_Core': 0x1000, '9.1': 0x9100, '9.2': 0x9200, '9.3': 0x9300, '10.0': 0xa000, '10.1': 0xa100, '11.0': 0xb000, '11.1': 0xb100, '12.0': 0xc000, '12.1': 0xc100, '12.2': 0xc200}
-D3D11FEATURELEVEL = type('D3D11FEATURELEVEL', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D3D11FeatureLevel.items()}, '_tab_cn': {c: n for n, c in D3D11FeatureLevel.items()}, '_def': 0xb100})
+D3D11FEATURELEVEL = type('D3D11FEATURELEVEL', (_BCode, wintypes.UINT), {}, _dict=D3D11FeatureLevel, _def=0xb100)
 D3D11PFEATURELEVEL = ctypes.POINTER(D3D11FEATURELEVEL)
 
 class ID3D11DeviceChild(IUnknown):
@@ -6279,7 +6383,7 @@ class ID3D11Device(IUnknown):
     return self.GetDXGIDevice()
 
 D2D1ColorSpace = {'Custom': 0, 'sRGB': 1, 'scRGB': 2}
-D2D1COLORSPACE = type('D2D1COLORSPACE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1ColorSpace.items()}, '_tab_cn': {c: n for n, c in D2D1ColorSpace.items()}, '_def': 1})
+D2D1COLORSPACE = type('D2D1COLORSPACE', (_BCode, wintypes.DWORD), {}, _dict=D2D1ColorSpace, _def=1)
 
 class ID2D1Resource(IUnknown):
   _lightweight = True
@@ -6445,25 +6549,25 @@ class D2D1COLORF(_BTStruct, ctypes.Structure):
 D2D1PCOLORF = type('D2D1PCOLORF', (_BPStruct, ctypes.POINTER(D2D1COLORF)), {'_type_': D2D1COLORF})
 
 D2D1BitmapInterpolationMode = {'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'MultiSampleLinear': 3, 'Anisotropic': 4, 'HighQualityCubic': 5}
-D2D1BITMAPINTERPOLATIONMODE = type('D2D1BITMAPINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1BitmapInterpolationMode.items()}, '_tab_cn': {c: n for n, c in D2D1BitmapInterpolationMode.items()}, '_def': 0})
+D2D1BITMAPINTERPOLATIONMODE = type('D2D1BITMAPINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1BitmapInterpolationMode)
 
 D2D1InterpolationMode = {'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'MultiSampleLinear': 3, 'Anisotropic': 4, 'HighQualityCubic': 5}
-D2D1INTERPOLATIONMODE = type('D2D1INTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1InterpolationMode.items()}, '_tab_cn': {c: n for n, c in D2D1InterpolationMode.items()}, '_def': 0})
+D2D1INTERPOLATIONMODE = type('D2D1INTERPOLATIONMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1InterpolationMode)
 
 D2D1AntialiasMode = {'PerPrimitive': 0, 'Aliased': 1}
-D2D1ANTIALIASMODE = type('D2D1ANTIALIASMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1AntialiasMode.items()}, '_tab_cn': {c: n for n, c in D2D1AntialiasMode.items()}, '_def': 0})
+D2D1ANTIALIASMODE = type('D2D1ANTIALIASMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1AntialiasMode)
 
 D2D1PrimitiveBlend = {'SourceOver': 0, 'Copy': 1, 'Min': 2, 'Add': 3, 'Max': 4}
-D2D1PRIMITIVEBLEND = type('D2D1PRIMITIVEBLEND', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1PrimitiveBlend.items()}, '_tab_cn': {c: n for n, c in D2D1PrimitiveBlend.items()}, '_def': 0})
+D2D1PRIMITIVEBLEND = type('D2D1PRIMITIVEBLEND', (_BCode, wintypes.DWORD), {}, _dict=D2D1PrimitiveBlend)
 
 D2D1UnitMode = {'DIPs': 0, 'Pixels': 1}
-D2D1UNITMODE = type('D2D1UNITMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1UnitMode.items()}, '_tab_cn': {c: n for n, c in D2D1UnitMode.items()}, '_def': 0})
+D2D1UNITMODE = type('D2D1UNITMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1UnitMode)
 
 D2D1ExtendMode = {'Clamp': 0, 'Wrap': 1, 'Mirror': 2}
-D2D1EXTENDMODE = type('D2D1EXTENDMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1ExtendMode.items()}, '_tab_cn': {c: n for n, c in D2D1ExtendMode.items()}, '_def': 0})
+D2D1EXTENDMODE = type('D2D1EXTENDMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1ExtendMode)
 
 D2D1BufferPrecision = {'Unknown': 0, '8BPC_UNORM': 1, '8BPC_UNORM_SRGB': 2, '16BPC_UNORM': 3, '16BPC_FLOAT': 4, '32BPC_FLOAT': 5}
-D2D1BUFFERPRECISION = type('D2D1BUFFERPRECISION', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1BufferPrecision.items()}, '_tab_cn': {c: n for n, c in D2D1BufferPrecision.items()}, '_def': 0})
+D2D1BUFFERPRECISION = type('D2D1BUFFERPRECISION', (_BCode, wintypes.DWORD), {}, _dict=D2D1BufferPrecision)
 
 class D2D1RENDERINGCONTROLS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('bufferPrecision', D2D1BUFFERPRECISION), ('tileSize', D2D1SIZEU)]
@@ -6474,7 +6578,7 @@ class D2D1BITMAPPROPERTIESRT(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
 D2D1PBITMAPPROPERTIESRT = type('D2D1PBITMAPPROPERTIESRT', (_BPStruct, ctypes.POINTER(D2D1BITMAPPROPERTIESRT)), {'_type_': D2D1BITMAPPROPERTIESRT})
 
 D2D1BitmapOptions = {'None': 0, 'Target': 1, 'CannotDraw': 2, 'CPURead': 4, 'GDICompatible': 8}
-D2D1BITMAPOPTIONS = type('D2D1BITMAPOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1BitmapOptions.items()}, '_tab_cn': {c: n for n, c in D2D1BitmapOptions.items()}, '_def': 0})
+D2D1BITMAPOPTIONS = type('D2D1BITMAPOPTIONS', (_BCodeOr, wintypes.DWORD), {}, _dict=D2D1BitmapOptions)
 
 class D2D1BITMAPPROPERTIESDC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('pixelFormat', D2D1PIXELFORMAT), ('dpiX', wintypes.FLOAT), ('dpiY', wintypes.FLOAT), ('bitmapOptions', D2D1BITMAPOPTIONS), ('colorContext', PCOMD2D1COLORCONTEXT)]
@@ -6508,10 +6612,10 @@ class D2D1GRADIENTSTOP(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
 D2D1PAGRADIENTSTOP = type('D2D1PAGRADIENTSTOP', (_BPAStruct, ctypes.POINTER(D2D1GRADIENTSTOP)), {'_type_': D2D1GRADIENTSTOP})
 
 D2D1Gamma = {'sRGB': 0, '2.2': 0, 'Linear': 1, '1.0': 1}
-D2D1GAMMA = type('D2D1GAMMA', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1Gamma.items()}, '_tab_cn': {c: n for n, c in D2D1Gamma.items()}, '_def': 0})
+D2D1GAMMA = type('D2D1GAMMA', (_BCode, wintypes.DWORD), {}, _dict=D2D1Gamma)
 
 D2D1ColorInterpolationMode = {'Straight': 0, 'Premultiplied': 1}
-D2D1COLORINTERPOLATIONMODE = type('D2D1COLORINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1ColorInterpolationMode.items()}, '_tab_cn': {c: n for n, c in D2D1ColorInterpolationMode.items()}, '_def': 0})
+D2D1COLORINTERPOLATIONMODE = type('D2D1COLORINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1ColorInterpolationMode)
 
 class D2D1LINEARGRADIENTBRUSHPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('startPoint', D2D1POINT2F), ('endPoint', D2D1POINT2F)]
@@ -6522,23 +6626,23 @@ class D2D1RADIALGRADIENTBRUSHPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_
 D2D1PRADIALGRADIENTBRUSHPROPERTIES = type('D2D1PRADIALGRADIENTBRUSHPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1RADIALGRADIENTBRUSHPROPERTIES)), {'_type_': D2D1RADIALGRADIENTBRUSHPROPERTIES})
 
 D2D1CapStyle = {'Flat': 0, 'Square': 1, 'Round': 2, 'Triangle': 3}
-D2D1CAPSTYLE = type('D2D1CAPSTYLE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1CapStyle.items()}, '_tab_cn': {c: n for n, c in D2D1CapStyle.items()}, '_def': 0})
+D2D1CAPSTYLE = type('D2D1CAPSTYLE', (_BCode, wintypes.DWORD), {}, _dict=D2D1CapStyle)
 
 D2D1DashStyle = {'Solid': 0, 'Dash': 1, 'Dot': 2, 'DashDot': 3, 'DashDotDot': 4, 'Custom': 5}
-D2D1DASHSTYLE = type('D2D1DASHSTYLE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1DashStyle.items()}, '_tab_cn': {c: n for n, c in D2D1DashStyle.items()}, '_def': 0})
+D2D1DASHSTYLE = type('D2D1DASHSTYLE', (_BCode, wintypes.DWORD), {}, _dict=D2D1DashStyle)
 
 D2D1LineJoin = {'Miter': 0, 'Bevel': 1, 'Round': 2, 'MiterOrBevel': 3}
-D2D1LINEJOIN = type('D2D1LINEJOIN', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1LineJoin.items()}, '_tab_cn': {c: n for n, c in D2D1LineJoin.items()}, '_def': 0})
+D2D1LINEJOIN = type('D2D1LINEJOIN', (_BCode, wintypes.DWORD), {}, _dict=D2D1LineJoin)
 
 D2D1StrokeTransformType = {'Normal': 0, 'Fixed': 1, 'HairLine': 2}
-D2D1STROKETRANSFORMTYPE = type('D2D1STROKETRANSFORMTYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1StrokeTransformType.items()}, '_tab_cn': {c: n for n, c in D2D1StrokeTransformType.items()}, '_def': 0})
+D2D1STROKETRANSFORMTYPE = type('D2D1STROKETRANSFORMTYPE', (_BCode, wintypes.DWORD), {}, _dict=D2D1StrokeTransformType)
 
 class D2D1STROKESTYLEPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('startCap', D2D1CAPSTYLE), ('endCap', D2D1CAPSTYLE), ('dashCap', D2D1CAPSTYLE), ('lineJoin', D2D1LINEJOIN), ('miterLimit', wintypes.FLOAT), ('dashStyle', D2D1DASHSTYLE), ('dashOffset', wintypes.FLOAT), ('transformType', D2D1STROKETRANSFORMTYPE)]
 D2D1PSTROKESTYLEPROPERTIES = type('D2D1PSTROKESTYLEPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1STROKESTYLEPROPERTIES)), {'_type_': D2D1STROKESTYLEPROPERTIES})
 
 D2D1MappedOptions = {'None': 0, 'Read': 1, 'Write': 2, 'Discard': 4}
-D2D1MAPPEDOPTIONS = type('D2D1MAPPEDOPTIONS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D2D1MappedOptions.items()}, '_tab_cn': {c: n for n, c in D2D1MappedOptions.items()}, '_def': 1})
+D2D1MAPPEDOPTIONS = type('D2D1MAPPEDOPTIONS', (_BCodeOr, wintypes.UINT), {}, _dict=D2D1MappedOptions, _def=1)
 
 class D2D1MAPPEDRECT(ctypes.Structure):
   _fields_ = [('pitch', wintypes.UINT), ('bits', wintypes.LPVOID)]
@@ -6549,7 +6653,7 @@ class D2D1DRAWINGSTATEDESCRIPTION(_BDStruct, ctypes.Structure, metaclass=_WSMeta
 D2D1PDRAWINGSTATEDESCRIPTION = type('D2D1PDRAWINGSTATEDESCRIPTION', (_BPStruct, ctypes.POINTER(D2D1DRAWINGSTATEDESCRIPTION)), {'_type_': D2D1DRAWINGSTATEDESCRIPTION})
 
 D2D1PropertyType = {'Unknown': 0, 'String': 1, 'Bool': 2, 'UInt': 3, 'UInt32': 3, 'Int': 4, 'Int32': 4, 'Float': 5, 'Vector2': 6, 'Vector3': 7, 'Vector4': 8, 'Blob': 9, 'IUnknown': 10, 'Enum': 11, 'Array': 12, 'Clsid': 13, 'Matrix3x2': 14, 'Matrix4x3': 15, 'Matrix4x4': 16, 'Matrix5x4': 17, 'ColorContext': 18}
-D2D1PROPERTYTYPE = type('D2D1PROPERTYTYPE', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in D2D1PropertyType.items()}, '_tab_cn': {c: n for n, c in D2D1PropertyType.items()}, '_def': 0})
+D2D1PROPERTYTYPE = type('D2D1PROPERTYTYPE', (_BCode, wintypes.UINT), {}, _dict=D2D1PropertyType)
 
 D2D1EffectId = {
   'LookupTable3D': GUID(0x349e0eda, 0x0088, 0x4a79, 0x9c, 0xa3, 0xc7, 0xe3, 0x00, 0x20, 0x20, 0x20),
@@ -6623,36 +6727,36 @@ D2D1EFFECTID = _GMeta('D2D1EFFECTID', (_BGUID, wintypes.GUID), {'_type_': ctypes
 D2D1PEFFECTID = type('D2D1PEFFECTID', (_BPGUID, ctypes.POINTER(D2D1EFFECTID)), {'_type_': D2D1EFFECTID})
 
 D2D1CompositeMode = {'SourceOver': 0, 'DestinationOver': 1, 'SourceIn': 2, 'DestinationIn': 3, 'SourceOut': 4, 'DestinationOut': 5, 'SourceAtop': 6, 'DestinationAtop': 7, 'XOr': 8, 'Plus': 9, 'SourceCopy': 10, 'BoundedSourceCopy': 11, 'MaskInvert': 12}
-D2D1COMPOSITEMODE = type('D2D1COMPOSITEMODE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1CompositeMode.items()}, '_tab_cn': {c: n for n, c in D2D1CompositeMode.items()}, '_def': 0})
+D2D1COMPOSITEMODE = type('D2D1COMPOSITEMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1CompositeMode)
 
 D2D1DeviceContextOptions = {'None': 0, 'Multithreaded': 1}
-D2D1DEVICECONTEXTOPTIONS = type('D2D1DEVICECONTEXTOPTIONS', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1DeviceContextOptions.items()}, '_tab_cn': {c: n for n, c in D2D1DeviceContextOptions.items()}, '_def': 0})
+D2D1DEVICECONTEXTOPTIONS = type('D2D1DEVICECONTEXTOPTIONS', (_BCode, wintypes.DWORD), {}, _dict=D2D1DeviceContextOptions)
 
 D2D1RenderTargetType = {'Default': 0, 'Software': 1, 'Hardware': 2}
-D2D1RENDERTARGETTYPE = type('D2D1RENDERTARGETTYPE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1RenderTargetType.items()}, '_tab_cn': {c: n for n, c in D2D1RenderTargetType.items()}, '_def': 0})
+D2D1RENDERTARGETTYPE = type('D2D1RENDERTARGETTYPE', (_BCode, wintypes.DWORD), {}, _dict=D2D1RenderTargetType)
 
 D2D1RenderTargetUsage = {'None': 0, 'ForceBitmapRemoting': 1, 'GDICompatible': 2}
-D2D1RENDERTARGETUSAGE = type('D2D1RENDERTARGETUSAGE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1RenderTargetUsage.items()}, '_tab_cn': {c: n for n, c in D2D1RenderTargetUsage.items()}, '_def': 0})
+D2D1RENDERTARGETUSAGE = type('D2D1RENDERTARGETUSAGE', (_BCodeOr, wintypes.DWORD), {}, _dict=D2D1RenderTargetUsage)
 
 D2D1FeatureLevel = {'Default': 0, '9': 1, '10': 2}
-D2D1FEATURELEVEL = type('D2D1FEATURELEVEL', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1FeatureLevel.items()}, '_tab_cn': {c: n for n, c in D2D1FeatureLevel.items()}, '_def': 0})
+D2D1FEATURELEVEL = type('D2D1FEATURELEVEL', (_BCode, wintypes.DWORD), {}, _dict=D2D1FeatureLevel)
 
 class D2D1RENDERTARGETPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('type', D2D1RENDERTARGETTYPE), ('pixelFormat', D2D1PIXELFORMAT), ('dpiX', wintypes.FLOAT), ('dpiY', wintypes.FLOAT), ('usage', D2D1RENDERTARGETUSAGE), ('minLevel', D2D1FEATURELEVEL)]
 D2D1PRENDERTARGETPROPERTIES = type('D2D1PRENDERTARGETPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1RENDERTARGETPROPERTIES)), {'_type_': D2D1RENDERTARGETPROPERTIES})
 
 D2D1CompatibleRenderTargetOptions = {'None': 0, 'GDICompatible': 1}
-D2D1COMPATIBLERENDERTARGETOPTIONS = type('D2D1COMPATIBLERENDERTARGETOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1CompatibleRenderTargetOptions.items()}, '_tab_cn': {c: n for n, c in D2D1CompatibleRenderTargetOptions.items()}, '_def': 0})
+D2D1COMPATIBLERENDERTARGETOPTIONS = type('D2D1COMPATIBLERENDERTARGETOPTIONS', (_BCodeOr, wintypes.DWORD), {}, _dict=D2D1CompatibleRenderTargetOptions)
 
 D2D1PresentOptions = {'None': 0, 'RetainContents': 1, 'Immediately': 2}
-D2D1PRESENTOPTIONS = type('D2D1PRESENTOPTIONS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1PresentOptions.items()}, '_tab_cn': {c: n for n, c in D2D1PresentOptions.items()}, '_def': 0})
+D2D1PRESENTOPTIONS = type('D2D1PRESENTOPTIONS', (_BCodeOr, wintypes.DWORD), {}, _dict=D2D1PresentOptions)
 
 class D2D1HWNDRENDERTARGETPROPERTIES(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('hwnd', wintypes.HWND), ('pixelSize', D2D1SIZEU), ('presentOptions', D2D1PRESENTOPTIONS)]
 D2D1PHWNDRENDERTARGETPROPERTIES = type('D2D1PHWNDRENDERTARGETPROPERTIES', (_BPStruct, ctypes.POINTER(D2D1HWNDRENDERTARGETPROPERTIES)), {'_type_': D2D1HWNDRENDERTARGETPROPERTIES})
 
 D2D1WindowState = {'None': 0, 'Occluded': 1}
-D2D1WINDOWSTATE = type('D2D1WINDOWSTATE', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in D2D1WindowState.items()}, '_tab_cn': {c: n for n, c in D2D1WindowState.items()}, '_def': 0})
+D2D1WINDOWSTATE = type('D2D1WINDOWSTATE', (_BCode, wintypes.DWORD), {}, _dict=D2D1WindowState)
 
 class ID2D1Bitmap(ID2D1Image):
   IID = GUID(0xa898a84c, 0x3873, 0x4588, 0xb0, 0x8b, 0xeb, 0xbf, 0x97, 0x8d, 0xf0, 0x41)
@@ -7750,7 +7854,7 @@ DISPID = _DISPIdMeta('DISPID', (_BCode, wintypes.LONG), {'_tab_nc': {**{n.lower(
 DISPPID = ctypes.POINTER(DISPID)
 
 DISPFlags = {'Method': 1, 'PropertyGet': 2, 'PropertyPut': 4, 'PropertyPutRef': 8}
-DISPFLAGS = type('DISPFLAGS', (_BCodeOr, wintypes.WORD), {'_tab_nc': {n.lower(): c for n, c in DISPFlags.items()}, '_tab_cn': {c: n for n, c in DISPFlags.items()}, '_def': 1})
+DISPFLAGS = type('DISPFLAGS', (_BCodeOr, wintypes.WORD), {}, _dict=DISPFlags, _def=1)
 
 class DISPPARAMS(ctypes.Structure):
   _fields_ = [('rgvarg', wintypes.LPVOID), ('rgdispidNamedArgs', wintypes.LPVOID), ('cArgs', wintypes.UINT), ('cNamedArgs', wintypes.UINT)]
@@ -8100,44 +8204,11 @@ class _WShUtil:
   GetClipboardFormatName = _IUtil._wrap('GetClipboardFormatNameW', (wintypes.UINT, 0), (wintypes.UINT, 1), (wintypes.LPWSTR, 1), (wintypes.UINT, 0), p=user32)
   DragQueryFile = _wrap('DragQueryFileW', (wintypes.UINT, 0), (wintypes.HDROP, 1), (wintypes.UINT, 1), (wintypes.LPWSTR, 1), (wintypes.UINT, 1))
 
-
 WSBindFlags = {'MayBotherUser': 1, 'JustTestExistence': 2}
-WSBINDFLAGS = type('WSBINDFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSBindFlags.items()}, '_tab_cn': {c: n for n, c in WSBindFlags.items()}, '_def': 0})
-
-WSStgm = (
-  {'Read': 0x0, 'Write': 0x1, 'ReadWrite': 0x2},
-  {'DenyNone': 0x40, 'DenyRead': 0x30, 'DenyWrite': 0x20, 'Exclusive': 0x10, 'Priority': 0x40000},
-  {'Create': 0x1000, 'Convert': 0x20000, 'FailIfThere': 0x0},
-  {'Direct': 0x0, 'Transacted': 0x10000},
-  {'NoScratch': 0x100000, 'NoSnapshot': 0x200000},
-  {'Simple': 0x8000000, 'DirectSWMR': 0x400000},
-  {'DeleteOnRelease': 0x4000000}
-)
-_WSSTGMs = tuple(type(('WSSTGM%d' % g), (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in group.items()}, '_tab_cn': {c: n for n, c in group.items()}, '_def': 0}) for g, group in enumerate(WSStgm))
-class WSSTGM(_BCode, wintypes.DWORD):
-  @classmethod
-  def name_code(cls, n):
-    if not isinstance(n, str):
-      return n
-    c = 0
-    for n_ in filter(None, n.lower().replace(' ', '|').replace('+', '|').split('|')):
-      for _WSSTGM in _WSSTGMs:
-        c |= _WSSTGM.name_code(n_)
-    return c
-  @classmethod
-  def code_name(cls, c):
-    n = []
-    for _WSSTGM in _WSSTGMs:
-      o = 0
-      for c_ in _WSSTGM._tab_nc.values():
-        o |= c_
-      if not (n_ := _WSSTGM.code_name(c & o)).isdecimal():
-        n.append(n_)
-    return ' | '.join(n)
-
+WSBINDFLAGS = type('WSBINDFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=WSBindFlags)
 
 WSFileAttributes = {'ReadOnly': 1, 'Hidden': 2, 'System': 4, 'Directory': 16, 'Archive': 32, 'Device': 64, 'Normal': 128, 'Temporary': 256, 'SparseFile': 512, 'ReparsePoint': 1024, 'Compressed': 2048, 'Offline': 4096, 'NotContentIndexed': 8192, 'Encrypted': 16384, 'IntegrityStream': 32768, 'Virtual': 65536, 'NoScrubData': 131072, 'EA': 262144, 'Pinned': 524288, 'Unpinned': 1048576, 'RecallOnOpen': 262144, 'RecallOnDataAccess': 4194304}
-WSFILEATTRIBUTES = type('WSFILEATTRIBUTES', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSFileAttributes.items()}, '_tab_cn': {c: n for n, c in WSFileAttributes.items()}, '_def': 128})
+WSFILEATTRIBUTES = type('WSFILEATTRIBUTES', (_BCodeOr, wintypes.DWORD), {}, _dict=WSFileAttributes, _def=128)
 
 class WSFINDDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('dwFileAttributes', WSFILEATTRIBUTES), ('ftCreationTime', FILETIME), ('ftLastAccessTime', FILETIME), ('ftLastWriteTime', FILETIME), ('nFileSizeHigh', wintypes.DWORD), ('nFileSizeLow', wintypes.DWORD), ('dwReserved0', wintypes.DWORD), ('dwReserved1', wintypes.DWORD), ('cFileName', wintypes.WCHAR * 260), ('cAlternateFileName', wintypes.WCHAR * 14)]
@@ -8175,48 +8246,45 @@ class _BDSStruct(_BDStruct):
     return {k[0]: getattr(self, k[0]) for k in f}
 
 class WSBINDOPTS(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('cbStruct', wintypes.DWORD), ('grfFlags', WSBINDFLAGS), ('grfMode', WSSTGM), ('dwTickCountDeadline', wintypes.DWORD), ('dwTrackFlags', wintypes.DWORD), ('dwClassContext', wintypes.DWORD), ('locale', wintypes.LCID), ('pServerInfo', wintypes.LPVOID), ('hwnd', wintypes.HWND)]
+  _fields_ = [('cbStruct', wintypes.DWORD), ('grfFlags', WSBINDFLAGS), ('grfMode', ISSTGM), ('dwTickCountDeadline', wintypes.DWORD), ('dwTrackFlags', wintypes.DWORD), ('dwClassContext', wintypes.DWORD), ('locale', wintypes.LCID), ('pServerInfo', wintypes.LPVOID), ('hwnd', wintypes.HWND)]
 WSPBINDOPTS = type('WSPBINDOPTS', (_BPStruct, ctypes.POINTER(WSBINDOPTS)),  {'_type_': WSBINDOPTS})
 
 WSWindowShow = {'Hidden': 0, 'Normal': 1, 'ShowNormal': 1, 'ShowMinimized': 2, 'Maximize': 3, 'ShowMaximized': 3, 'ShowNoActivate': 4, 'Show': 5, 'Minimize': 6, 'ShowMinNoactive': 7, 'ShowNA': 8, 'Restore': 9, 'ShowDefault': 10, 'ForceMinimize': 11}
-WSWINDOWSHOW = type('WSWINDOWSHOW', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WSWindowShow.items()}, '_tab_cn': {c: n for n, c in WSWindowShow.items()}, '_def': 1})
+WSWINDOWSHOW = type('WSWINDOWSHOW', (_BCode, wintypes.UINT), {}, _dict=WSWindowShow, _def=1)
 
 class WSCMINVOKECOMMANDINFO(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbSize', wintypes.DWORD), ('fMask', wintypes.DWORD), ('hwnd', wintypes.HWND), ('lpVerb', wintypes.LPCSTR), ('lpParameters', wintypes.LPCSTR), ('lpDirectory', wintypes.LPCSTR), ('nShow', WSWINDOWSHOW), ('dwHotKey', wintypes.DWORD), ('hIcon', wintypes.HANDLE)]
 WSPCMINVOKECOMMANDINFO = type('WSPCMINVOKECOMMANDINFO', (_BPStruct, ctypes.POINTER(WSCMINVOKECOMMANDINFO)), {'_type_': WSCMINVOKECOMMANDINFO})
 
 WSSfgao = {'CanCopy': 0x1, 'CanMove': 0x2, 'CanLink': 0x4, 'Storage': 0x8, 'CanRename': 0x10, 'CanDelete': 0x20, 'HasPropSheet': 0x40, 'DropTarget': 0x100, 'System': 0x1000, 'Encrypted': 0x2000, 'IsSlow': 0x4000, 'Ghosted': 0x8000, 'Link': 0x10000, 'Share': 0x20000, 'ReadOnly': 0x40000, 'Hidden': 0x80000, 'NonEnumerated': 0x100000, 'NewContent': 0x200000, 'Stream': 0x400000, 'StorageAncestor': 0x800000, 'Validate': 0x1000000, 'Removable': 0x2000000, 'Compressed': 0x4000000, 'Browsable': 0x8000000, 'FileSysAncestor': 0x10000000, 'Folder': 0x20000000, 'FileSystem': 0x40000000, 'HasSubFolder': 0x80000000}
-WSSFGAO = type('WSSFGAO', (_BCodeOr, wintypes.ULONG), {'_tab_nc': {n.lower(): c for n, c in WSSfgao.items()}, '_tab_cn': {c: n for n, c in WSSfgao.items()}, '_def': 0})
+WSSFGAO = type('WSSFGAO', (_BCodeOr, wintypes.ULONG), {}, _dict=WSSfgao)
 WSPSFGAO = ctypes.POINTER(WSSFGAO)
 
 WSShcids = {'AllFields': 0x80000000, 'CanonicalOnly': 0x10000000}
-WSSHCIDS = type('WSSHCIDS', (_BCodeOr, wintypes.LPARAM), {'_tab_nc': {n.lower(): c for n, c in WSShcids.items()}, '_tab_cn': {c: n for n, c in WSShcids.items()}, '_def': 0})
+WSSHCIDS = type('WSSHCIDS', (_BCodeOr, wintypes.LPARAM), {}, _dict=WSShcids)
 
 WSShgdnf = {'Normal': 0, 'InFolder': 0x1, 'ForEditing': 0x1000, 'ForAddressBar': 0x4000, 'ForParsing': 0x8000}
-WSSHGDNF = type('WSSHGDNF', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSShgdnf.items()}, '_tab_cn': {c: n for n, c in WSShgdnf.items()}, '_def': 0})
+WSSHGDNF = type('WSSHGDNF', (_BCodeOr, wintypes.DWORD), {}, _dict=WSShgdnf)
 
 WSShcontf = {'CheckingForChildren': 0x10, 'Folders': 0x20, 'NonFolders': 0x40, 'IncludeHidden': 0x80, 'NetPrinterSrch': 0x200, 'Shareable': 0x400, 'Storage': 0x800, 'NavigationEnum': 0x1000, 'FastItems': 0x2000, 'FlatList': 0x4000, 'EnableAsync': 0x8000, 'IncludeSuperHidden': 0x10000}
-WSSHCONTF = type('WSSHCONTF', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSShcontf.items()}, '_tab_cn': {c: n for n, c in WSShcontf.items()}, '_def': 0})
+WSSHCONTF = type('WSSHCONTF', (_BCodeOr, wintypes.DWORD), {}, _dict=WSShcontf)
 
 WSSigdn = {'Normal': 0, 'NormalDisplay': 0, 'ParentRelativeParsing': 0x80018001, 'DesktopAbsoluteParsing': 0x80028000, 'ParentRelativeEditing': 0x80031001, 'DesktopAbsoluteEditing': 0x8004c000, 'FileSyspath': 0x80058000, 'Url': 0x80068000, 'ParentRelativeForAddressBar': 0x8007c001, 'ParentRelative': 0x80080001, 'ParentRelativeForUI': 0x80094001}
-WSSIGDN = type('WSSIGDN', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSSigdn.items()}, '_tab_cn': {c: n for n, c in WSSigdn.items()}, '_def': 0})
+WSSIGDN = type('WSSIGDN', (_BCode, wintypes.INT), {}, _dict=WSSigdn)
 
 WSSichintf = {'Display': 0, 'AllFields': 0x80000000, 'Canonical': 0x10000000, 'TestFileSyspathIfNotEqual': 0x20000000}
-WSSICHINTF = type('WSSICHINTF', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSSichintf.items()}, '_tab_cn': {c: n for n, c in WSSichintf.items()}, '_def': 0})
+WSSICHINTF = type('WSSICHINTF', (_BCode, wintypes.DWORD), {}, _dict=WSSichintf)
 
 class WSDVTARGETDEVICE(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('tdSize', wintypes.DWORD), ('tdDriverNameOffset', wintypes.WORD), ('tdDeviceNameOffset', wintypes.WORD), ('tdPortNameOffset', wintypes.WORD), ('tdExtDevmodeOffset', wintypes.WORD), ('tdData', wintypes.BYTE * 0)]
 WSPDVTARGETDEVICE = type('WSPDVTARGETDEVICE', (_BPStruct, ctypes.POINTER(WSDVTARGETDEVICE)),  {'_type_': WSDVTARGETDEVICE})
 
 WSTymed = {'Null': 0, 'HGlobal': 1, 'File': 2, 'IStream': 4, 'IStorage': 8, 'GDI': 16, 'MFPict': 32, 'EnhMF': 64}
-WSTYMED = type('WSTYMED', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSTymed.items()}, '_tab_cn': {c: n for n, c in WSTymed.items()}, '_def': 0})
+WSTYMED = type('WSTYMED', (_BCodeOr, wintypes.DWORD), {}, _dict=WSTymed)
 
 WSCfFormat = {'Bitmap': 2, 'Dib': 8, 'EnhMetaFile': 14, 'HDrop': 15, 'MetaFilePict': 3, 'Text': 1, 'Tiff': 6, 'UnicodeText': 13}
 WSCfFormatEq = {'shidlistarray': 'Shell IDList Array', 'preferreddropeffect': 'Preferred DropEffect', 'performeddropeffect': 'Performed DropEffect', 'pastesucceeded': 'Paste Succeeded'}
-class WSCFFORMAT(_BCode, wintypes.WORD):
-  _tab_nc = {n.lower(): c for n, c in WSCfFormat.items()}
-  _tab_cn = {c: n for n, c in WSCfFormat.items()}
-  _def = 1
+class WSCFFORMAT(_BCode, wintypes.WORD, _dict=WSCfFormat, _def=1):
   @staticmethod
   def wname_code(n):
     return _WShUtil.RegisterClipboardFormat(WSCfFormatEq.get(n.lower(), n)) or None
@@ -8232,7 +8300,7 @@ class WSCFFORMAT(_BCode, wintypes.WORD):
     return cls._tab_cn.get(c, ((cls.code_wname(c) or str(c)) if isinstance(c, int) and c >= 0xc000 and c <= 0xffff else str(c)))
 
 WSDvAspect = {'Content': 1, 'Thumbnail': 2, 'Icon': 4, 'DocPrint': 8}
-WSDVASPECT = type('WSDVASPECT', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSDvAspect.items()}, '_tab_cn': {c: n for n, c in WSDvAspect.items()}, '_def': 1})
+WSDVASPECT = type('WSDVASPECT', (_BCode, wintypes.INT), {}, _dict=WSDvAspect, _def=1)
 
 class WSFORMATETC(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cfFormat', WSCFFORMAT), ('ptd', WSPDVTARGETDEVICE), ('dwAspect', WSDVASPECT), ('lindex', wintypes.LONG), ('tymed', WSTYMED)]
@@ -8281,12 +8349,12 @@ class WSSTGMEDIUM(ctypes.Structure, metaclass=_WSMeta):
 WSPSTGMEDIUM = type('WSPSTGMEDIUM', (_BPStruct, ctypes.POINTER(WSSTGMEDIUM)),  {'_type_': WSSTGMEDIUM})
 
 WSDataDir = {'Get': 1, 'Set': 2}
-WSDATADIR = type('WSDATADIR', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSDataDir.items()}, '_tab_cn': {c: n for n, c in WSDataDir.items()}, '_def': 1})
+WSDATADIR = type('WSDATADIR', (_BCode, wintypes.INT), {}, _dict=WSDataDir, _def=1)
 
 SIZE = _WSMeta('SIZE', (_BTStruct, wintypes.SIZE), {})
 
 WSFDFlags = {'None': 0, 'Clsid': 0x1, 'SizePoint': 0x2, 'Attributes': 0x4, 'CreateTime': 0x8, 'AccessTime': 0x10, 'WritesTime': 0x20, 'FileSize': 0x40, 'ProgressUI': 0x4000, 'LinkUI': 0x8000, 'Unicode': 0x80000000}
-WSFDFLAGS = type('WSFDFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSFDFlags.items()}, '_tab_cn': {c: n for n, c in WSFDFlags.items()}, '_def': 0})
+WSFDFLAGS = type('WSFDFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=WSFDFlags)
 
 class WSFILEDESCRIPTOR(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('dwFlags', WSFDFLAGS), ('clsid', wintypes.GUID), ('sizel', SIZE), ('pointl', POINT), ('dwFileAttributes', WSFILEATTRIBUTES), ('ftCreationTime', FILETIME), ('ftLastAccessTime', FILETIME), ('ftLastWriteTime', FILETIME), ('nFileSizeHigh', wintypes.DWORD), ('nFileSizeLow', wintypes.DWORD), ('cFileName', wintypes.WCHAR * 260)]
@@ -8325,10 +8393,10 @@ class WSCIDA(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
 WSPCIDA = type('WSPCIDA', (_BPStruct, ctypes.POINTER(WSCIDA)),  {'_type_': WSCIDA})
 
 WSKeyState = {'LButton': 0x1, 'RButton': 0x2, 'MButton': 0x10, 'Shift': 0x4, 'Ctrl': 0x8, 'Control': 0x8, 'Alt': 0x20}
-WSKEYSTATE = type('WSKEYSTATE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSKeyState.items()}, '_tab_cn': {c: n for n, c in WSKeyState.items()}, '_def': 0})
+WSKEYSTATE = type('WSKEYSTATE', (_BCodeOr, wintypes.DWORD), {}, _dict=WSKeyState)
 
 WSDropEffect = {'None': 0, 'Copy': 0x1, 'Move': 0x2, 'Link': 0x4, 'Scroll': 0x80000000}
-WSDROPEFFECT = type('WSDROPEFFECT', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSDropEffect.items()}, '_tab_cn': {c: n for n, c in WSDropEffect.items()}, '_def': 0})
+WSDROPEFFECT = type('WSDROPEFFECT', (_BCodeOr, wintypes.DWORD), {}, _dict=WSDropEffect)
 WSPDROPEFFECT = ctypes.POINTER(WSDROPEFFECT)
 
 WSBhid = {
@@ -8337,6 +8405,7 @@ WSBhid = {
   'Stream': GUID(0x1cebb3ab, 0x7c10, 0x499a, 0xa4, 0x17, 0x92, 0xca, 0x16, 0xc4, 0xcb, 0x83),
   'LinkTargetItem': GUID(0x3981e228, 0xf559, 0x11d3, 0x8e, 0x3a, 0x00, 0xc0, 0x4f, 0x68, 0x37, 0xd5),
   'StorageEnum': GUID(0x4621a4e3, 0xf0d6, 0x4773, 0x8a, 0x9c, 0x46, 0xe7, 0x7b, 0x17, 0x48, 0x40),
+  'PropertyStore': GUID(0x0384e1a4, 0x1523, 0x439c, 0xa4, 0xc8, 0xab, 0x91, 0x10, 0x52, 0xf5, 0x86),
   'EnumItems': GUID(0x94f60519, 0x2850, 0x4924, 0xaa, 0x5a, 0xd1, 0x5e, 0x84, 0x86, 0x80, 0x39),
   'DataObject': GUID(0xb8c0bd9f, 0xed24, 0x455c, 0x83, 0xe6, 0xd5, 0x39, 0x0c, 0x4f, 0xe8, 0xc4)
 }
@@ -8344,13 +8413,16 @@ WSBHID = _GMeta('WSBHID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_l
 WSPBHID = type('WSPBHID', (_BPGUID, ctypes.POINTER(WSBHID)), {'_type_': WSBHID})
 
 WSSiattribflags = {'And': 0x1, 'Or': 0x2, 'AppCompat': 0x3, 'AllItems': 0x4000}
-WSSIATTRIBFLAGS = type('WSSIATTRIBFLAGS', (_BCodeOr, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSSiattribflags.items()}, '_tab_cn': {c: n for n, c in WSSiattribflags.items()}, '_def': 0})
+WSSIATTRIBFLAGS = type('WSSIATTRIBFLAGS', (_BCodeOr, wintypes.INT), {}, _dict=WSSiattribflags)
 
 WSSiigbf = {'ResizeToFit': 0, 'BiggerSizeOK': 0x1, 'MemoryOnly': 0x2, 'IconOnly': 0x4, 'ThumbnailOnly': 0x8, 'InCacheOnly': 0x10, 'CropToSquare': 0x20, 'WideThumbnails': 0x40, 'IconBackground': 0x80, 'ScaleUp': 0x100}
-WSSIIGBF = type('WSSIIGBF', (_BCodeOr, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WSSiigbf.items()}, '_tab_cn': {c: n for n, c in WSSiigbf.items()}, '_def': 0})
+WSSIIGBF = type('WSSIIGBF', (_BCodeOr, wintypes.INT), {}, _dict=WSSiigbf)
 
 WSOperationFlags = {'AllowUndo': 0x40, 'FilesOnly': 0x80, 'NoConfirmation': 0x10, 'NoConfirmMkDir': 0x200, 'NoConnectedElements': 0x2000, 'NoCopySecurityAttribs': 0x800, 'NoErrorUI': 0x400, 'NoRecursion': 0x1000, 'RenameOnCollision': 0x8, 'Silent': 0x4, 'WantNukeWarning': 0x4000, 'AddUndoRecord': 0x20000000, 'NoSkipJunctions': 0x10000, 'PreferHardLink': 0x20000, 'ShowElevationPrompt': 0x40000, 'EarlyFailure': 0x100000, 'PreserveFileExtensions': 0x200000, 'KeepNewerFile': 0x400000, 'NoCopyHooks': 0x800000, 'NoMinimizeBox': 0x1000000, 'MoveACLSAcrossVolumes': 0x2000000, 'DontDisplaySourcePath': 0x4000000, 'RecycleOnDelete': 0x80000, 'RequireElevation': 0x10000000, 'CopyAsDownload': 0x40000000, 'DontDisplayLocations': 0x80000000}
-WSOPERATIONFLAGS = type('WSOPERATIONFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WSOperationFlags.items()}, '_tab_cn': {c: n for n, c in WSOperationFlags.items()}, '_def': 0x240})
+WSOPERATIONFLAGS = type('WSOPERATIONFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=WSOperationFlags, _def=0x240)
+
+PSFactoryFlags = {'Default': 0x0, 'HandlePropertiesOnly': 0x1, 'ReadWrite': 0x2, 'Temporary': 0x4, 'FastPropertiesOnly': 0x8, 'OpenSlowItem': 0x10, 'DelayCreation': 0x20, 'BestEffort': 0x40, 'NoOpLock': 0x80, 'PreferQueryProperties': 0x100, 'ExtrinsicProperties': 0x200, 'ExtrinsicPropertiesOnly': 0x400, 'VolatileProperties': 0x800, 'VolatilePropertiesOnly': 0x1000}
+PSFACTORYFLAGS = type('PSFACTORYFLAGS', (_BCodeOr, wintypes.INT), {}, _dict=PSFactoryFlags)
 
 class _COM_IFileSystemBindData(_COM_IUnknown):
   _iids.add(GUID(0x3acf075f, 0x71db, 0x4afa, 0x81, 0xf0, 0x3f, 0xc4, 0xfd, 0xf2, 0xa5, 0xb8))
@@ -8826,7 +8898,7 @@ class IDataObject(IUnknown):
     return tuple(f.value for f in fa)
   def GetFileNames(self):
     return self.RetrieveFileNames(self.GetData((15, None, 1, -1, 1)))
-  def GetFileName(self, index):
+  def GetFileName(self, index=0):
     return None if (fa := self.RetrieveFileNames(self.GetData((15, None, 1, -1, 1)), (index,))) is None else fa[0]
   @staticmethod
   def RetrieveFileDescriptors(stg_medium):
@@ -8837,11 +8909,13 @@ class IDataObject(IUnknown):
     return fds
   def GetFileDescriptors(self):
     return self.RetrieveFileDescriptors(self.GetData(('FileGroupDescriptorW', None, 1, -1, 1)))
+  def GetFileDescriptor(self, index=0):
+    return None if (da := self.RetrieveFileDescriptors(self.GetData(('FileGroupDescriptorW', None, 1, -1, 1)))) is None or index < 0 or index >= len(da) else da[index]
   @staticmethod
   def RetrieveFileContent(stg_medium):
     return WSSTGMEDIUM._get_data(stg_medium, 4)
   def GetFileContent(self, index=0):
-    return None if (fds := self.GetFileDescriptors()) is None or index >= len(fds) else self.RetrieveFileContent(self.GetData(('FileContents', None, 1, index, 4)))
+    return self.RetrieveFileContent(self.GetData(('FileContents', None, 1, index, 4)))
   @staticmethod
   def RetrieveShIDLists(stg_medium):
     if (g := WSSTGMEDIUM._get_data(stg_medium, 1)) is None or not (h := _WShUtil.GlobalLock(g)):
@@ -9053,6 +9127,7 @@ class IShellItem(IUnknown):
   _protos['GetDisplayName'] = 5, (WSSIGDN,), (wintypes.PLPVOID,)
   _protos['GetAttributes'] = 6, (WSSFGAO,), (WSPSFGAO,)
   _protos['Compare'] = 7, (wintypes.LPVOID, WSSICHINTF), (wintypes.PINT,)
+  _protos['GetPropertyStore'] = 8, (PSFACTORYFLAGS, PUUID), (wintypes.PLPVOID,)
   def __new__(cls, clsid_component=False, factory=None):
     if clsid_component is False:
       clsid_component = IShellFolder()
@@ -9069,6 +9144,8 @@ class IShellItem(IUnknown):
     return self.__class__(self._protos['GetParent'](self.pI), self.factory)
   def GetAttributes(self, query_attributes):
     return self._protos['GetAttributes'](self.pI, query_attributes)
+  def GetPropertyStore(self, flags=0):
+    return IPropertyStore(self._protos['GetPropertyStore'](self.pI, flags, IPropertyStore.IID), self.factory)
   def Compare(self, item, compare_mode=0):
     return self._protos['Compare'](self.pI, item, compare_mode)
   def BindToHandler(self, handler_guid, interface, bind_context=None):
@@ -9118,6 +9195,8 @@ class IShellItem(IUnknown):
     return self.BindToHandler('Stream', IStream, bind_context)
   def GetLinkTarget(self, bind_context=None):
     return self.BindToHandler('LinkTargetItem', IShellItem, bind_context)
+  def GetPropertyStoreFactory(self, bind_context=None):
+    return self.BindToHandler('PropertyStore', IPropertyStoreFactory, bind_context)
   def GetContent(self, bind_context=None):
     return self.BindToHandler('EnumItems', IEnumShellItems, bind_context)
   @property
@@ -9609,44 +9688,57 @@ class _WndUtil:
 WNDPROC = ctypes.WINFUNCTYPE(wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM, use_last_error=True)
 
 WNDClassStyle = {'ByteAlignClient': 0x1000, 'ByteAlignWindow': 0x2000, 'ClassDC': 0x40, 'DblClks': 0x8, 'DropShadow': 0x20000, 'GlobalClass': 0x4000, 'HRedraw': 0x2, 'NoClose': 0x200, 'OwnDC': 0x20, 'ParentDC': 0x80, 'SaveBits': 0x800, 'VRedraw': 0x1}
-WNDCLASSSTYLE = type('WNDCLASSSTYLE', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDClassStyle.items()}, '_tab_cn': {c: n for n, c in WNDClassStyle.items()}, '_def': 0})
+WNDCLASSSTYLE = type('WNDCLASSSTYLE', (_BCodeOr, wintypes.UINT), {}, _dict=WNDClassStyle)
 
 class WNDCLASS(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbSize', wintypes.UINT), ('style', WNDCLASSSTYLE), ('lpfnWndProc', WNDPROC), ('cbClsExtra', wintypes.INT),  ('cbWndExtra', wintypes.INT), ('hInstance', wintypes.HINSTANCE),  ('hIcon', wintypes.HICON), ('hCursor', wintypes.HCURSOR), ('hBrush', wintypes.HBRUSH), ('lpszMenuName', wintypes.LPCWSTR), ('lpszClassName', wintypes.LPCWSTR), ('hIconSm', wintypes.HICON)]
 WNDPCLASS = type('WNDPCLASS', (_BPStruct, ctypes.POINTER(WNDCLASS)),  {'_type_': WNDCLASS})
 
-WNDWindowStyle = {'Border': 0x800000, 'Caption': 0xC00000, 'Child': 0x40000000, 'ClipChildren': 0x2000000, 'ClipSiblings': 0x4000000, 'Disabled': 0x8000000, 'DlgFrame': 0x400000, 'Group': 0x20000, 'HScroll': 0x100000, 'Maximize': 0x1000000, 'MaximizeBox': 0x10000, 'Minimize': 0x20000000, 'MinimizeBox': 0x20000, 'Overlapped': 0, 'Popup': 0x80000000, 'SizeBox': 0x40000, 'SysMenu': 0x80000, 'Visible': 0x10000000, 'VScroll': 0x200000}
-WNDWINDOWSTYLE = type('WNDWINDOWSTYLE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WNDWindowStyle.items()}, '_tab_cn': {c: n for n, c in WNDWindowStyle.items()}, '_def': 0})
+WNDWindowStyle = {'Border': 0x800000, 'Caption': 0xC00000, 'Child': 0x40000000, 'ClipChildren': 0x2000000, 'ClipSiblings': 0x4000000, 'Disabled': 0x8000000, 'DlgFrame': 0x400000, 'Group': 0x20000, 'HScroll': 0x100000, 'Maximize': 0x1000000, 'MaximizeBox': 0x10000, 'Minimize': 0x20000000, 'MinimizeBox': 0x20000, 'Overlapped': 0, 'Popup': 0x80000000, 'SizeBox': 0x40000, 'SysMenu': 0x80000, 'TabStop': 0x10000, 'Visible': 0x10000000, 'VScroll': 0x200000}
+WNDWINDOWSTYLE = type('WNDWINDOWSTYLE', (_BCodeOr, wintypes.DWORD), {}, _dict=WNDWindowStyle)
 
 WNDCmdRelationship = {'Child': 5, 'EnabledPopup': 6, 'First': 0, 'Last': 1, 'Next': 2, 'Prev': 3, 'Owner': 4}
-WNDCMDRELATIONSHIP = type('WNDCMDRELATIONSHIP', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDCmdRelationship.items()}, '_tab_cn': {c: n for n, c in WNDCmdRelationship.items()}, '_def': 5})
+WNDCMDRELATIONSHIP = type('WNDCMDRELATIONSHIP', (_BCode, wintypes.UINT), {}, _dict=WNDCmdRelationship, _def=5)
 
 WNDAncestorFlag = {'Parent': 1, 'Root': 2, 'RootOwner': 3}
-WNDANCESTORFLAG = type('WNDANCESTORFLAG', (_BCode, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDAncestorFlag.items()}, '_tab_cn': {c: n for n, c in WNDAncestorFlag.items()}, '_def': 1})
+WNDANCESTORFLAG = type('WNDANCESTORFLAG', (_BCode, wintypes.UINT), {}, _dict=WNDAncestorFlag, _def=1)
 
 WNDCmdShow = {'Hide': 0, 'ShowNormal': 1, 'ShowMinimized': 2, 'ShowMaximized': 3, 'ShowNoActivate': 4, 'Show': 5, 'Minimize': 6, 'ShowMinNoActive': 7, 'ShowNA': 8, 'Restore': 9, 'ShowDefault': 10, 'ForceMinimize': 11}
-WNDCMDSHOW = type('WNDCMDSHOW', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WNDCmdShow.items()}, '_tab_cn': {c: n for n, c in WNDCmdShow.items()}, '_def': 5})
+WNDCMDSHOW = type('WNDCMDSHOW', (_BCode, wintypes.INT), {}, _dict=WNDCmdShow, _def=5)
 
 WNDPosHwnd = {'Bottom': 1, 'NoTopMost': -2, 'Top': 0, 'TopMost': -1}
-WNDPOSHWND = type('WNDPOSHWND', (_BCode, wintypes.LPARAM), {'_tab_nc': {n.lower(): c for n, c in WNDPosHwnd.items()}, '_tab_cn': {c: n for n, c in WNDPosHwnd.items()}, '_def': 0})
+WNDPOSHWND = type('WNDPOSHWND', (_BCode, wintypes.LPARAM), {}, _dict=WNDPosHwnd)
 
 WNDPosFlags = {'AsyncWindowPos': 0x4000, 'DeferErase': 0x2000, 'DrawFrame': 0x20, 'FrameChanged': 0x20, 'HideWindow': 0x80, 'NoActivate': 0x10, 'NoCopyBits': 0x100, 'NoMove': 0x2, 'NoOwnerZOrder': 0x200, 'NoReposition': 0x200, 'NoSendChanging': 0x400, 'NoSize': 0x1, 'NoZOrder': 0x4, 'ShowWindow': 0x40}
-WNDPOSFLAGS = type('WNDPOSFLAGS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDPosFlags.items()}, '_tab_cn': {c: n for n, c in WNDPosFlags.items()}, '_def': 0})
+WNDPOSFLAGS = type('WNDPOSFLAGS', (_BCodeOr, wintypes.UINT), {}, _dict=WNDPosFlags)
+
+WNDScrollBar = {'Horz': 0, 'Vert': 1, 'Ctl': 2, 'Both': 3}
+WNDSCROLLBAR = type('WNDSCROLLBAR', (_BCode, wintypes.INT), {}, _dict=WNDScrollBar)
+
+WNDScrollInfoFlags = {'Range': 0x1, 'Page': 0x2, 'Pos': 0x4, 'DisableNoScroll': 0x8, 'TrackPos': 0x10, 'All': 0x17}
+WNDSCROLLINFOFLAGS = type('WNDSCROLLINFOFLAGS', (_BCodeOr, wintypes.UINT), {}, _dict=WNDScrollInfoFlags, _def=4)
+
+class WNDSCROLLINFO(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cbSize', wintypes.UINT), ('fMask', WNDSCROLLINFOFLAGS), ('nMin', wintypes.INT), ('nMax', wintypes.INT), ('nPage', wintypes.UINT), ('nPos', wintypes.INT), ('nTrackPos', wintypes.INT)]
+WNDPSCROLLINFO = type('WNDPSCROLLINFO', (_BPStruct, ctypes.POINTER(WNDSCROLLINFO)),  {'_type_': WNDSCROLLINFO})
+
+WNDScrollFlags = {'Erase': 0x4, 'Invalidate': 0x2, 'ScrollChildren': 0x1}
+WNDSCROLLFLAGS = type('WNDSCROLLFLAGS', (_BCodeOr, wintypes.UINT), {}, _dict=WNDScrollFlags, _def=7)
 
 WNDIndex = {'ExStyle': -20, 'HInstance': -6, 'HwndParent': -8, 'ID': -12, 'Style': -16, 'UserData': -21, 'WndProc': -4}
-WNDINDEX = type('WNDINDEX', (_BCode, wintypes.INT), {'_tab_nc': {n.lower(): c for n, c in WNDIndex.items()}, '_tab_cn': {c: n for n, c in WNDIndex.items()}, '_def': -16})
+WNDINDEX = type('WNDINDEX', (_BCode, wintypes.INT), {}, _dict=WNDIndex, _def=-16)
 
 WNDMonitorFlag = {'Null': 0, 'Primary': 1, 'Nearest': 2}
-WNDMONITORFLAG = type('WNDMONITORFLAG', (_BCode, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in WNDMonitorFlag.items()}, '_tab_cn': {c: n for n, c in WNDMonitorFlag.items()}, '_def': 0})
+WNDMONITORFLAG = type('WNDMONITORFLAG', (_BCode, wintypes.DWORD), {}, _dict=WNDMonitorFlag)
 
 WNDRemoveMsg = {'NoRemove': 0, 'Remove': 1, 'NoYield': 2, 'Input': 0x1c070000, 'PostMessage': 0x980000, 'Paint': 0x200000, 'SendMessage': 0x400000}
-WNDREMOVEMSG = type('WNDREMOVEMSG', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in WNDRemoveMsg.items()}, '_tab_cn': {c: n for n, c in WNDRemoveMsg.items()}, '_def': 0})
+WNDREMOVEMSG = type('WNDREMOVEMSG', (_BCodeOr, wintypes.UINT), {}, _dict=WNDRemoveMsg)
 
 class HWND(wintypes.HWND):
   def __new__(cls, hwnd, ml=None):
-    return None if hwnd is None else wintypes.HWND.__new__(cls, hwnd)
+    return None if hwnd is None else wintypes.HWND.__new__(cls, getattr(hwnd, 'hwnd', hwnd))
   def __init__(self, hwnd, ml=None):
-    wintypes.HWND.__init__(self, hwnd)
+    wintypes.HWND.__init__(self, getattr(hwnd, 'hwnd', hwnd))
     self._ml = ml
   @property
   def hwnd(self):
@@ -9742,6 +9834,18 @@ class HWND(wintypes.HWND):
   @Name.setter
   def Name(self, value):
     Window.SetWindowName(self, value)
+  def GetScrollInfo(self, bar, mask):
+    si = WNDSCROLLINFO(mask)
+    return si.value if Window.GetScrollInfo(self, bar, si) else None
+  def SetScrollInfo(self, bar, mask, min=0, max=0, size=0, pos=0, redraw=True):
+    si = WNDSCROLLINFO(mask, min, max, size, pos)
+    ctypes.set_last_error(0)
+    c = Window.SetScrollInfo(self, bar, si, redraw)
+    return None if ctypes.get_last_error() else c
+  def Scroll(self, dx, dy, flags=7):
+    return bool(Window.ScrollWindowEx(self, dx, dy, None, None, None, None, flags))
+  def SetFocus(self):
+    return HWND(Window.SetFocus(self))
   @property
   def ThreadProcessId(self):
     pid = wintypes.DWORD()
@@ -9842,6 +9946,12 @@ class _WndMeta(type):
   @property
   def ConsoleWindow(cls):
     return HWND(cls.GetConsoleWindow())
+  @property
+  def Focus(cls):
+    return HWND(cls.GetFocus())
+  @Focus.setter
+  def Focus(cls, hwnd):
+    return HWND(cls.SetFocus(hwnd))
   def DefMessageLoop(cls, hwnd):
     lpMsg = ctypes.byref(wintypes.MSG())
     while cls.GetMessage(lpMsg, hwnd, 0, 0) > 0:
@@ -9925,6 +10035,11 @@ class Window(metaclass=_WndMeta):
   GetWindowTextLength = _WndUtil._wrap('GetWindowTextLengthW', wintypes.INT, wintypes.HWND)
   GetWindowText = _WndUtil._wrap('GetWindowTextW', wintypes.INT, wintypes.HWND, wintypes.LPWSTR, wintypes.INT)
   SetWindowText = _WndUtil._wrap('SetWindowTextW', wintypes.BOOLE, wintypes.HWND, wintypes.LPCWSTR)
+  GetScrollInfo = _WndUtil._wrap('GetScrollInfo', wintypes.BOOLE, wintypes.HANDLE, WNDSCROLLBAR, WNDPSCROLLINFO)
+  SetScrollInfo = _WndUtil._wrap('SetScrollInfo', wintypes.INT, wintypes.HANDLE, WNDSCROLLBAR, WNDPSCROLLINFO, wintypes.BOOL)
+  ScrollWindowEx = _WndUtil._wrap('ScrollWindowEx', wintypes.INT, wintypes.HANDLE, wintypes.INT, wintypes.INT, PRECT, PRECT, wintypes.HRGN, PRECT, WNDSCROLLFLAGS)
+  GetFocus = _WndUtil._wrap('GetFocus', wintypes.HWND)
+  SetFocus = _WndUtil._wrap('SetFocus', wintypes.HWND, wintypes.HWND)
   GetWindowThreadProcessId = _WndUtil._wrap('GetWindowThreadProcessId', wintypes.DWORD, wintypes.HWND, wintypes.PDWORD)
   GetWindowLongPtr = _WndUtil._wrap('GetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX)
   SetWindowLongPtr = _WndUtil._wrap('SetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX, wintypes.LPARAM)
@@ -9949,17 +10064,9 @@ class Window(metaclass=_WndMeta):
   CallWindowProc = _WndUtil._wrap('CallWindowProcW', wintypes.LRESULT, WNDPROC, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 DLGBoxStyle = {**WNDWindowStyle, '3DLook': 0x4, 'AbsAlign': 0x1, 'Center': 0x800, 'CenterMouse': 0x1000, 'ContextHelp': 0x2000, 'Control': 0x400, 'FixedSys': 0x8, 'LocalEdit': 0x20, 'ModalFrame': 0x80, 'NoFailCreate': 0x10, 'NoIdleMsg': 0x100, 'SetFont': 0x40, 'SetForeground': 0x200, 'ShellFont': 0x48, 'SysModal': 0x2}
-DLGBOXSTYLE = type('DLGBOXSTYLE', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in DLGBoxStyle.items()}, '_tab_cn': {c: n for n, c in DLGBoxStyle.items()}, '_def': 0})
-
-DLGScrollInfoFlags = {'Range': 0x1, 'Page': 0x2, 'Pos': 0x4, 'DisableNoScroll': 0x8, 'TrackPos': 0x10, 'All': 0x17}
-DLGSCROLLINFOFLAGS = type('DLGSCROLLINFOFLAGS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DLGScrollInfoFlags.items()}, '_tab_cn': {c: n for n, c in DLGScrollInfoFlags.items()}, '_def': 4})
-
-class DLGSCROLLINFO(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('cbSize', wintypes.UINT), ('fMask', DLGSCROLLINFOFLAGS), ('nMin', wintypes.INT), ('nMax', wintypes.INT), ('nPage', wintypes.UINT), ('nPos', wintypes.INT), ('nTrackPos', wintypes.INT)]
-DLGPSCROLLINFO = type('DLGPSCROLLINFO', (_BPStruct, ctypes.POINTER(DLGSCROLLINFO)),  {'_type_': DLGSCROLLINFO})
-
-DLGScrollFlags = {'Erase': 0x4, 'Invalidate': 0x2, 'ScrollChildren': 0x1}
-DLGSCROLLFLAGS = type('DLGSCROLLFLAGS', (_BCodeOr, wintypes.UINT), {'_tab_nc': {n.lower(): c for n, c in DLGScrollFlags.items()}, '_tab_cn': {c: n for n, c in DLGScrollFlags.items()}, '_def': 7})
+DLGBOXSTYLE = type('DLGBOXSTYLE', (_BCodeOr, wintypes.DWORD), {}, _dict=DLGBoxStyle)
+DLGControlStyle = {**WNDWindowStyle, 'Adjustable': 0x20, 'Bottom': 0x3, 'Left': 0x81, 'NoDivider': 0x40, 'NoMoveX': 0x82, 'NoMoveY': 0x2, 'NoParentAlign': 0x8, 'NoResize': 0x4, 'Right': 0x83, 'Top': 0x1, 'Vert': 0x80, 'StaticBitmap': 0xe, 'StaticBlackFrame': 0x7, 'StaticBlackRect': 0x4, 'StaticCenter': 0x1, 'StaticCenterImage': 0x200, 'StaticEditControl': 0x2000, 'StaticEndEllipsis': 0x4000, 'StaticEnhMetafile': 0xf, 'StaticEtchedFrame': 0x12, 'StaticEtchedHorz': 0x10, 'StaticEtchedVert': 0x11, 'StaticGrayFrame': 0x8, 'StaticGrayRect': 0x5, 'StaticIcon': 0x3, 'StaticLeft': 0x0, 'StaticLeftNoWordWrap': 0xc, 'StaticNoPrefix': 0x80, 'StaticNotify': 0x100, 'StaticOwnerDraw': 0xd, 'StaticPathEllipsis': 0x8000, 'StaticRealSizeControl': 0x40, 'StaticRealSizeImage': 0x800, 'StaticRight': 0x2, 'StaticRightJust': 0x400, 'StaticSimple': 0xb, 'StaticSunken': 0x1000, 'StaticTypeMask': 0x1f, 'StaticWhiteFrame': 0x8, 'StaticWhiteRect': 0x6, 'StaticWordEllipsis': 0xc000, 'EditAutoHScroll': 0x80, 'EditAutoVScroll': 0x40, 'EditCenter': 0x1, 'EditLeft': 0x0, 'EditLowercase': 0x10, 'EditMultiline': 0x4, 'EditNoHideSel': 0x100, 'EditNumber': 0x2000, 'EditOEMConvert': 0x400, 'EditPassword': 0x20, 'EditReadOnly': 0x800, 'EditRight': 0x2, 'EditUppercase': 0x8, 'EditWantReturn': 0x1000}
+DLGCONTROLSTYLE = type('DLGCONTROLSTYLE', (_BCodeOr, wintypes.DWORD), {}, _dict=DLGControlStyle)
 
 class DLGTEMPLATE(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _pack_ = 2
@@ -9968,13 +10075,106 @@ DLGPTEMPLATE = type('DLGPTEMPLATE', (_BPStruct, ctypes.POINTER(DLGTEMPLATE)),  {
 
 class DLGITEMTEMPLATE(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _pack_ = 2
-  _fields_ = [('style', WNDWINDOWSTYLE), ('dwExtendedStyle', wintypes.DWORD), ('x', wintypes.SHORT), ('y', wintypes.SHORT), ('cx', wintypes.SHORT), ('cy', wintypes.SHORT), ('id', wintypes.WORD)]
+  _fields_ = [('style', DLGCONTROLSTYLE), ('dwExtendedStyle', wintypes.DWORD), ('x', wintypes.SHORT), ('y', wintypes.SHORT), ('cx', wintypes.SHORT), ('cy', wintypes.SHORT), ('id', wintypes.WORD)]
 DLGPITEMTEMPLATE = type('DLGPITEMTEMPLATE', (_BPStruct, ctypes.POINTER(DLGITEMTEMPLATE)),  {'_type_': DLGITEMTEMPLATE})
 
 DLGPROC = ctypes.WINFUNCTYPE(wintypes.ULONG_PTR, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
+class DLGNMHDR(ctypes.Structure):
+  _fields_ = [('hwndFrom', wintypes.HWND), ('idFrom', wintypes.ULONG_PTR), ('code', wintypes.UINT)]
+
+DLGTaskDialogFlags = {'Default': 0, 'EnableHyperlinks': 0x1, 'UseHIconMain': 0x2, 'UseHIconFooter': 0x4, 'AllowDialogCancellation': 0x8, 'UseCommandLinks': 0x10, 'UseCommandLinksNoIcon': 0x20, 'ExpandFooterArea': 0x40, 'ExpandedByDefault': 0x80, 'VerificationFlagChecked': 0x100, 'ShowProgressBar': 0x200, 'ShowMarqueeProgressBar': 0x400, 'CallbackTimer': 0x800, 'PositionRelativeToWindow': 0x1000, 'RtLLayout': 0x2000, 'NoDefaultRadioButton': 0x4000, 'CanBeMinimized': 0x8000, 'SizeToContent': 0x1000000}
+DLGTASKDIALOGFLAGS = type('DLGTASKDIALOGFLAGS', (_BCodeOr, wintypes.INT), {}, _dict=DLGTaskDialogFlags)
+
+DLGTaskDialogCommonButtonFlags = {'None': 0, 'OK': 0x1, 'Yes': 0x2, 'No': 0x4, 'Cancel': 0x8, 'Retry': 0x10, 'Close': 0x20}
+DLGTASKDIALOGCOMMONBUTTONFLAGS = type('DLGTASKDIALOGCOMMONBUTTONFLAGS', (_BCodeOr, wintypes.INT), {}, _dict=DLGTaskDialogCommonButtonFlags)
+
+class DLGTASKDIALOGBUTTON(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('nButtonID', wintypes.INT), ('pszButtonText', wintypes.LPCWSTR)]
+DLGPTASKDIALOGBUTTON = type('DLGPTASKDIALOGBUTTON', (_BPStruct, ctypes.POINTER(DLGTASKDIALOGBUTTON)),  {'_type_': DLGTASKDIALOGBUTTON})
+
+DLGTaskDialogIcon = {'None': 0, 'Warning': 65535, 'Error': 65534, 'Information': 65533, 'Shield': 65532}
+DLGTASKDIALOGICON = type('DLGTASKDIALOGICON', (_BCode, wintypes.ULONG_PTR), {}, _dict=DLGTaskDialogIcon)
+
+DLGTASKDIALOGCALLBACK = ctypes.WINFUNCTYPE(wintypes.ULONG_PTR, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM, wintypes.ULONG_PTR)
+
+class DLGTASKDIALOGCONFIG(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
+  _pack_ = 1
+  _fields_ = [('cbSize', wintypes.UINT), ('hwndParent', wintypes.HWND), ('hInstance', wintypes.HINSTANCE), ('dwFlags', DLGTASKDIALOGFLAGS), ('dwCommonButtons', DLGTASKDIALOGCOMMONBUTTONFLAGS), ('pszWindowTitle', wintypes.LPCWSTR), ('pszMainIcon', DLGTASKDIALOGICON), ('pszMainInstruction', wintypes.LPCWSTR), ('pszContent', wintypes.LPCWSTR), ('cButtons', wintypes.UINT), ('pButtons', DLGPTASKDIALOGBUTTON), ('nDefaultButton', DLGTASKDIALOGCOMMONBUTTONFLAGS), ('cRadioButtons', wintypes.UINT), ('pRadioButtons', DLGPTASKDIALOGBUTTON), ('nDefaultRadioButton', wintypes.INT), ('pszVerificationText', wintypes.LPCWSTR), ('pszExpandedInformation', wintypes.LPCWSTR), ('pszExpandedControlText', wintypes.LPCWSTR), ('pszCollapsedControlText', wintypes.LPCWSTR), ('pszFooterIcon', DLGTASKDIALOGICON), ('pszFooter', wintypes.LPCWSTR), ('pfCallback', DLGTASKDIALOGCALLBACK), ('lpCallbackData', wintypes.ULONG_PTR), ('cxWidth', wintypes.UINT)]
+DLGPTASKDIALOGCONFIG = type('DLGPTASKDIALOGCONFIG', (_BPStruct, ctypes.POINTER(DLGTASKDIALOGCONFIG)),  {'_type_': DLGTASKDIALOGCONFIG})
+
+class DialogWindow(Window):
+  GetDlgItem = _WndUtil._wrap('GetDlgItem', wintypes.HWND, wintypes.HWND, wintypes.INT)
+  GetDlgCtrlID = _WndUtil._wrap('GetDlgCtrlID', wintypes.INT, wintypes.HWND)
+  SetDlgItemText = _WndUtil._wrap('SetDlgItemTextW', wintypes.BOOLE, wintypes.HWND, wintypes.INT, wintypes.LPCWSTR)
+  GetDlgItemText = _WndUtil._wrap('GetDlgItemTextW', wintypes.UINT, wintypes.HWND, wintypes.INT, wintypes.LPCWSTR, wintypes.INT)
+  MapDialogRect = _WndUtil._wrap('MapDialogRect', wintypes.BOOLE, wintypes.HWND, PRECT)
+  try:
+    raise
+    TaskDialogIndirect = _WndUtil._wrap('TaskDialogIndirect', wintypes.ULONG, DLGPTASKDIALOGCONFIG, wintypes.PINT, wintypes.PINT, wintypes.PBOOLE, p=comctl32)
+  except:
+    MessageBox = _WndUtil._wrap('MessageBoxW', wintypes.INT, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT)
+  @staticmethod
+  def SetPrivateAttribute(hwnd, value):
+    return DialogWindow.SetWindowLongPtr(hwnd, 2 * ctypes.sizeof(wintypes.ULONG_PTR), value)
+  @staticmethod
+  def GetPrivateAttribute(hwnd):
+    return DialogWindow.GetWindowLongPtr(hwnd, 2 * ctypes.sizeof(wintypes.ULONG_PTR))
+  @staticmethod
+  def SetReturnValue(hwnd, value):
+    return DialogWindow.SetWindowLongPtr(hwnd, 0, value)
+  @staticmethod
+  def GetReturnValue(hwnd):
+    return DialogWindow.GetWindowLongPtr(hwnd, 0)
+  @staticmethod
+  def GetModify(hwnd):
+    return bool(Window.SendMessage(hwnd, 184, 0, 0))
+  @staticmethod
+  def SetModify(hwnd, modify=False):
+    return bool(Window.SendMessage(hwnd, 185, (1 if modify else 0), 0))
+
+class DLGHWND(HWND):
+  def GetItem(self, id_ctrl):
+    return HWND(DialogWindow.GetDlgItem(self, id_ctrl))
+  @staticmethod
+  def GetItemID(hwnd_ctrl):
+    return DialogWindow.GetDlgCtrlID(hwnd_ctrl)
+  def SetItemText(self, ctrl, value):
+    return False if isinstance(ctrl, int) and not (ctrl := self.GetItem(ctrl)) else bool(DialogWindow.SetDlgItemText(self, ctrl, value))
+  def GetItemText(self, ctrl):
+    hwnd = ctrl
+    if not ((hwnd := self.GetItem(ctrl)) if isinstance(ctrl, int) else (ctrl := self.GetItemID(hwnd))):
+      return None
+    l = n = Window.GetWindowTextLength(hwnd) or 1023
+    while n >= l:
+      v = ctypes.create_unicode_buffer(l + 1)
+      if (n := DialogWindow.GetDlgItemText(self, ctrl, v, l + 1)) == 0:
+        return None
+      l += 4096
+    return v.value
+  def GetItemModify(self, ctrl):
+    return False if isinstance(ctrl, int) and not (ctrl := self.GetItem(ctrl)) else DialogWindow.GetModify(ctrl)
+  def SetItemModify(self, ctrl, modify=False):
+    return False if isinstance(ctrl, int) and not (ctrl := self.GetItem(ctrl)) else DialogWindow.SetModify(ctrl, modify)
+  @property
+  def PrivateAttribute(self):
+    return DialogWindow.GetPrivateAttribute(self)
+  @PrivateAttribute.setter
+  def PrivateAttribute(self, value):
+    return DialogWindow.SetPrivateAttribute(self, value)
+  @property
+  def ReturnValue(self):
+    return DialogWindow.GetReturnValue(self)
+  @ReturnValue.setter
+  def ReturnValue(self, value):
+    return DialogWindow.SetReturnValue(self, value)
+  def MapDialogRect(self, rect):
+    pr = PRECT.from_param(rect, pointer=True)
+    return pr.value if DialogWindow.MapDialogRect(rect) else None
+
+
 PSPFlags = {'Default': 0x0, 'DlgIndirect': 0x1, 'HasHelp': 0x20, 'HideHeader': 0x800, 'Premature': 0x400, 'RtLReading': 0x10, 'UseCallback': 0x80, 'UseFusionContext': 0x4000, 'UseHeaderSubtitle': 0x2000, 'UseHeaderTitle': 0x1000, 'UseHIcon': 0x2, 'UseIconID': 0x4, 'UseRefParent': 0x40, 'UseTitle': 0x8}
-PSPFLAGS = type('PSPFLAGS', (_BCodeOr, wintypes.DWORD), {'_tab_nc': {n.lower(): c for n, c in PSPFlags.items()}, '_tab_cn': {c: n for n, c in PSPFlags.items()}, '_def': 0})
+PSPFLAGS = type('PSPFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=PSPFlags)
 
 class SPSPROPSHEETPAGE(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
   pass
@@ -9983,31 +10183,44 @@ SPSFNADDSPSPROPSHEETPAGE = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, wi
 SPSFNPSPCALLBACK = ctypes.WINFUNCTYPE(wintypes.UINT, wintypes.HWND, wintypes.UINT, SPSPPROPSHEETPAGE)
 SPSPROPSHEETPAGE._fields_ = [('dwSize', wintypes.DWORD), ('dwFlags', PSPFLAGS), ('hInstance', wintypes.HINSTANCE), ('pResource', DLGPTEMPLATE), ('hIcon', wintypes.HICON), ('pszTitle', wintypes.LPCWSTR), ('pfnDlgProc', DLGPROC), ('lParam', wintypes.LPARAM), ('pfnCallback', SPSFNPSPCALLBACK), ('pcRefParent', wintypes.PUINT), ('pszHeaderTitle', wintypes.LPCWSTR), ('pszHeaderSubTitle', wintypes.LPCWSTR), ('hActCtx', wintypes.HANDLE), ('hbmHeader', wintypes.HBITMAP)]
 
+class SPSNOTIFY(ctypes.Structure):
+  _anonymous_ = ('hdr',)
+  _fields_ = [('hdr', DLGNMHDR), ('lparam', wintypes.LPARAM)]
+
 class PCOMDATAOBJECT(PCOM):
   icls = IDataObject
   def GetFileNames(self):
     return None if not self else IDataObject.RetrieveFileNames(IDataObject._protos['GetData'](self, (15, None, 1, -1, 1)))
-  def GetFileName(self, index):
+  def GetFileName(self, index=0):
     return None if not self or (fa := IDataObject.RetrieveFileNames(IDataObject._protos['GetData'](self, (15, None, 1, -1, 1)), (index,))) is None else fa[0]
   def GetFileDescriptors(self):
     return None if not self else IDataObject.RetrieveFileDescriptors(IDataObject._protos['GetData'](self, ('FileGroupDescriptorW', None, 1, -1, 1)))
+  def GetFileDescriptor(self, index=0):
+    return None if not self or (da := IDataObject.RetrieveFileDescriptors(IDataObject._protos['GetData'](self, ('FileGroupDescriptorW', None, 1, -1, 1)))) is None or index < 0 or index >= len(da) else da[index]
+  def GetFileContent(self, index=0):
+    return None if not self else _PCOMUtil._detach(PCOMSTREAM(IDataObject.RetrieveFileContent(IDataObject._protos['GetData'](self, ('FileContents', None, 1, index, 4)))))
 
 class _SPSUtil:
   CreatePropertySheetPage = _WndUtil._wrap('CreatePropertySheetPageW', wintypes.HANDLE, SPSPPROPSHEETPAGE, p=comctl32)
   DestroyPropertySheetPage = _WndUtil._wrap('DestroyPropertySheetPage', wintypes.BOOLE, wintypes.HANDLE, p=comctl32)
-  GetScrollInfo = _WndUtil._wrap('GetScrollInfo', wintypes.BOOLE, wintypes.HANDLE, wintypes.INT, DLGPSCROLLINFO)
-  SetScrollInfo = _WndUtil._wrap('SetScrollInfo', wintypes.INT, wintypes.HANDLE, wintypes.INT, DLGPSCROLLINFO, wintypes.BOOL)
-  ScrollWindowEx = _WndUtil._wrap('ScrollWindowEx', wintypes.INT, wintypes.HANDLE, wintypes.INT, wintypes.INT, PRECT, PRECT, wintypes.HRGN, PRECT, DLGSCROLLFLAGS)
-  SetDlgItemText = _WndUtil._wrap('SetDlgItemTextW', wintypes.BOOLE, wintypes.HANDLE, wintypes.INT, wintypes.LPCWSTR)
-  MapDialogRect = _WndUtil._wrap('MapDialogRect', wintypes.BOOLE, wintypes.HANDLE, wintypes.PRECT)
   @staticmethod
   def GetTabDisplayRect(hwnd):
-    if not ((d := hwnd if isinstance(hwnd, HWND) else HWND(hwnd)) and (p := d.Parent) and (t := p.FindChildWindow(class_name='SysTabControl32')) and (r := t.Rect)):
+    if not ((d := hwnd if isinstance(hwnd, DLGHWND) else DLGHWND(hwnd)) and (p := d.Parent) and (t := p.FindChildWindow(class_name='SysTabControl32')) and (r := t.Rect)):
       return None
     t.SendMessage(4904, False, ctypes.addressof(r))
     if p.MapRect(r) is None:
       return None
     return r
+  @staticmethod
+  def SendTabChanged(hwnd):
+    if not ((d := hwnd if isinstance(hwnd, DLGHWND) else DLGHWND(hwnd)) and (p := d.Parent)):
+      return False
+    return p.PostMessage(1128, d.hwnd, 0)
+  @staticmethod
+  def SendTabUnchanged(hwnd):
+    if not ((d := hwnd if isinstance(hwnd, DLGHWND) else DLGHWND(hwnd)) and (p := d.Parent)):
+      return False
+    return p.PostMessage(1133, d.hwnd, 0)
 
 class _COM_IShellExtInit(_COM_IUnknown):
   _iids.add(GUID('000214e8-0000-0000-c000-000000000046'))
@@ -10021,8 +10234,8 @@ class _COM_IShellExtInit(_COM_IUnknown):
       if not self or not pdtobj:
         return 0x80004003
       if self.pdtobj:
-        return 0x8000ffff
-      if not ((fa := pdtobj.GetFileNames()) and ((exts := getattr(self.__class__, 'Exts', None)) is None or all(any(f.lower().endswith(e) for e in exts) for f in fa))):
+        return 0x800704df
+      if not ((fa := pdtobj.GetFileNames()) and ((exts := getattr(self.__class__, 'Exts', None)) is None or all(any(f.endswith(e) for e in exts) for f in map(str.lower, fa)))):
         return 0x80070057
       self.pdtobj = pdtobj
       pdtobj.AddRef()
@@ -10040,6 +10253,8 @@ class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
   _iids.add(GUID('000214e9-0000-0000-c000-000000000046'))
   _vtbl['AddPages'] = (wintypes.ULONG, wintypes.LPVOID, SPSFNADDSPSPROPSHEETPAGE, wintypes.LPARAM)
   _vtbl['ReplacePages'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.UINT, SPSFNADDSPSPROPSHEETPAGE, wintypes.LPARAM)
+  _vars['nelts'] = wintypes.UINT
+  _vars['ppsp'] = SPSPPROPSHEETPAGE
   Title = 'Ext'
   @staticmethod
   def _header_size(t, tf=None):
@@ -10088,42 +10303,57 @@ class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
     return DLGPTEMPLATE(dt)
   @classmethod
   def _DlgProc(cls, hWnd, uMsg, wParam, lParam):
-    d = HWND(hWnd)
     if uMsg == 272:
+      d = DLGHWND(hWnd)
+      d.PrivateAttribute = SPSPROPSHEETPAGE.from_address(lParam).lParam
       d.PostMessage(1024, 0, 0)
     elif uMsg == 1024:
+      d = DLGHWND(hWnd)
       if (rd := d.Rect) is not None:
-        si = DLGSCROLLINFO('Range | Page | Pos', 0, max((r.bottom for c in d.Children if (r := c.Rect) is not None), default=0) - rd.top, rd.bottom - rd.top, 0, 0)
-        _SPSUtil.SetScrollInfo(d, 1, si, True)
+        d.SetScrollInfo(1, 7, 0, max((r.bottom for c in d.Children if (r := c.Rect) is not None), default=0) - rd.top, rd.bottom - rd.top, 0, True)
     elif uMsg == 277:
+      d = DLGHWND(hWnd)
       req = wParam & 0xffff
-      si = DLGSCROLLINFO(7)
-      _SPSUtil.GetScrollInfo(d, 1, si)
-      pos = si.nPos
+      if (si := d.GetScrollInfo(1, 7)) is None:
+        return 0
+      pos = si['nPos']
       if req == 0:
-        si.nPos -= 15
+        pos -= 15
       elif req == 1:
-        si.nPos += 15
+        pos += 15
       elif req == 2:
-        si.nPos -= si.nPage
+        pos -= si['nPage']
       elif req == 3:
-        si.nPos += si.nPage
+        pos += si['nPage']
       elif req in (4, 5):
-        si.nPos = wParam >> 16
+        pos = wParam >> 16
       elif req == 6:
-        si.nPos = 0
+        pos = si['nMin']
       elif req == 7:
-        si.nPos = si.nMax - si.nPage
-      si.nPos = max(min(si.nPos, si.nMax - si.nPage), si.nMin)
-      if pos != si.nPos:
-        _SPSUtil.ScrollWindowEx(d, 0, pos - si.nPos, None, None, None, None, 7)
-        d.Update()
-        si.fMask = 4
-        _SPSUtil.SetScrollInfo(d, 1, si, True)
+        pos = si['nMax'] - si['nPage']
+      pos = max(min(pos, si['nMax'] - si['nPage']), si['nMin'])
+      if pos != si['nPos']:
+        if d.Scroll(0, si['nPos'] - pos):
+          d.Update()
+          d.SetScrollInfo(1, 4, pos=pos, redraw=True)
     elif uMsg == 522:
+      d = DLGHWND(hWnd)
       wParam >>= 31
       d.SendMessage(277, wParam, 0)
       d.SendMessage(277, wParam, 0)
+    elif uMsg == 273:
+      if wParam >> 16 == 512:
+        if DialogWindow.GetModify(lParam):
+          _SPSUtil.SendTabChanged(hWnd)
+    elif uMsg == 78:
+      if DLGNMHDR.from_address(lParam).code == 4294967094:
+        d = DLGHWND(hWnd)
+        if d.ReturnValue == 0:
+          c = None
+          while (c := d.FindChildWindow(c, 'Edit')):
+            d.SetItemModify(c)
+          _SPSUtil.SendTabUnchanged(d)
+          d.ReturnValue = 0
     return 0
   @classmethod
   def _CallbackProc(cls, hwnd, uMsg, ppsp):
@@ -10141,9 +10371,9 @@ class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
       if not self or not pfnAddPage:
         return 0x80004003
       hPages = []
-      for i in range(self.nelts):
-        self.ppsp[i].__init__('DlgIndirect | UseCallback | UseTitle', None, cls.Template(), None, (cls.Title if self.nelts <= 1 else '%s %d' % (cls.Title, (i + 1))), cls.DlgProc, pI, cls.CallbackProc, None, None, None, None, None)
-        if not (hPage := _SPSUtil.CreatePropertySheetPage(self.ppsp[i])):
+      for e in range(self.nelts):
+        self.ppsp[e].__init__('DlgIndirect | UseCallback | UseTitle', None, cls.Template(), None, (cls.Title if self.nelts <= 1 else '%s %d' % (cls.Title, (e + 1))), cls.DlgProc, pI, cls.CallbackProc, None, None, None, None, None)
+        if not (hPage := _SPSUtil.CreatePropertySheetPage(self.ppsp[e])):
           for hPage in hPages:
             _SPSUtil.DestroyPropertySheetPage(hPage)
           return 0x80004005
@@ -10171,31 +10401,290 @@ class _COM_IShellPropSheetExt_impl(metaclass=_COMMeta, interfaces=(_COM_IShellEx
         self.ppsp[i].pResource = None
       self.ppsp = None
       self.nelts = 0
+_COM_IShellExtInit._impl = _COM_IShellPropSheetExt._impl = _COM_IShellPropSheetExt_impl
 
-def SPSRegisterHandler(clsid_impl, name, user=True):
-  if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta):
-    try:
-      if not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(GUID(clsid_impl))), _COMMeta._COMImplMeta):
-        return False
-    except:
-      return False
-  if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
-    return False
-  clsid = ('{%s}' % GUID(clsid)).upper()
-  r = True
-  for ext in exts:
-    try:
-      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext)
-      if not (pid := winreg.QueryValue(key, None)):
-        winreg.SetValue(key, None, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
-      winreg.CloseKey(key)
-      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE),r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers\%s' % (pid, name))
-      winreg.SetValue(key, None, winreg.REG_SZ, clsid)
-      winreg.CloseKey(key)
-    except:
-      r = False
-      continue
-  return r
+PSCState = {'Normal': 0, 'NotInSource': 1, 'Dirty': 2, 'ReadOnly': 3}
+PSCSTATE = type('PSCSTATE', (_BCode, wintypes.INT), {}, _dict=PSCState)
+PSPCSTATE = ctypes.POINTER(PSCSTATE)
+
+class _PSUtil:
+  PSCreateMemoryPropertyStore = _IUtil._wrap('PSCreateMemoryPropertyStore', (PUUID, 1), (wintypes.PLPVOID, 2), p=propsys)
+  PSRegisterPropertySchema = _IUtil._wrap('PSRegisterPropertySchema', (wintypes.LPCWSTR, 1), p=propsys)
+  PSUnregisterPropertySchema = _IUtil._wrap('PSUnregisterPropertySchema', (wintypes.LPCWSTR, 1), p=propsys)
+
+class IPropertyStore(IUnknown):
+  IID = GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99)
+  _protos['GetCount'] = 3, (), (wintypes.PDWORD,)
+  _protos['GetAt'] = 4, (wintypes.DWORD,), (PPROPERTYKEY,)
+  _protos['GetValue'] = 5, (PPROPERTYKEY,), (PPROPVARIANT,)
+  _protos['SetValue'] = 6, (PPROPERTYKEY, PPROPVARIANT), ()
+  _protos['Commit'] = 7, (), ()
+  _protos['_GetCount'] = 3, (wintypes.PDWORD,), (), wintypes.ULONG
+  _protos['_GetAt'] = 4, (wintypes.DWORD, PPROPERTYKEY), (), wintypes.ULONG
+  _protos['_GetValue'] = 5, (PPROPERTYKEY, PPROPVARIANT), (), wintypes.ULONG
+  _protos['_SetValue'] = 6, (PPROPERTYKEY, PPROPVARIANT), (), wintypes.ULONG
+  _protos['_Commit'] = 7, (), (), wintypes.ULONG
+  def GetCount(self):
+    return self.__class__._protos['GetCount'](self.pI)
+  def GetAt(self, index):
+    return self.__class__._protos['GetAt'](self.pI, index)
+  def GetValue(self, key):
+    return getattr(self.__class__._protos['GetValue'](self.pI, key), 'value', None)
+  def SetValue(self, key, value):
+    return self.__class__._protos['SetValue'](self.pI, key, value)
+  def Commit(self):
+    return self.__class__._protos['Commit'](self.pI)
+
+class IPropertyStoreCache(IPropertyStore):
+  CLSID = GUID(0x9a02e012, 0x6303, 0x4e1e, 0xb9, 0xa1, 0x63, 0x0f, 0x80, 0x25, 0x92, 0xc5)
+  IID = GUID(0x3017056d, 0x9a91, 0x4e90, 0x93, 0x7d, 0x74, 0x6c, 0x72, 0xab, 0xbf, 0x4f)
+  _protos['GetState'] = 8, (PPROPERTYKEY,), (PSPCSTATE,)
+  _protos['GetValueAndState'] = 9, (PPROPERTYKEY,), (PPROPVARIANT, PSPCSTATE)
+  _protos['SetState'] = 10, (PPROPERTYKEY, PSCSTATE), ()
+  _protos['SetValueAndState'] = 11, (PPROPERTYKEY, PPROPVARIANT, PSCSTATE), ()
+  _protos['_GetState'] = 8, (PPROPERTYKEY, PSPCSTATE), (), wintypes.ULONG
+  _protos['_GetValueAndState'] = 9, (PPROPERTYKEY, PPROPVARIANT, PSPCSTATE), (), wintypes.ULONG
+  _protos['_SetState'] = 10, (PPROPERTYKEY, PSCSTATE), (), wintypes.ULONG
+  _protos['_SetValueAndState'] = 11, (PPROPERTYKEY, PPROPVARIANT, PSCSTATE), (), wintypes.ULONG
+  def GetState(self, key):
+    return self.__class__._protos['GetState'](self.pI, key)
+  def SetState(self, key, state=0):
+    return self.__class__._protos['SetState'](self.pI, key, state)
+  def GetValueAndState(self, key):
+    return None if (vs := self.__class__._protos['GetValueAndState'](self.pI, key)) is None else (vs[0].value, vs[1])
+  def SetValueAndState(self, key, value, state=0):
+    return self.__class__._protos['SetValueAndState'](self.pI, key, value, state)
+
+class IPropertyStoreFactory(IUnknown):
+  IID = GUID(0xbc110b6d, 0x57e8, 0x4148, 0xa9, 0xc6, 0x91, 0x01, 0x5a, 0xb2, 0xf3, 0xa5)
+  _protos['GetPropertyStore'] = 3, (PSFACTORYFLAGS, wintypes.LPVOID, PUUID), (wintypes.PLPVOID,)
+  def GetPropertyStore(self, flags=0):
+    return IPropertyStore(self._protos['GetPropertyStore'](self.pI, flags, None, IPropertyStore.IID), self.factory)
+
+class PCOMPROPERTYSTORE(PCOM):
+  icls = IPropertyStore
+  def GetCount(self):
+    return IPropertyStore._protos['GetCount'](self) if self else None
+  def GetAt(self, index):
+    return IPropertyStore._protos['GetAt'](self, index) if self else None
+  def GetValue(self, key):
+    return getattr(IPropertyStore._protos['GetValue'](self, key), 'value', None) if self else None
+  def SetValue(self, key, value):
+    return IPropertyStore._protos['SetValue'](self, key, value) if self else None
+  def Commit(self):
+    return IPropertyStore._protos['Commit'](self) if self else None
+  def _GetCount(self, pcprops):
+    return IPropertyStore._protos['_GetCount'](self, pcprops) if self else 0x8000ffff
+  def _GetAt(self, iprop, pkey):
+    return IPropertyStore._protos['_GetAt'](self, iprop, pkey) if self else 0x8000ffff
+  def _GetValue(self, pkey, ppropvar):
+    return IPropertyStore._protos['_GetValue'](self, pkey, ppropvar) if self else 0x8000ffff
+  def _SetValue(self, pkey, ppropvar):
+    return IPropertyStore._protos['_SetValue'](self, pkey, ppropvar) if self else 0x8000ffff
+  def _Commit(self):
+    return IPropertyStore._protos['_Commit'](self) if self else 0x8000ffff
+
+class PCOMPROPERTYSTORECACHE(PCOMPROPERTYSTORE):
+  icls = IPropertyStoreCache
+  def __init__(self, interface=False):
+    return super().__init__(_PSUtil.PSCreateMemoryPropertyStore(IPropertyStoreCache.IID) if interface is False else interface)
+  def GetState(self, key):
+    return IPropertyStoreCache._protos['GetState'](self, key) if self else None
+  def SetState(self, key, state=0):
+    return IPropertyStoreCache._protos['SetState'](self, key, state) if self else None
+  def GetValueAndState(self, key):
+    return None if self is None or (vs := IPropertyStoreCache._protos['GetValueAndState'](self, key)) is None else (vs[0].value, vs[1])
+  def SetValueAndState(self, key, value, state=0):
+    return IPropertyStoreCache._protos['SetValueAndState'](self, key, value, state) if self else None
+  def _GetState(self, key):
+    return IPropertyStoreCache._protos['_GetState'](self, pkey, pstate) if self else 0x8000ffff
+  def _GetValueAndState(self, pkey, ppropvar, pstate):
+    return IPropertyStoreCache._protos['_GetValueAndState'](self, pkey, ppropvar, pstate) if self else 0x8000ffff
+  def _SetState(self, pkey, state):
+    return IPropertyStoreCache._protos['_SetState'](self, pkey, state) if self else 0x8000ffff
+  def _SetValueAndState(self, pkey, ppropvar, state):
+    return IPropertyStoreCache._protos['_SetValueAndState'](self, pkey, ppropvar, state) if self else 0x8000ffff
+
+class IDestinationStreamFactory(IUnknown):
+  IID = GUID(0x8a87781b, 0x39a7, 0x4a1f, 0xaa, 0xb3, 0xa3, 0x9b, 0x9c, 0x34, 0xa7, 0xd9)
+  _protos['GetDestinationStream'] = 3, (), (wintypes.PLPVOID,)
+  def GetDestinationStream(self):
+    return self.__class__._protos['GetDestinationStream'](self.pI)
+
+class PCOMDESTINATIONSTREAMFACTORY(PCOM):
+  icls = IDestinationStreamFactory
+  def GetDestinationStream(self):
+    return PCOMSTREAM(IDestinationStreamFactory._protos['GetDestinationStream'](self) if self else None)
+
+class _COM_IInitializeWithStream(_COM_IUnknown):
+  _iids.add(GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f))
+  _vtbl['Initialize'] = (wintypes.ULONG, wintypes.LPVOID, PCOMSTREAM, wintypes.DWORD)
+  _vars['writable'] = wintypes.BOOLEAN
+  _vars['loaded'] = wintypes.BOOLEAN
+  _vars['pstream'] = PCOMSTREAM
+  _vars['pcache'] = PCOMPROPERTYSTORECACHE
+  @classmethod
+  def Load(cls, self):
+    return 1
+  @classmethod
+  def _Initialize(cls, pI, pstream, grfMode):
+    with cls[pI] as self:
+      if not self or not pstream:
+        return 0x80004003
+      if self.pstream:
+        return 0x800704df
+      if (s := pstream.Stat(1)) is None:
+        return 0x80030005
+      if (grfMode := grfMode & 3) == 0:
+        if s['grfMode'] & 3 not in (0, 2):
+          return 0x80030005
+      elif grfMode == 2:
+        if s['grfMode'] & 3 != 2:
+          return 0x80030005
+        self.writable = True
+      else:
+        return 0x80070057
+      if not (pcache := PCOMPROPERTYSTORECACHE()):
+        return IGetLastError()
+      self.pstream = pstream
+      pstream.AddRef()
+      self.pcache = pcache
+      if (r := cls.Load(self)) & 0x80000000:
+        pcache.Release()
+        self.pcache = None
+      else:
+        self.loaded = r == 0
+      return r
+
+class _COM_IPropertyStoreDelegating(_COM_IUnknown):
+  _iids.add(GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99))
+  _vtbl['GetCount'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PDWORD)
+  _vtbl['GetAt'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.DWORD, PPROPERTYKEY)
+  _vtbl['GetValue'] = (wintypes.ULONG, wintypes.LPVOID, PPROPERTYKEY, PPROPVARIANT)
+  _vtbl['SetValue'] = (wintypes.ULONG, wintypes.LPVOID, PPROPERTYKEY, PPROPVARIANT)
+  _vtbl['Commit'] = (wintypes.ULONG, wintypes.LPVOID)
+  _vars['writable'] = wintypes.BOOLEAN
+  _vars['loaded'] = wintypes.BOOLEAN
+  _vars['pstream'] = PCOMSTREAM
+  _vars['pcache'] = PCOMPROPERTYSTORECACHE
+  PKEY_Search_Contents = (GUID('b725f130-47ef-101a-a5f1-02608c9eebac'), 19)
+  @classmethod
+  def LazyLoad(cls, self, pKey=None):
+    if pKey is not None and not any(map(int.from_bytes(pKey.contents.fmtid))):
+      return 1
+    return 0x80004001
+  @classmethod
+  def Save(cls, self):
+    if self.ManualSafeSave:
+      pdeststream = yield False
+    return 0x80004001
+  @classmethod
+  def _GetCount(cls, pI, pcProps):
+    with cls[pI] as self:
+      if not self or not pcProps:
+        return 0x80004003
+      if not self.loaded:
+        if (r := cls.LazyLoad(self)) & 0x80000000:
+          return r
+        self.loaded = r == 0
+      return self.pcache._GetCount(pcProps)
+  @classmethod
+  def _GetAt(cls, pI, iProp, pKey):
+    with cls[pI] as self:
+      if not self or not pKey:
+        return 0x80004003
+      if not self.loaded:
+        if (r := cls.LazyLoad(self)) & 0x80000000:
+          return r
+        self.loaded = r == 0
+      return self.pcache._GetAt(iProp, pKey)
+  @classmethod
+  def _GetValue(cls, pI, pKey, pPropVar):
+    with cls[pI] as self:
+      if not self or not pKey or not pPropVar:
+        return 0x80004003
+      if not self.loaded:
+        if (r := cls.LazyLoad(self, pKey)) & 0x80000000:
+          return r
+        self.loaded = r == 0
+      return self.pcache._GetValue(pKey, pPropVar)
+  @classmethod
+  def _SetValue(cls, pI, pKey, pPropVar):
+    with cls[pI] as self:
+      if not self or not pKey or not pPropVar:
+        return 0x80004003
+      if not self.writable:
+        return 0x80030005
+      if not self.loaded:
+        if (r := cls.LazyLoad(self, pKey)) & 0x80000000:
+          return r
+        self.loaded = r == 0
+      return self.pcache._SetValueAndState(pKey, pPropVar, 2)
+  @classmethod
+  def _Commit(cls, pI):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      if not (pstream := self.pstream) or not self.writable:
+        return 0x80030005
+      if not self.loaded:
+        if (r := cls.LazyLoad(self)) & 0x80000000:
+          return r
+        self.loaded = r == 0
+      pdeststream = None
+      if hasattr((r := cls.Save(self)), 'send'):
+        try:
+          if r.send(None) is True:
+            pdeststream = pstream.GetDestinationStream() or None
+          r.send(pdeststream)
+        except StopIteration as e:
+          r = e.value
+      if not ((r & 0x80000000) or (pdeststream and pdeststream.Commit() & 0x80000000)):
+        r = pstream.Commit()
+      if pdeststream:
+        pdeststream.Release()
+      pstream.Release()
+      self.pstream = None
+      self.writable = 0
+      return r if r & 0x80000000 else 0
+
+class _COM_IPropertyStoreCapabilities(_COM_IUnknown):
+  _iids.add(GUID(0xc8e2d566, 0x186e, 0x4d49, 0xbf, 0x41, 0x69, 0x09, 0xea, 0xd5, 0x6a, 0xcc))
+  _vtbl['IsPropertyWritable'] = (wintypes.ULONG, wintypes.LPVOID, PPROPERTYKEY)
+  ReadOnly = {_COM_IPropertyStoreDelegating.PKEY_Search_Contents}
+  @classmethod
+  def _IsPropertyWritable(cls, pI, pKey):
+    with cls[pI] as self:
+      if not self or not pKey:
+        return 0x80004003
+      return 0 if pKey.contents.to_key() not in cls.ReadOnly else 1
+
+class _COM_IPropertyHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializeWithStream, _COM_IPropertyStoreDelegating, _COM_IPropertyStoreCapabilities)):
+  Exts = ()
+  ManualSafeSave = False
+  def _destroy(self):
+    if self.pstream:
+      self.pstream.Release()
+      self.pstream = None
+    if self.pcache:
+      self.pcache.Release()
+      self.pcache = None
+_COM_IInitializeWithStream._impl = _COM_IPropertyStoreDelegating._impl = _COM_IPropertyStoreCapabilities._impl = _COM_IPropertyHandler_impl
+
+class IInitializeWithStream(IUnknown):
+  IID = GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f)
+  _protos['Initialize'] = 3, (wintypes.LPVOID, ISSTGM), ()
+  def Initialize(self, istream, mode=0):
+    return self.__class__._protos['Initialize'](self.pI, istream, mode)
+
+class IPropertyStoreDelegating(IPropertyStore):
+  pass
+
+class IPropertyStoreCapabilities(IUnknown):
+  IID = GUID(0xc8e2d566, 0x186e, 0x4d49, 0xbf, 0x41, 0x69, 0x09, 0xea, 0xd5, 0x6a, 0xcc)
+  _protos['IsPropertyWritable'] = 3, (PPROPERTYKEY,), (), wintypes.ULONG
+  def IsPropertyWritable(self, key):
+    return None if (w := self.__class__._protos['IsPropertyWritable'](self.pI, key)) is None else w == 0
 
 
 def Initialize(mode=6, ole=False):
@@ -10266,12 +10755,8 @@ class COMRegistration:
     return _IUtil.CoRegisterPSClsid(icls_ps_impl.IID, clsid) if isinstance(icls_ps_impl, _IMeta) else ({iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in icls_ps_impl._iids if iid != _COMMeta._iid_iunknown} if isinstance(icls_ps_impl, _COMMeta) else {iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in icls_ps_impl.stub_impl._siids[0]})
   @classmethod
   def RegisterWholeClass(cls, clsid_impl, context=1):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta):
-      try:
-        if not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(GUID(clsid_impl))), _COMMeta._COMImplMeta):
-          return None
-      except:
-        return None
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return None
     if (to := COMRegistration.RegisterCOMFactory(impl, context)) is None:
       return None
     psto = {}
@@ -10384,19 +10869,18 @@ class COMRegistration:
       p = (r'SOFTWARE\Classes\Interface\{%s}' % iid).upper()
       try:
         winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), p + r'\ProxyStubClsid32')
-        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), p)
+        try:
+          winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), p)
+        except:
+          pass
         r[iid] = True
       except:
         r[iid] = False
     return r[iid] if isinstance(icls_ps_impl, _IMeta) else r
   @classmethod
   def RegistryAddWholeClass(cls, clsid_impl, user=True, local=False):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta):
-      try:
-        if not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(GUID(clsid_impl))), _COMMeta._COMImplMeta):
-          return False
-      except:
-        return False
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
     if not COMRegistration.RegistryAddCOMFactory(impl, user, local):
       return False
     ps = set()
@@ -10416,12 +10900,8 @@ class COMRegistration:
     return True
   @classmethod
   def RegistryRemoveWholeClass(cls, clsid_impl, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta):
-      try:
-        if not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(GUID(clsid_impl))), _COMMeta._COMImplMeta):
-          return False
-      except:
-        return False
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
     r = COMRegistration.RegistryRemoveCOMFactory(impl, user)
     ps = set()
     for iid in impl._iids:
@@ -10471,6 +10951,128 @@ class COMRegistration:
       return None
     else:
       return {clsid: cls.RegistryRemoveWholeClass(impl, user) for clsid, impl in rc.items()}
+  @classmethod
+  def RegistryAddShellPropSheetHandler(cls, clsid_impl, name, user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
+      return False
+    clsid = ('{%s}' % GUID(clsid)).upper()
+    r = True
+    for ext in exts:
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+      except:
+        pid = ''
+      try:
+        if not pid:
+          winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
+        winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers\%s' % (pid, name), winreg.REG_SZ, clsid)
+      except:
+        r = False
+    return r
+  @classmethod
+  def RegistryRemoveShellPropSheetHandler(cls, clsid_impl, name, user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (exts := getattr(impl, 'Exts', None)) is None:
+      return False
+    r = True
+    for ext in exts:
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers\%s' % (pid, name))
+        try:
+          winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers' % pid)
+        except:
+          pass
+      except:
+        r = False
+    return r
+  @classmethod
+  def RegistryAddPropertySchema(cls, path):
+    return _PSUtil.PSRegisterPropertySchema(path)
+  @classmethod
+  def RegistryRemovePropertySchema(cls, path):
+    return _PSUtil.PSUnregisterPropertySchema(path)
+  @classmethod
+  def RegistryAddPropertyHandler(cls, clsid_impl, full_details='+', preview_details='+', user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (clsid := getattr(impl, 'CLSID', None)) is None:
+      return False
+    clsid = ('{%s}' % GUID(clsid)).upper()
+    manual_safe_save = getattr(impl, 'ManualSafeSave', False)
+    r = True
+    try:
+      key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Classes\CLSID\%s' % clsid)
+      winreg.SetValueEx(key, 'ManualSafeSave', 0, winreg.REG_DWORD, 1 if manual_safe_save else 0)
+      winreg.CloseKey(key)
+    except:
+      r = False
+    if (exts := getattr(impl, 'Exts', None)) is None:
+      return False
+    if (fd := full_details.lstrip('+;')):
+      full_details = 'prop:%s%s' % (('System.PropGroup.FileSystem;System.ItemNameDisplay;System.ItemTypeText;System.ItemFolderPathDisplay;System.Size;System.DateCreated;System.DateModified;System.FileAttributes;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;*System.FileOwner;*System.ComputerName;' if full_details.startswith('+') else ''), fd)
+    if (pd := preview_details.lstrip('+;')):
+      preview_details = 'prop:%s%s' % (('prop:System.DateModified;System.Size;System.DateCreated;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;' if preview_details.startswith('+') else ''), pd)
+    for ext in exts:
+      try:
+        winreg.SetValue(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers\%s' % ext, winreg.REG_SZ, clsid)
+      except:
+        r = False
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+      except:
+        pid = ''
+      try:
+        if not pid:
+          winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
+        key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % pid)
+        if fd:
+          winreg.SetValueEx(key, 'FullDetails', 0, winreg.REG_SZ, full_details)
+        if pd:
+          winreg.SetValueEx(key, 'PreviewDetails', 0, winreg.REG_SZ, preview_details)
+        winreg.CloseKey(key)
+      except:
+        r = False
+    return r
+  @classmethod
+  def RegistryRemovePropertyHandler(cls, clsid_impl, user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (clsid := getattr(impl, 'CLSID', None)) is None:
+      return False
+    clsid = ('{%s}' % GUID(clsid)).upper()
+    r = True
+    try:
+      key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Classes\CLSID\%s' % clsid)
+      winreg.DeleteValue(key, 'ManualSafeSave')
+      winreg.CloseKey(key)
+    except:
+      r = False
+    if (exts := getattr(impl, 'Exts', None)) is None:
+      return False
+    for ext in exts:
+      try:
+        winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers\%s' % ext)
+      except:
+        r = False
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+        key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % pid)
+        try:
+          winreg.DeleteValue(key, 'FullDetails')
+        except:
+          pass
+        try:
+          winreg.DeleteValue(key, 'PreviewDetails')
+        except:
+          pass
+        winreg.CloseKey(key)
+      except:
+        r = False
+    return r
 
 def DllRegisterServer():
   if (module := _IUtil._import_module(os.environ.get('WICPy_Module'))) is None:
