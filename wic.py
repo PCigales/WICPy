@@ -10110,7 +10110,6 @@ class DialogWindow(Window):
   GetDlgItemText = _WndUtil._wrap('GetDlgItemTextW', wintypes.UINT, wintypes.HWND, wintypes.INT, wintypes.LPCWSTR, wintypes.INT)
   MapDialogRect = _WndUtil._wrap('MapDialogRect', wintypes.BOOLE, wintypes.HWND, PRECT)
   try:
-    raise
     TaskDialogIndirect = _WndUtil._wrap('TaskDialogIndirect', wintypes.ULONG, DLGPTASKDIALOGCONFIG, wintypes.PINT, wintypes.PINT, wintypes.PBOOLE, p=comctl32)
   except:
     MessageBox = _WndUtil._wrap('MessageBoxW', wintypes.INT, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT)
@@ -10142,8 +10141,7 @@ class DLGHWND(HWND):
   def SetItemText(self, ctrl, value):
     return False if isinstance(ctrl, int) and not (ctrl := self.GetItem(ctrl)) else bool(DialogWindow.SetDlgItemText(self, ctrl, value))
   def GetItemText(self, ctrl):
-    hwnd = ctrl
-    if not ((hwnd := self.GetItem(ctrl)) if isinstance(ctrl, int) else (ctrl := self.GetItemID(hwnd))):
+    if not ((hwnd := self.GetItem(ctrl)) if isinstance(ctrl, int) else (ctrl := self.GetItemID(hwnd := ctrl))):
       return None
     l = n = Window.GetWindowTextLength(hwnd) or 1023
     while n >= l:
@@ -10509,7 +10507,7 @@ class IDestinationStreamFactory(IUnknown):
   IID = GUID(0x8a87781b, 0x39a7, 0x4a1f, 0xaa, 0xb3, 0xa3, 0x9b, 0x9c, 0x34, 0xa7, 0xd9)
   _protos['GetDestinationStream'] = 3, (), (wintypes.PLPVOID,)
   def GetDestinationStream(self):
-    return self.__class__._protos['GetDestinationStream'](self.pI)
+    return IStream(self.__class__._protos['GetDestinationStream'](self.pI), self.factory)
 
 class PCOMDESTINATIONSTREAMFACTORY(PCOM):
   icls = IDestinationStreamFactory
