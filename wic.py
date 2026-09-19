@@ -51,6 +51,7 @@ d3d11 = ctypes.WinDLL('d3d11', use_last_error=True)
 gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
 dwm = ctypes.WinDLL('dwmapi', use_last_error=True)
 comctl32 = ctypes.WinDLL('comctl32', use_last_error=True)
+advapi32 = ctypes.WinDLL('advapi32', use_last_error=True)
 
 class WError(int):
   def __new__(cls, code):
@@ -10168,7 +10169,7 @@ class DLGHWND(HWND):
     return DialogWindow.SetReturnValue(self, value)
   def MapDialogRect(self, rect):
     pr = PRECT.from_param(rect, pointer=True)
-    return pr.value if DialogWindow.MapDialogRect(rect) else None
+    return pr.contents if DialogWindow.MapDialogRect(self, pr) else None
 
 
 PSPFlags = {'Default': 0x0, 'DlgIndirect': 0x1, 'HasHelp': 0x20, 'HideHeader': 0x800, 'Premature': 0x400, 'RtLReading': 0x10, 'UseCallback': 0x80, 'UseFusionContext': 0x4000, 'UseHeaderSubtitle': 0x2000, 'UseHeaderTitle': 0x1000, 'UseHIcon': 0x2, 'UseIconID': 0x4, 'UseRefParent': 0x40, 'UseTitle': 0x8}
@@ -10405,11 +10406,32 @@ PSCState = {'Normal': 0, 'NotInSource': 1, 'Dirty': 2, 'ReadOnly': 3}
 PSCSTATE = type('PSCSTATE', (_BCode, wintypes.INT), {}, _dict=PSCState)
 PSPCSTATE = ctypes.POINTER(PSCSTATE)
 
+WSExecuteFlags = {'Default': 0, 'ClassName': 0x1, 'ClassKey': 0x3, 'InvokeIDList': 0xc, 'Icon': 0x10, 'Hotkey': 0x20, 'NoCloseProcess': 0x40, 'ConnectNetDrv': 0x80, 'NoAsync': 0x100, 'DDEWait': 0x100, 'DoEnvSubst': 0x200, 'NoUI': 0x400, 'Unicode': 0x4000, 'NoConsole': 0x8000, 'AsyncOK': 0x100000, 'HMonitor': 0x200000, 'NoZoneChecks': 0x800000, 'WaitForInputIdle': 0x2000000, 'LogUsage': 0x4000000, 'HInstIsSite': 0x8000000}
+WSEXECUTEFLAGS = type('WSEXECUTEFLAGS', (_BCodeOr, wintypes.ULONG), {}, _dict=WSExecuteFlags)
+
+class WSEXECUTEINFO(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('cbSize', wintypes.DWORD), ('fMask', WSEXECUTEFLAGS), ('hwnd', HWND), ('lpVerb', wintypes.LPCWSTR), ('lpFile', wintypes.LPCWSTR), ('lpParameters', wintypes.LPCWSTR), ('lpDirectory', wintypes.LPCWSTR), ('nShow', WSWINDOWSHOW), ('hInstApp', wintypes.HINSTANCE), ('lpIDList', WSPITEMIDLIST), ('lpClass', wintypes.LPCWSTR), ('hkeyClass', wintypes.HKEY), ('dwHotKey', wintypes.DWORD), ('hIcon', wintypes.HICON), ('hProcess', wintypes.HANDLE)]
+WSPEXECUTEINFO = type('WSPEXECUTEINFO', (_BPStruct, ctypes.POINTER(WSEXECUTEINFO)),  {'_type_': WSEXECUTEINFO})
+
 class _PSUtil:
   PSCreateMemoryPropertyStore = _IUtil._wrap('PSCreateMemoryPropertyStore', (PUUID, 1), (wintypes.PLPVOID, 2), p=propsys)
   PSRegisterPropertySchema = _IUtil._wrap('PSRegisterPropertySchema', (wintypes.LPCWSTR, 1), p=propsys)
   PSUnregisterPropertySchema = _IUtil._wrap('PSUnregisterPropertySchema', (wintypes.LPCWSTR, 1), p=propsys)
-
+  advapi32.AllocateAndInitializeSid.restype = wintypes.BOOLE
+  advapi32.AllocateAndInitializeSid.argtypes = (ctypes.POINTER(wintypes.BYTE * 6), wintypes.BYTE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.PLPVOID)
+  advapi32.CheckTokenMembership.restype = wintypes.BOOLE
+  advapi32.CheckTokenMembership.argtypes = (wintypes.HANDLE, wintypes.LPVOID, wintypes.PBOOLE)
+  advapi32.FreeSid.restype = wintypes.LPVOID
+  advapi32.FreeSid.argtypes = (wintypes.LPVOID,)
+  sh32.ShellExecuteExW.restype = wintypes.BOOLE
+  sh32.ShellExecuteExW.argtypes = (WSPEXECUTEINFO,)
+  kernel32.WaitForSingleObject.restype = wintypes.DWORD
+  kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+  kernel32.GetExitCodeProcess.restype = wintypes.BOOLE
+  kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, wintypes.PDWORD)
+  kernel32.CloseHandle.restype = wintypes.BOOLE
+  kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+  
 class IPropertyStore(IUnknown):
   IID = GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99)
   _protos['GetCount'] = 3, (), (wintypes.PDWORD,)
@@ -10637,7 +10659,7 @@ class _COM_IPropertyStoreDelegating(_COM_IUnknown):
           r.send(pdeststream)
         except StopIteration as e:
           r = e.value
-      if not ((r & 0x80000000) or (pdeststream and pdeststream.Commit() & 0x80000000)):
+      if not (r or (pdeststream and pdeststream.Commit() & 0x80000000)):
         r = pstream.Commit()
       if pdeststream:
         pdeststream.Release()
@@ -10989,12 +11011,12 @@ class COMRegistration:
     return r
   @classmethod
   def RegistryAddPropertySchema(cls, path):
-    return _PSUtil.PSRegisterPropertySchema(path)
+    return bool(_PSUtil.PSRegisterPropertySchema(path))
   @classmethod
   def RegistryRemovePropertySchema(cls, path):
-    return _PSUtil.PSUnregisterPropertySchema(path)
+    return bool(_PSUtil.PSUnregisterPropertySchema(path))
   @classmethod
-  def RegistryAddPropertyHandler(cls, clsid_impl, full_details='+', preview_details='+', user=True):
+  def RegistryAddPropertyHandler(cls, clsid_impl, full_details='+', preview_details='+', content_layout='', content_mode_browse='', content_mode_search='', user=True):
     if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
       return False
     if (clsid := getattr(impl, 'CLSID', None)) is None:
@@ -11010,10 +11032,10 @@ class COMRegistration:
       r = False
     if (exts := getattr(impl, 'Exts', None)) is None:
       return False
-    if (fd := full_details.lstrip('+;')):
-      full_details = 'prop:%s%s' % (('System.PropGroup.FileSystem;System.ItemNameDisplay;System.ItemTypeText;System.ItemFolderPathDisplay;System.Size;System.DateCreated;System.DateModified;System.FileAttributes;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;*System.FileOwner;*System.ComputerName;' if full_details.startswith('+') else ''), fd)
-    if (pd := preview_details.lstrip('+;')):
-      preview_details = 'prop:%s%s' % (('prop:System.DateModified;System.Size;System.DateCreated;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;' if preview_details.startswith('+') else ''), pd)
+    full_details = ('prop:%s%s' % (('System.PropGroup.FileSystem;System.ItemNameDisplay;System.ItemTypeText;System.ItemFolderPathDisplay;System.Size;System.DateCreated;System.DateModified;System.FileAttributes;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;*System.FileOwner;*System.ComputerName;' if full_details.startswith('+') else ''), v)) if (v := full_details.lstrip('+;')) else ''
+    preview_details = ('prop:%s%s' % (('System.DateModified;System.Size;System.DateCreated;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;' if preview_details.startswith('+') else ''), v)) if (v := preview_details.lstrip('+;')) else ''
+    content_mode_browse = ('prop:%s' % v) if (v := content_mode_browse.lstrip(';')) else ''
+    content_mode_search = ('prop:%s' % v) if (v := content_mode_search.lstrip(';')) else ''
     for ext in exts:
       try:
         winreg.SetValue(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers\%s' % ext, winreg.REG_SZ, clsid)
@@ -11027,10 +11049,16 @@ class COMRegistration:
         if not pid:
           winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
         key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % pid)
-        if fd:
+        if full_details:
           winreg.SetValueEx(key, 'FullDetails', 0, winreg.REG_SZ, full_details)
-        if pd:
+        if preview_details:
           winreg.SetValueEx(key, 'PreviewDetails', 0, winreg.REG_SZ, preview_details)
+        if content_layout:
+          winreg.SetValueEx(key, 'ContentViewModeLayoutPatternForBrowse', 0, winreg.REG_SZ, content_layout)
+        if content_mode_browse:
+          winreg.SetValueEx(key, 'ContentViewModeForBrowse', 0, winreg.REG_SZ, content_mode_browse)
+        if content_mode_search:
+          winreg.SetValueEx(key, 'ContentViewModeForSearch', 0, winreg.REG_SZ, content_mode_search)
         winreg.CloseKey(key)
       except:
         r = False
@@ -11059,19 +11087,30 @@ class COMRegistration:
       try:
         pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
         key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % pid)
-        try:
-          winreg.DeleteValue(key, 'FullDetails')
-        except:
-          pass
-        try:
-          winreg.DeleteValue(key, 'PreviewDetails')
-        except:
-          pass
+        for v in ('FullDetails', 'PreviewDetails', 'ContentViewModeLayoutPatternForBrowse', 'ContentViewModeForBrowse', 'ContentViewModeForSearch'):
+          try:
+            winreg.DeleteValue(key, v)
+          except:
+            pass
         winreg.CloseKey(key)
       except:
         r = False
     return r
-
+  @staticmethod
+  def IsAdmin():
+    if not advapi32.AllocateAndInitializeSid((wintypes.BYTE * 6)(0, 0, 0, 0, 0, 5), 2, 0x20, 0x220, 0, 0, 0, 0, 0, 0, (pag := wintypes.LPVOID())):
+      return None
+    adm = adm.value if advapi32.CheckTokenMembership(None, pag, (adm := wintypes.BOOLE())) else None
+    advapi32.FreeSid(pag)
+    return adm
+  @staticmethod
+  def RunAsAdmin():
+    if not (sh32.ShellExecuteExW(exinf := WSEXECUTEINFO('NoCloseProcess | NoUI | NoConsole', Window.GetConsoleWindow(), 'runas', sys.executable, ' '.join('"%s"' % a.replace('"', '"""') for a in sys.argv))) and (hp := exinf.hProcess)):
+      return None
+    r = r.value if kernel32.WaitForSingleObject(hp, 0xffffffff) == 0 and kernel32.GetExitCodeProcess(hp, (r := wintypes.DWORD())) else None
+    kernel32.CloseHandle(hp)
+    return r
+    
 def DllRegisterServer():
   if (module := _IUtil._import_module(os.environ.get('WICPy_Module'))) is None:
     return ISetLastError(0x8000ffff)
@@ -11086,6 +11125,8 @@ def DllUnregisterServer():
 def DllInstall(bInstall, pszCmdLine):
   if (l := len(cmdline := ctypes.wstring_at(pszCmdLine).split('|'))) >= 4 or (module := _IUtil._import_module(cmdline[0])) is None:
     return ISetLastError(0x8000ffff)
+  if (dlli := getattr(sys.modules.get(module), 'DllInstall', None)):
+    return dlli(bInstall, pszCmdLine)
   user = cmdline[1].lower() not in {'f', 'false'} if l >= 2 else True
   local = cmdline[2].lower() in {'t', 'true'} if l == 3 else False
   return ISetLastError(0x80009e41 if False in (COMRegistration.RegistryAddModuleClasses(module, user, local) if bInstall else COMRegistration.RegistryRemoveModuleClasses(module, user)).values() else 0)
