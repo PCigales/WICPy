@@ -46,6 +46,7 @@ oleauto32 = ctypes.WinDLL('oleaut32', use_last_error=True)
 propsys = ctypes.WinDLL('propsys', use_last_error=True)
 shl = ctypes.WinDLL('shlwapi', use_last_error=True)
 sh32 = ctypes.WinDLL('shell32', use_last_error=True)
+dwrite = ctypes.WinDLL('dwrite', use_last_error=True)
 d2d1 = ctypes.WinDLL('d2d1', use_last_error=True)
 d3d11 = ctypes.WinDLL('d3d11', use_last_error=True)
 gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
@@ -133,6 +134,17 @@ class PBUFFER(wintypes.LPVOID):
 
 class _BGUID:
   @classmethod
+  def __init_subclass__(cls, _dict=None, _def=None):
+    cls._type_ = ctypes.c_char
+    cls._length_ = 16
+    if _dict is None:
+      cls._tab_ng = {}
+      cls._tab_gn = {}
+    else:
+      cls._tab_ng = {n.lower(): g for n, g in _dict.items()}
+      cls._tab_gn = {g: n for n, g in _dict.items()}
+    cls._def = _def
+  @classmethod
   def name_guid(cls, n):
     if isinstance(n, str):
       g = cls._tab_ng.get(n.lower())
@@ -207,16 +219,19 @@ class _GMeta(wintypes.GUID.__class__):
   def __mul__(bcls, size):
     return _GUtil._mul_cache.get((bcls, size)) or _GUtil._mul_cache.setdefault((bcls, size), type('%s_Array_%d' % (bcls.__name__, size), (ctypes.wintypes.GUID.__class__.__mul__(bcls, size),), {'__setitem__': _GUtil._asitem, 'value': property(_GUtil._avalue)}))
 
-UUID = _GMeta('UUID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {}, '_tab_gn': {}, '_def': None, '__str__': lambda s: str(s.guid)})
+UUID = _GMeta('UUID', (_BGUID, wintypes.GUID), {'__str__': lambda s: str(s.guid)})
 PUUID = type('PUUID', (_BPGUID, ctypes.POINTER(UUID)), {'_type_': UUID})
 
 class _BCode:
   @classmethod
   def __init_subclass__(cls, _dict=None, _def=0):
-    if _dict:
+    if _dict is None:
+      cls._tab_nc = {}
+      cls._tab_cn = {}
+    else:
       cls._tab_nc = {n.lower(): c for n, c in _dict.items()}
       cls._tab_cn = {c: n for n, c in _dict.items()}
-      cls._def = _def
+    cls._def = _def
   @classmethod
   def name_code(cls, n):
     return cls._tab_nc.get(n.lower(), cls._def) if isinstance(n, str) else n
@@ -349,6 +364,14 @@ class _IUtil:
   @staticmethod
   def QueryInterface(interface, icls, factory=None):
     return None if interface is None else interface.QueryInterface(icls, factory)
+  @staticmethod
+  def Detach(interface):
+    if interface is None:
+      return None
+    pI = interface.pI
+    interface.pI = None
+    interface.refs = 0
+    return pI
   @staticmethod
   def _wrap(n, *a, p=ole32):
     if next(a_d := (t[1] for t in a), None) == 0:
@@ -569,6 +592,7 @@ class _COMMeta(type):
       v[i] = ctypes.cast(f, wintypes.LPVOID)
   def __getitem__(cls, pI):
     return cls.__class__._none if not pI else cls.__class__._refs.get(pI - getattr(cls, '_ovtbl', 0), cls.__class__._none)
+      
 
 class _COM_IUnknown(metaclass=_COMMeta):
   _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
@@ -2491,6 +2515,24 @@ class _BDStruct:
   @property
   def value(self):
     return self.to_dict()
+  def __iter__(self):
+    return iter(self.value)
+  def keys(self):
+    return self.value.keys()
+  def values(self):
+    return self.value.values()
+  def items(self):
+    return self.value.items()
+  def __getitem__(self, key):
+    try:
+      return getattr(v, 'value', v) if isinstance((v := getattr(self, key)), (ctypes.Structure, _BPStruct)) else v
+    except AttributeError:
+      return self.value[key]
+  def __setitem__(self, key, value):
+    if hasattr(self, key):
+      return setattr(self, key, value)
+    else:
+      raise AttributeError()
   def __ctypes_from_outparam__(self):
     return self.to_dict()
   _for_json = value
@@ -2504,6 +2546,20 @@ class _BTStruct:
   @property
   def value(self):
     return self.to_tuple()
+  def __iter__(self):
+    return iter(self.value)
+  def __getitem__(self, key):
+    if isinstance(key, int):
+      n, t = self.__class__._fields_[key]
+      return getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n)
+    else:
+      return self.value[key]
+  def __setitem__(self, key, value):
+    if isinstance(key, int):
+      n, t = self.__class__._fields_[key]
+      return setattr(self, n, t.from_param(value) if issubclass(t, ctypes.Structure) else value)
+    else:
+      raise TypeError()
   def __ctypes_from_outparam__(self):
     return self.to_tuple()
   _for_json = value
@@ -2524,6 +2580,34 @@ class _BPAStruct:
   def value(self, count):
     return getattr((a := ctypes.cast(self, ctypes.POINTER(self.__class__._type_ * count)).contents), 'value', a) if self else None
   _for_json = value
+
+class _BDSStruct(_BDStruct):
+  def __init__(self, *args, **kwargs):
+    super().__init__(ctypes.sizeof(self.__class__), *args, **kwargs)
+  @classmethod
+  def from_param(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, dict):
+      next((f := iter(cls._fields_)), None)
+      return cls(*(obj.get(k[0], 0) for k in f))
+    else:
+      return cls(*(obj[i] for i in range(min(len(cls._fields_) - 1, len(obj)))))
+  def to_dict(self):
+    next((f := iter(self.__class__._fields_)), None)
+    return {k[0]: getattr(self, k[0]) for k in f}
+
+class _BDBStruct(_BDStruct):
+  @classmethod
+  def from_param(cls, obj):
+    if obj is None or isinstance(obj, cls):
+      return obj
+    if isinstance(obj, dict):
+      return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, ctypes.Structure) else obj.get(n, 0)) for n, t, *b in cls._fields_))
+    else:
+      return cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t, *b), o in zip(cls._fields_, obj)))
+  def to_dict(self):
+    return {n: (getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n)) for n, t, *b in self.__class__._fields_}
 
 class _BSTRUtil:
   _mul_cache = {}
@@ -3489,12 +3573,6 @@ class _ARRAY_VARIANT(_ARRAY_BVARIANT, PVARIANT):
 class _ARRAY_PROPVARIANT(_ARRAY_BVARIANT, PPROPVARIANT):
   pass
 
-class PROPERTYKEY(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
-  _fields_ = [('fmtid', UUID), ('pid', wintypes.DWORD)]
-  def to_key(self):
-    return (GUID(self.fmtid), self.pid)
-PPROPERTYKEY = type('PPROPERTYKEY', (_BPStruct, ctypes.POINTER(PROPERTYKEY)),  {'_type_': PROPERTYKEY})
-
 class IWICStream(IStream):
   IID = GUID(0x135ff860, 0x22b7, 0x4ddf, 0xb0, 0xf6, 0x21, 0x8f, 0x4f, 0x29, 0x9a, 0x43)
   _protos['InitializeFromIStream'] = 14, (wintypes.LPVOID,), ()
@@ -3537,7 +3615,7 @@ WICContainerFormat = {
   'Dng': GUID(0xf3ff6d0d, 0x38c0, 0x41c4, 0xb1, 0xfe, 0x1f, 0x38, 0x24, 0xf1, 0x7b, 0x84),
   'Adng': GUID(0xf3ff6d0d, 0x38c0, 0x41c4, 0xb1, 0xfe, 0x1f, 0x38, 0x24, 0xf1, 0x7b, 0x84)
 }
-WICCONTAINERFORMAT = _GMeta('WICCONTAINERFORMAT', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICContainerFormat.items()}, '_tab_gn': {g: n for n, g in WICContainerFormat.items()}, '_def': None})
+WICCONTAINERFORMAT = _GMeta('WICCONTAINERFORMAT', (_BGUID, wintypes.GUID), {}, _dict=WICContainerFormat)
 WICPCONTAINERFORMAT = type('WICPCONTAINERFORMAT', (_BPGUID, ctypes.POINTER(WICCONTAINERFORMAT)), {'_type_': WICCONTAINERFORMAT})
 
 WICVendorIdentification = {
@@ -3545,7 +3623,7 @@ WICVendorIdentification = {
   'Microsoft': GUID(0xf0e749ca, 0xedef, 0x4589, 0xa7, 0x3a, 0xee, 0x0e, 0x62, 0x6a, 0x2a, 0x2b),
   'MicrosoftBuiltin': GUID(0x257a30fd, 0x6b6, 0x462b, 0xae, 0xa4, 0x63, 0xf7, 0xb, 0x86, 0xe5, 0x33)
 }
-WICVENDORIDENTIFICATION = _GMeta('WICVENDORIDENTIFICATION', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICVendorIdentification.items()}, '_tab_gn': {g: n for n, g in WICVendorIdentification.items()}, '_def': None})
+WICVENDORIDENTIFICATION = _GMeta('WICVENDORIDENTIFICATION', (_BGUID, wintypes.GUID), {}, _dict=WICVendorIdentification)
 WICPVENDORIDENTIFICATION = type('WICPVENDORIDENTIFICATION', (_BPGUID, ctypes.POINTER(WICVENDORIDENTIFICATION)), {'_type_': WICVENDORIDENTIFICATION})
 
 WICMetadataHandler = {
@@ -3594,7 +3672,7 @@ WICMetadataHandler = {
   'DdsRoot': GUID(0x4a064603, 0x8c33, 0x4e60, 0x9c, 0x29, 0x13, 0x62, 0x31, 0x70, 0x2d, 0x08),
   **WICContainerFormat
 }
-WICMETADATAHANDLER = _GMeta('WICMETADATAHANDLER', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICMetadataHandler.items()}, '_tab_gn': {g: n for n, g in WICMetadataHandler.items()}, '_def': None})
+WICMETADATAHANDLER = _GMeta('WICMETADATAHANDLER', (_BGUID, wintypes.GUID), {}, _dict=WICMetadataHandler)
 WICPMETADATAHANDLER = type('WICPMETADATAHANDLER', (_BPGUID, ctypes.POINTER(WICMETADATAHANDLER)), {'_type_': WICMETADATAHANDLER})
 
 WICPixelFormat = {
@@ -3690,7 +3768,7 @@ WICPixelFormat = {
  '72bpp8ChannelsAlpha': GUID(0x6fddc324, 0x4e03, 0x4bfe, 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x33),
  '144bpp8ChannelsAlpha': GUID(0x6fddc324, 0x4e03, 0x4bfe, 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x39)
 }
-WICPIXELFORMAT = _GMeta('WICPIXELFORMAT', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICPixelFormat.items()}, '_tab_gn': {g: n for n, g in WICPixelFormat.items()}, '_def': None})
+WICPIXELFORMAT = _GMeta('WICPIXELFORMAT', (_BGUID, wintypes.GUID), {}, _dict=WICPixelFormat)
 WICPPIXELFORMAT = type('WICPPIXELFORMAT', (_BPGUID, ctypes.POINTER(WICPIXELFORMAT)), {'_type_': WICPIXELFORMAT})
 
 WICComponent = {
@@ -3810,7 +3888,7 @@ WICComponent = {
   'DdsMetadataReader': GUID(0x276c88ca, 0x7533, 0x4a86, 0xb6, 0x76, 0x66, 0xb3, 0x60, 0x80, 0xd4, 0x84),
   'DdsMetadataWriter': GUID(0xfd688bbd, 0x31ed, 0x4db7, 0xa7, 0x23, 0x93, 0x49, 0x27, 0xd3, 0x83, 0x67)
 }
-WICCOMPONENT = _GMeta('WICCOMPONENT', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WICComponent.items()}, '_tab_gn': {g: n for n, g in WICComponent.items()}, '_def': None})
+WICCOMPONENT = _GMeta('WICCOMPONENT', (_BGUID, wintypes.GUID), {}, _dict=WICComponent)
 WICPCOMPONENT = type('WICPCOMPONENT', (_BPGUID, ctypes.POINTER(WICCOMPONENT)), {'_type_': WICCOMPONENT})
 
 WICColorContextType = {'Uninitialized': 0, 'Profile': 1, 'ExifColorSpace': 2}
@@ -5391,7 +5469,7 @@ class IWICImageEncoder(IUnknown):
     return self.__class__._protos['WriteFrameThumbnail'](self.pI, image, frame_encode, image_parameters)
   def SaveD2D1ImageTo(self, image, path, format=None, color_space=None, encoder_options=None, metadata=None, pixel_format=0, alpha_mode=0, dpiX=0, dpiY=0, left=0, top=0, width=0, height=0):
     if pixel_format or alpha_mode or dpiX or dpiY or top or left or width or height:
-      if (width == 0 or height == 0) and (not isinstance(image, ID2D1Bitmap) or not (s := image.GetSize())):
+      if (width == 0 or height == 0) and (not isinstance(image, ID2D1Bitmap) or not (s := image.GetPixelSize())):
         return False
       image_parameters = ((pixel_format or 'B8G8R8A8_UNORM', alpha_mode or 'Premultiplied'), dpiX or 96, dpiY or 96, top, left, width or (int(s[0]) - left), height or (int(s[1]) - top))
     else:
@@ -6354,15 +6432,17 @@ class ID3D11Device(IUnknown):
   _protos['GetFeatureLevel'] = 37, (), (), D3D11FEATURELEVEL
   def __new__(cls, clsid_component=False, factory=None):
     if isinstance(clsid_component, str):
-      if (driver_type := clsid_component.lower()) in ('software', 'hardware'):
-        driver_type = wintypes.DWORD(5 if driver_type == 'software' else 1)
-        clsid_component = False
+      clsid_component = clsid_component.lower().replace(' ', '|').replace('+', '|').split('|')
+      driver_type = wintypes.DWORD(5 if 'software' in clsid_component else 1)
+      flags = wintypes.DWORD(0x20 if 'mt' in clsid_component or 'multithreaded' in clsid_component else 0x21)
+      clsid_component = False
     else:
       driver_type = wintypes.DWORD(1)
+      flags = wintypes.DWORD(0x20 if getattr(_IUtil._local, 'multithreaded', False) else 0x21)
     if clsid_component is False:
       pI = wintypes.LPVOID()
-      if ISetLastError(d3d11.D3D11CreateDevice(None, driver_type, None, wintypes.DWORD(0x20 if getattr(_IUtil._local, 'multithreaded', False) else 0x21), ctypes.byref((wintypes.UINT * 7)(*map(D3D11FEATURELEVEL.name_code, ('11.1', '11.0', '10.1', '10.0', '9.3', '9.2', '9.1')))), wintypes.UINT(7), wintypes.UINT(7), ctypes.byref(pI), None, None)):
-        if ISetLastError(d3d11.D3D11CreateDevice(None, driver_type, None, wintypes.DWORD(0x20 if getattr(_IUtil._local, 'multithreaded', False) else 0x21), None, wintypes.UINT(0), wintypes.UINT(7), ctypes.byref(pI), None, None)):
+      if ISetLastError(d3d11.D3D11CreateDevice(None, driver_type, None, flags, ctypes.byref((wintypes.UINT * 7)(*map(D3D11FEATURELEVEL.name_code, ('11.1', '11.0', '10.1', '10.0', '9.3', '9.2', '9.1')))), wintypes.UINT(7), wintypes.UINT(7), ctypes.byref(pI), None, None)):
+        if ISetLastError(d3d11.D3D11CreateDevice(None, driver_type, None, flags, None, wintypes.UINT(0), wintypes.UINT(7), ctypes.byref(pI), None, None)):
           return None
     else:
       pI = clsid_component
@@ -6382,6 +6462,457 @@ class ID3D11Device(IUnknown):
   @property
   def AsDXGIDevice(self):
     return self.GetDXGIDevice()
+
+DWTextAlignment = {'Leading': 0, 'Trailing': 1, 'Center': 2, 'Justified': 3}
+DWTEXTALIGNMENT = type('DWTEXTALIGNMENT', (_BCode, wintypes.INT), {}, _dict=DWTextAlignment)
+
+DWParagraphAlignment = {'Near': 0, 'Far': 1, 'Center': 2}
+DWPARAGRAPHALIGNMENT = type('DWPARAGRAPHALIGNMENT', (_BCode, wintypes.INT), {}, _dict=DWParagraphAlignment)
+
+DWWordWrapping = {'Wrap': 0, 'NoWrap': 1, 'EmergencyBreak': 2, 'WholeWord': 3, 'Character': 4}
+DWWORDWRAPPING = type('DWWORDWRAPPING', (_BCode, wintypes.INT), {}, _dict=DWWordWrapping)
+
+DWReadingDirection = {'LeftToRight': 0, 'RightToLeft': 1, 'TopToBottom': 2, 'BottomToTop': 3}
+DWREADINGDIRECTION = type('DWREADINGDIRECTION', (_BCode, wintypes.INT), {}, _dict=DWReadingDirection)
+
+DWFlowDirection = {'TopToBottom': 0, 'BottomToTop': 1, 'LeftToRight': 2, 'RightToLeft': 3}
+DWFLOWDIRECTION = type('DWFLOWDIRECTION', (_BCode, wintypes.INT), {}, _dict=DWFlowDirection)
+
+DWTrimmingGranularity = {'None': 0, 'Character': 1, 'Word': 2}
+DWTRIMMINGGRANULARITY = type('DWTRIMMINGGRANULARITY', (_BCode, wintypes.INT), {}, _dict=DWTrimmingGranularity)
+
+class DWTRIMMING(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('granularity', DWTRIMMINGGRANULARITY), ('delimiter', wintypes.UINT), ('delimiterCount', wintypes.UINT)]
+DWPTRIMMING = type('DWPTRIMMING', (_BPStruct, ctypes.POINTER(DWTRIMMING)),  {'_type_': DWTRIMMING})
+
+DWLineSpacingMethod = {'Default': 0, 'Uniform': 1, 'Proportional': 2}
+DWLINESPACINGMETHOD = type('DWLINESPACINGMETHOD', (_BCode, wintypes.INT), {}, _dict=DWLineSpacingMethod)
+DWPLINESPACINGMETHOD = ctypes.POINTER(DWLINESPACINGMETHOD)
+
+DWFontWeight = {'Thin': 100, 'ExtraLight': 200, 'UltraLight': 200, 'Light': 300, 'SemiLight': 350, 'Normal': 400, 'Regular': 400, 'Medium': 500, 'DemiBold': 600, 'SemiBold': 600, 'Bold': 700, 'ExtraBold': 800, 'UltraBold': 800, 'Black': 900, 'Heavy': 900, 'ExtraBlack': 950, 'UltraBlack': 950}
+DWFONTWEIGHT = type('DWFONTWEIGHT', (_BCode, wintypes.INT), {}, _dict=DWFontWeight, _def=400)
+DWPFONTWEIGHT = ctypes.POINTER(DWFONTWEIGHT)
+
+DWFontStyle = {'Normal': 0, 'Oblique': 1, 'Italic': 2}
+DWFONTSTYLE = type('DWFONTSTYLE', (_BCode, wintypes.INT), {}, _dict=DWFontStyle)
+DWPFONTSTYLE = ctypes.POINTER(DWFONTSTYLE)
+
+DWFontStretch = {'Undefined': 0, 'UltraCondensed': 1, 'ExtraCondensed': 2, 'Condensed': 3, 'SemiCondensed': 4, 'Normal': 5, 'Medium': 5, 'SemiExpanded': 6, 'Expanded': 7, 'ExtraExpanded': 8, 'UltraExpanded': 9}
+DWFONTSTRETCH = type('DWFONTSTRETCH', (_BCode, wintypes.INT), {}, _dict=DWFontStretch, _def=5)
+DWPFONTSTRETCH = ctypes.POINTER(DWFONTSTRETCH)
+
+DWInformationalStringId = {'None': 0, 'CopyrightNotice': 1, 'VersionStrings': 2, 'Trademark': 3, 'Manufacturer': 4, 'Designer': 5, 'Designer_URL': 6, 'Description': 7, 'FontVendorURL': 8, 'LicenseDescription': 9, 'LicenseInfoURL': 10, 'Win32FamilyNames': 11, 'Win32SubfamilyNames': 12, 'TypographicFamilyNames': 13, 'TypographicSubfamilyNames': 14, 'SampleText': 15, 'FullName': 16, 'PostscriptName': 17, 'PostscriptCIDName': 18, 'WeightStretchStyleFamilyName': 19, 'DesignScriptLanguageTag': 20, 'SupportedScriptLanguageTag': 21}
+DWINFORMATIONALSTRINGID = type('DWINFORMATIONALSTRINGID', (_BCode, wintypes.INT), {}, _dict=DWInformationalStringId)
+
+DWFontSimulations = {'None': 0, 'Bold': 1, 'Oblique': 2}
+DWFONTSIMULATIONS = type('DWFONTSIMULATIONS', (_BCodeOr, wintypes.INT), {}, _dict=DWFontSimulations, _def=5)
+
+class DWFONTMETRICS(_BDStruct, ctypes.Structure):
+  _fields_ = [('designUnitsPerEm', wintypes.USHORT), ('ascent', wintypes.USHORT), ('descent', wintypes.USHORT), ('lineGap', wintypes.SHORT), ('capHeight', wintypes.USHORT), ('xHeight', wintypes.USHORT), ('underlinePosition', wintypes.SHORT), ('underlineThickness', wintypes.USHORT), ('strikethroughPosition', wintypes.SHORT), ('strikethroughThickness', wintypes.USHORT), ('glyphBoxLeft', wintypes.SHORT), ('glyphBoxTop', wintypes.SHORT), ('glyphBoxRight', wintypes.SHORT), ('glyphBoxBottom', wintypes.SHORT), ('subscriptPositionX', wintypes.SHORT), ('subscriptPositionY', wintypes.SHORT), ('subscriptSizeX', wintypes.SHORT), ('subscriptSizeY', wintypes.SHORT), ('superscriptPositionX', wintypes.SHORT), ('superscriptPositionY', wintypes.SHORT), ('superscriptSizeX', wintypes.SHORT), ('superscriptSizeY', wintypes.SHORT), ('hasTypographicMetrics', wintypes.BOOL)]
+DWPFONTMETRICS = type('DWPFONTMETRICS', (_BPStruct, ctypes.POINTER(DWFONTMETRICS)),  {'_type_': DWFONTMETRICS})
+
+class DWUNICODERANGE(_BTStruct, ctypes.Structure):
+  _fields_ = [('first', wintypes.UINT), ('last', wintypes.UINT)]
+DWPUNICODERANGE = type('DWPUNICODERANGE', (_BPStruct, ctypes.POINTER(DWUNICODERANGE)),  {'_type_': DWUNICODERANGE})
+
+DWMeasuringMode = {'Natural': 0, 'GDIClassic': 1, 'GDINatural': 2}
+DWMEASURINGMODE = type('DWMEASURINGMODE', (_BCode, wintypes.INT), {}, _dict=DWMeasuringMode)
+
+class DWTEXTRANGE(_BTStruct, ctypes.Structure):
+  _fields_ = [('startPosition', wintypes.UINT), ('length', wintypes.UINT)]
+DWPTEXTRANGE = type('DWPTEXTRANGE', (_BPStruct, ctypes.POINTER(DWTEXTRANGE)), {'_type_': DWTEXTRANGE})
+
+class DWLINEMETRICS(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('length', wintypes.UINT), ('trailingWhitespaceLength', wintypes.UINT), ('newlineLength', wintypes.UINT), ('height', wintypes.FLOAT), ('baseline', wintypes.FLOAT), ('isTrimmed', wintypes.BOOLE)]
+DWPLINEMETRICS = type('DWPLINEMETRICS', (_BPStruct, ctypes.POINTER(DWLINEMETRICS)), {'_type_': DWLINEMETRICS})
+
+class DWTEXTMETRICS(_BDStruct, ctypes.Structure):
+  _fields_ = [('left', wintypes.FLOAT), ('top', wintypes.FLOAT), ('width', wintypes.FLOAT), ('widthIncludingTrailingWhitespace', wintypes.FLOAT), ('height', wintypes.FLOAT), ('layoutWidth', wintypes.FLOAT), ('layoutHeight', wintypes.FLOAT), ('maxBidiReorderingDepth', wintypes.UINT), ('lineCount', wintypes.UINT)]
+DWPTEXTMETRICS = type('DWPTEXTMETRICS', (_BPStruct, ctypes.POINTER(DWTEXTMETRICS)), {'_type_': DWTEXTMETRICS})
+
+class DWOVERHANGMETRICS(_BDStruct, ctypes.Structure):
+  _fields_ = [('left', wintypes.FLOAT), ('top', wintypes.FLOAT), ('right', wintypes.FLOAT), ('bottom', wintypes.FLOAT)]
+DWPOVERHANGMETRICS = type('DWPOVERHANGMETRICS', (_BPStruct, ctypes.POINTER(DWOVERHANGMETRICS)), {'_type_': DWOVERHANGMETRICS})
+
+class DWCLUSTERMETRICS(_BDBStruct, ctypes.Structure):
+  _fields_ = [('width', wintypes.FLOAT), ('length', wintypes.USHORT), ('canWrapLineAfter', wintypes.USHORT, 1), ('isWhitespace', wintypes.USHORT, 1), ('isNewline', wintypes.USHORT, 1), ('isSoftHyphen', wintypes.USHORT, 1), ('isRightToLeft', wintypes.USHORT, 1), ('padding', wintypes.USHORT, 11)]
+DWPCLUSTERMETRICS = type('DWPCLUSTERMETRICS', (_BPStruct, ctypes.POINTER(DWCLUSTERMETRICS)), {'_type_': DWCLUSTERMETRICS})
+
+class DWLOGFONT(_BDStruct, ctypes.Structure):
+  _fields_ = [('lfHeight', wintypes.LONG), ('lfWidth', wintypes.LONG), ('lfEscapement', wintypes.LONG), ('lfOrientation', wintypes.LONG), ('lfWeight', wintypes.LONG), ('lfItalic', wintypes.BYTE), ('lfUnderline', wintypes.BYTE), ('lfStrikeOut', wintypes.BYTE), ('lfCharSet', wintypes.BYTE), ('lfOutPrecision', wintypes.BYTE), ('lfClipPrecision', wintypes.BYTE), ('lfQuality', wintypes.BYTE), ('lfPitchAndFamily', wintypes.BYTE), ('lfFaceName', wintypes.WCHAR * 32)]
+DWPLOGFONT = type('DWPLOGFONT', (_BPStruct, ctypes.POINTER(DWLOGFONT)),  {'_type_': DWLOGFONT})
+
+class IDWriteLocalizedStrings(IUnknown):
+  _lightweight = True
+  IID = GUID(0x08256209, 0x099a, 0x4b34, 0xb8, 0x6d, 0xc2, 0x2b, 0x11, 0x0e, 0x77, 0x71)
+  _protos['GetCount'] = 3, (), (), wintypes.UINT
+  _protos['FindLocaleName'] = 4, (wintypes.LPCWSTR,), (wintypes.PUINT, wintypes.PBOOLE)
+  _protos['GetLocaleNameLength'] = 5, (wintypes.UINT,), (wintypes.PUINT,)
+  _protos['GetLocaleName'] = 6, (wintypes.UINT, wintypes.PWCHAR, wintypes.UINT), ()
+  _protos['GetStringLength'] = 7, (wintypes.UINT,), (wintypes.PUINT,)
+  _protos['GetString'] = 8, (wintypes.UINT, wintypes.PWCHAR, wintypes.UINT), ()
+  def GetCount(self):
+    return self.__class__._protos['GetCount'](self.pI)
+  def FindLocaleName(self, name):
+    return None if (i_e := self.__class__._protos['FindLocaleName'](self.pI, name)) is None else i_e[1] and i_e[0]
+  def GetLocaleName(self, index=0):
+    if (l := self.__class__._protos['GetLocaleNameLength'](self.pI, index)) is None:
+      return None
+    n = ctypes.create_unicode_buffer(l := l + 1)
+    return None if self.__class__._protos['GetLocaleName'](self.pI, index, n, l) is None else n.value
+  def GetString(self, index=0):
+    if (l := self.__class__._protos['GetStringLength'](self.pI, index)) is None:
+      return None
+    s = ctypes.create_unicode_buffer(l := l + 1)
+    return None if self.__class__._protos['GetString'](self.pI, index, s, l) is None else s.value
+  def GetLocalizedStrings(self):
+    return {n: s for i in range(self.GetCount()) if (n := self.GetLocaleName(i)) is not None and (s := self.GetString(i)) is not None}
+
+class IDWriteFont(IUnknown):
+  _lightweight = True
+  IID = GUID(0xacd16696, 0x8c14, 0x4f5d, 0x87, 0x7e, 0xfe, 0x3f, 0xc1, 0xd3, 0x27, 0x38)
+  _protos['GetFontFamily'] = 3, (), (wintypes.PLPVOID,)
+  _protos['GetWeight'] = 4, (), (), DWFONTWEIGHT
+  _protos['GetStretch'] = 5, (), (), DWFONTSTRETCH
+  _protos['GetStyle'] = 6, (), (), DWFONTSTYLE
+  _protos['IsSymbolFont'] = 7, (), (), wintypes.BOOLE
+  _protos['GetFaceNames'] = 8, (), (wintypes.PLPVOID,)
+  _protos['GetInformationalStrings'] = 9, (DWINFORMATIONALSTRINGID,), (wintypes.PLPVOID, wintypes.PBOOLE)
+  _protos['GetSimulations'] = 10, (), (), DWFONTSIMULATIONS
+  _protos['HasCharacter'] = 12, (wintypes.UINT,), (wintypes.PBOOLE,)
+  _protos['GetMetrics'] = 14, (), (DWPFONTMETRICS,), None
+  _protos['GetUnicodeRanges'] = 16, (wintypes.UINT, DWPUNICODERANGE, wintypes.PUINT), (), wintypes.ULONG
+  _protos['IsMonospacedFont'] = 17, (), (), wintypes.BOOLE
+  def GetFontFamily(self):
+    return IDWriteFontFamily(self.__class__._protos['GetFontFamily'](self.pI), self.factory)
+  def GetWeight(self):
+    return self.__class__._protos['GetWeight'](self.pI)
+  def GetStretch(self):
+    return self.__class__._protos['GetStretch'](self.pI)
+  def GetStyle(self):
+    return self.__class__._protos['GetStyle'](self.pI)
+  def IsSymbolFont(self):
+    return self.__class__._protos['IsSymbolFont'](self.pI)
+  def GetFaceNames(self):
+    return IDWriteLocalizedStrings(self.__class__._protos['GetFaceNames'](self.pI), self.factory)
+  def GetInformationalStrings(self, string_id):
+    return None if (i_e := self.__class__._protos['GetInformationalStrings'](self.pI, string_id)) is None else i_e[1] and IDWriteLocalizedStrings(i_e[0], self.factory)
+  def GetSimulations(self):
+    return self.__class__._protos['GetSimulations'](self.pI)
+  def HasCharacter(self, unicode_value):
+    return self.__class__._protos['HasCharacter'](self.pI, (ord(unicode_value) if isinstance(unicode_value, str) else unicode_value))
+  def GetMetrics(self):
+    return self.__class__._protos['GetMetrics'](self.pI)
+  def GetUnicodeRanges(self):
+    n = wintypes.UINT()
+    if (r := self.__class__._protos['GetUnicodeRanges'](self.pI, 0, None, n)) != 0x8007007a:
+      return None if ISetLastError(r) else ()
+    ur = (DWUNICODERANGE * n.value)()
+    return None if ISetLastError(self.__class__._protos['GetUnicodeRanges'](self.pI, n.value, ur, n)) else tuple(ur[i].value for i in range(n.value))
+  def IsMonospacedFont(self):
+    return self.__class__._protos['IsMonospacedFont'](self.pI)
+IDWriteFont1 = IDWriteFont
+
+class IDWriteFontList(IUnknown):
+  _lightweight = True
+  IID = GUID(0x1a0d8438, 0x1d97, 0x4ec1, 0xae, 0xf9, 0xa2, 0xfb, 0x86, 0xed, 0x6a, 0xcb)
+  _protos['GetFontCollection'] = 3, (), (wintypes.PLPVOID,)
+  _protos['GetFontCount'] = 4, (), (), wintypes.UINT
+  _protos['GetFont'] = 5, (wintypes.UINT,), (wintypes.PLPVOID,)
+  def GetFontCollection(self):
+    return IDWriteFontCollection(self.__class__._protos['GetFontCollection'](self.pI), self.factory)
+  def GetFontCount(self):
+    return self.__class__._protos['GetFontCount'](self.pI)
+  def GetFont(self, index):
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['GetFont'](self.pI, index)), IDWriteFont, self.factory)
+
+class IDWriteFontFamily(IDWriteFontList):
+  IID = GUID(0xda20d8ef, 0x812a, 0x4c43, 0x98, 0x02, 0x62, 0xec, 0x4a, 0xbd, 0x7a, 0xdd)
+  _protos['GetFamilyNames'] = 6, (), (wintypes.PLPVOID,)
+  _protos['GetFirstMatchingFont'] = 7, (DWFONTWEIGHT, DWFONTSTRETCH, DWFONTSTYLE), (wintypes.PLPVOID,)
+  _protos['GetMatchingFonts'] = 8, (DWFONTWEIGHT, DWFONTSTRETCH, DWFONTSTYLE), (wintypes.PLPVOID,)
+  def GetFamilyNames(self):
+    return IDWriteLocalizedStrings(self.__class__._protos['GetFamilyNames'](self.pI), self.factory)
+  def GetFirstMatchingFont(self, weight=400, stretch=5, style=0):
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['GetFirstMatchingFont'](self.pI, weight, stretch, style)), IDWriteFont, self.factory)
+  def GetMatchingFonts(self, weight=400, stretch=5, style=0):
+    return IDWriteFontList(self.__class__._protos['GetMatchingFonts'](self.pI, weight, stretch, style), self.factory)
+
+class IDWriteFontCollection(IUnknown):
+  IID = GUID(0xa84cee02, 0x3eea, 0x4eee, 0xa8, 0x27, 0x87, 0xc1, 0xa0, 0x2a, 0x0f, 0xcc)
+  _protos['GetFontFamilyCount'] = 3, (), (), wintypes.UINT
+  _protos['GetFontFamily'] = 4, (wintypes.UINT,), (wintypes.PLPVOID,)
+  _protos['FindFamilyName'] = 5, (wintypes.LPCWSTR,), (wintypes.PUINT, wintypes.PBOOLE)
+  def GetFontFamilyCount(self):
+    return self.__class__._protos['GetFontFamilyCount'](self.pI)
+  def GetFontFamily(self, index=0):
+    return IDWriteFontFamily(self.__class__._protos['GetFontFamily'](self.pI, index), self.factory)
+  def FindFamilyName(self, name):
+    return None if (e_i := self.__class__._protos['FindFamilyName'](self.pI, name)) is None else e_i[1] and e_i[0]
+
+class IDWriteTextFormat(IUnknown):
+  _lightweight = True
+  IID = GUID(0x9c906818, 0x31d7, 0x4fd3, 0xa1, 0x51, 0x7c, 0x5e, 0x22, 0x5d, 0xb5, 0x5a)
+  _protos['SetTextAlignment'] = 3, (DWTEXTALIGNMENT,), ()
+  _protos['SetParagraphAlignment'] = 4, (DWPARAGRAPHALIGNMENT,), ()
+  _protos['SetWordWrapping'] = 5, (DWWORDWRAPPING,), ()
+  _protos['SetReadingDirection'] = 6, (DWREADINGDIRECTION,), ()
+  _protos['SetFlowDirection'] = 7, (DWFLOWDIRECTION,), ()
+  _protos['SetIncrementalTabStop'] = 8, (wintypes.FLOAT,), ()
+  _protos['SetTrimming'] = 9, (DWPTRIMMING, wintypes.LPVOID), ()
+  _protos['SetLineSpacing'] = 10, (DWLINESPACINGMETHOD, wintypes.FLOAT, wintypes.FLOAT), ()
+  _protos['GetTextAlignment'] = 11, (), (), DWTEXTALIGNMENT
+  _protos['GetParagraphAlignment'] = 12, (), (), DWPARAGRAPHALIGNMENT
+  _protos['GetWordWrapping'] = 13, (), (), DWWORDWRAPPING
+  _protos['GetReadingDirection'] = 14, (), (), DWREADINGDIRECTION
+  _protos['GetFlowDirection'] = 15, (), (), DWFLOWDIRECTION
+  _protos['GetIncrementalTabStop'] = 16, (), (), wintypes.FLOAT
+  _protos['GetTrimming'] = 17, (), (DWPTRIMMING, wintypes.PLPVOID)
+  _protos['GetLineSpacing'] = 18, (), (DWPLINESPACINGMETHOD, wintypes.PFLOAT, wintypes.PFLOAT)
+  _protos['GetFontCollection'] = 19, (), (wintypes.PLPVOID,)
+  _protos['GetFontFamilyNameLength'] = 20, (), (), wintypes.UINT
+  _protos['GetFontFamilyName'] = 21, (wintypes.PWCHAR, wintypes.UINT), ()
+  _protos['GetFontWeight'] = 22, (), (), DWFONTWEIGHT
+  _protos['GetFontStyle'] = 23, (), (), DWFONTSTYLE
+  _protos['GetFontStretch'] = 24, (), (), DWFONTSTRETCH
+  _protos['GetFontSize'] = 25, (), (), wintypes.FLOAT
+  _protos['GetLocaleNameLength'] = 26, (), (), wintypes.UINT
+  _protos['GetLocaleName'] = 27, (wintypes.PWCHAR, wintypes.UINT), ()
+  def GetTextAlignment(self):
+    return self.__class__._protos['GetTextAlignment'](self.pI)
+  def GetParagraphAlignment(self):
+    return self.__class__._protos['GetParagraphAlignment'](self.pI)
+  def GetWordWrapping(self):
+    return self.__class__._protos['GetWordWrapping'](self.pI)
+  def GetReadingDirection(self):
+    return self.__class__._protos['GetReadingDirection'](self.pI)
+  def GetFlowDirection(self):
+    return self.__class__._protos['GetFlowDirection'](self.pI)
+  def GetIncrementalTabStop(self):
+    return self.__class__._protos['GetIncrementalTabStop'](self.pI)
+  def GetTrimming(self):
+    return None if (o_s := self.__class__._protos['GetTrimming'](self.pI)) is None else (*o_s[0], IDWriteInlineObject(o_s[1], self.factory))
+  def GetLineSpacing(self):
+    return self.__class__._protos['GetLineSpacing'](self.pI)
+  def SetTextAlignment(self, alignment=0):
+    return self.__class__._protos['SetTextAlignment'](self.pI, alignment)
+  def SetParagraphAlignment(self, alignment=0):
+    return self.__class__._protos['SetParagraphAlignment'](self.pI, alignment)
+  def SetWordWrapping(self, wrapping=0):
+    return self.__class__._protos['SetWordWrapping'](self.pI, wrapping)
+  def SetReadingDirection(self, direction=0):
+    return self.__class__._protos['SetReadingDirection'](self.pI, direction)
+  def SetFlowDirection(self, direction=0):
+    return self.__class__._protos['SetFlowDirection'](self.pI, direction)
+  def SetIncrementalTabStop(self, distance=0):
+    return self.__class__._protos['SetIncrementalTabStop'](self.pI, distance)
+  def SetTrimming(self, granularity, delimiter, delimiter_count, sign=None):
+    if sign is True:
+      if not (factory := self.factory):
+        return None
+      sign = factory.CreateEllipsisTrimmingSign(self)
+    return self.__class__._protos['SetTrimming'](self.pI, (granularity, (ord(delimiter) if isinstance(delimiter, str) else delimiter), delimiter_count), sign)
+  def SetLineSpacing(self, method, spacing, baseline):
+    return self.__class__._protos['SetLineSpacing'](self.pI, method, spacing, baseline)
+  def GetFontCollection(self):
+    return IDWriteFontCollection(self.__class__._protos['GetFontCollection'](self.pI), self.factory)
+  def GetFontFamilyName(self):
+    n = ctypes.create_unicode_buffer(l := self.__class__._protos['GetFontFamilyNameLength'](self.pI) + 1)
+    return None if self.__class__._protos['GetFontFamilyName'](self.pI, n, l) is None else n.value
+  def GetFontWeight(self):
+    return self.__class__._protos['GetFontWeight'](self.pI)
+  def GetFontStyle(self):
+    return self.__class__._protos['GetFontStyle'](self.pI)
+  def GetFontStretch(self):
+    return self.__class__._protos['GetFontStretch'](self.pI)
+  def GetFontSize(self):
+    return self.__class__._protos['GetFontSize'](self.pI)
+  def GetLocaleName(self):
+    n = ctypes.create_unicode_buffer(l := self.__class__._protos['GetLocaleNameLength'](self.pI) + 1)
+    return None if self.__class__._protos['GetLocaleName'](self.pI, n, l) is None else n.value
+
+class IDWriteTextLayout(IDWriteTextFormat):
+  IID = GUID(0x9064d822, 0x80a7, 0x465c, 0xa9, 0x86, 0xdf, 0x65, 0xf7, 0x8b, 0x8f, 0xeb)
+  _protos['SetMaxWidth'] = 28, (wintypes.FLOAT,), ()
+  _protos['SetMaxHeight'] = 29, (wintypes.FLOAT,), ()
+  _protos['SetFontCollection'] = 30, (wintypes.LPVOID, DWTEXTRANGE), ()
+  _protos['SetFontFamilyName'] = 31, (wintypes.LPCWSTR, DWTEXTRANGE), ()
+  _protos['SetFontWeight'] = 32, (DWFONTWEIGHT, DWTEXTRANGE), ()
+  _protos['SetFontStyle'] = 33, (DWFONTSTYLE, DWTEXTRANGE), ()
+  _protos['SetFontStretch'] = 34, (DWFONTSTRETCH, DWTEXTRANGE), ()
+  _protos['SetFontSize'] = 35, (wintypes.FLOAT, DWTEXTRANGE), ()
+  _protos['SetUnderline'] = 36, (wintypes.BOOL, DWTEXTRANGE), ()
+  _protos['SetStrikethrough'] = 37, (wintypes.BOOL, DWTEXTRANGE), ()
+  _protos['SetDrawingEffect'] = 38, (wintypes.LPVOID, DWTEXTRANGE), ()
+  _protos['SetInlineObject'] = 39, (wintypes.LPVOID, DWTEXTRANGE), ()
+  _protos['SetLocaleName'] = 41, (wintypes.LPCWSTR, DWTEXTRANGE), ()
+  _protos['GetMaxWidth'] = 42, (), (), wintypes.FLOAT
+  _protos['GetMaxHeight'] = 43, (), (), wintypes.FLOAT
+  _protos['GetFontCollection'] = 44, (wintypes.UINT,), (wintypes.PLPVOID, DWPTEXTRANGE)
+  _protos['GetFontFamilyNameLength'] = 45, (wintypes.UINT,), (wintypes.PUINT, DWPTEXTRANGE)
+  _protos['GetFontFamilyName'] = 46, (wintypes.UINT, wintypes.PWCHAR, wintypes.UINT), (DWPTEXTRANGE,)
+  _protos['GetFontWeight'] = 47, (wintypes.UINT,), (DWPFONTWEIGHT, DWPTEXTRANGE)
+  _protos['GetFontStyle'] = 48, (wintypes.UINT,), (DWPFONTSTYLE, DWPTEXTRANGE)
+  _protos['GetFontStretch'] = 49, (wintypes.UINT,), (DWPFONTSTRETCH, DWPTEXTRANGE)
+  _protos['GetFontSize'] = 50, (wintypes.UINT,), (wintypes.PFLOAT, DWPTEXTRANGE)
+  _protos['GetUnderline'] = 51, (wintypes.UINT,), (wintypes.PBOOLE, DWPTEXTRANGE)
+  _protos['GetStrikethrough'] = 52, (wintypes.UINT,), (wintypes.PBOOLE, DWPTEXTRANGE)
+  _protos['GetDrawingEffect'] = 53, (wintypes.UINT,), (wintypes.PLPVOID, DWPTEXTRANGE)
+  _protos['GetInlineObject'] = 54, (wintypes.UINT,), (wintypes.PLPVOID, DWPTEXTRANGE)
+  _protos['GetLocaleNameLength'] = 56, (wintypes.UINT,), (wintypes.PUINT, DWPTEXTRANGE)
+  _protos['GetLocaleName'] = 57, (wintypes.UINT, wintypes.PWCHAR, wintypes.UINT), (DWPTEXTRANGE,)
+  _protos['GetLineMetrics'] = 59, (DWPLINEMETRICS, wintypes.UINT, wintypes.PUINT), (), wintypes.ULONG
+  _protos['GetMetrics'] = 60, (), (DWPTEXTMETRICS,)
+  _protos['GetOverhangMetrics'] = 61, (), (DWPOVERHANGMETRICS,)
+  _protos['GetClusterMetrics'] = 62, (DWPCLUSTERMETRICS, wintypes.UINT, wintypes.PUINT), (), wintypes.ULONG
+  _protos['DetermineMinWidth'] = 63, (), (wintypes.PFLOAT,)
+  _protos['SetPairKerning'] = 67, (wintypes.BOOL, DWTEXTRANGE), ()
+  _protos['GetPairKerning'] = 68, (wintypes.UINT,), (wintypes.PBOOLE, DWPTEXTRANGE)
+  _protos['SetCharacterSpacing'] = 69, (wintypes.FLOAT, wintypes.FLOAT, wintypes.FLOAT, DWTEXTRANGE), ()
+  _protos['GetCharacterSpacing'] = 70, (wintypes.UINT,) , (wintypes.PFLOAT, wintypes.PFLOAT, wintypes.PFLOAT, DWPTEXTRANGE)
+  def GetMaxWidth(self):
+    return self.__class__._protos['GetMaxWidth'](self.pI)
+  def GetMaxHeight(self):
+    return self.__class__._protos['GetMaxHeight'](self.pI)
+  def GetFontCollection(self, position=0):
+    return None if (c_r := self.__class__._protos['GetFontCollection'](self.pI, position)) is None else (IDWriteFontCollection(c_r[0], self.factory), c_r[1])
+  def GetFontFamilyName(self, position=0):
+    if (l_r := self.__class__._protos['GetFontFamilyNameLength'](self.pI, position)) is None:
+      return None
+    n = ctypes.create_unicode_buffer(l := l_r[0] + 1)
+    return None if (r := self.__class__._protos['GetFontFamilyName'](self.pI, position, n, l)) is None else (n.value, r)
+  def GetFontWeight(self, position=0):
+    return self.__class__._protos['GetFontWeight'](self.pI, position)
+  def GetFontStyle(self, position=0):
+    return self.__class__._protos['GetFontStyle'](self.pI, position)
+  def GetFontStretch(self, position=0):
+    return self.__class__._protos['GetFontStretch'](self.pI, position)
+  def GetFontSize(self, position=0):
+    return self.__class__._protos['GetFontSize'](self.pI, position)
+  def GetUnderline(self, position=0):
+    return self.__class__._protos['GetUnderline'](self.pI, position)
+  def GetStrikethrough(self, position=0):
+    return self.__class__._protos['GetStrikethrough'](self.pI, position)
+  def GetPairKerning(self, position=0):
+    return self.__class__._protos['GetPairKerning'](self.pI, position)
+  def GetCharacterSpacing(self, position=0):
+    return self.__class__._protos['GetCharacterSpacing'](self.pI, position)
+  def GetDrawingEffect(self, position=0):
+    return None if (e_r := self.__class__._protos['GetDrawingEffect'](self.pI, position)) is None else (IUnknown(e_r[0], self.factory), e_r[1])
+  def GetInlineObject(self, position=0):
+    return None if (i_r := self.__class__._protos['GetInlineObject'](self.pI, position)) is None else (IDWriteInlineObject(i_r[0], self.factory), i_r[1])
+  def GetLocaleName(self, position=0):
+    if (l_r := self.__class__._protos['GetLocaleNameLength'](self.pI, position)) is None:
+      return None
+    n = ctypes.create_unicode_buffer(l := l_r[0] + 1)
+    return None if (r := self.__class__._protos['GetLocaleName'](self.pI, position, n, l)) is None else (n.value, r)
+  def SetMaxWidth(self, width):
+    return self.__class__._protos['SetMaxWidth'](self.pI, width)
+  def SetMaxHeight(self, height):
+    return self.__class__._protos['SetMaxHeight'](self.pI, height)
+  def SetFontCollection(self, collection, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetFontCollection'](self.pI, collection, text_range)
+  def SetFontFamilyName(self, name, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetFontFamilyName'](self.pI, name, text_range)
+  def SetFontWeight(self, weight, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetFontWeight'](self.pI, weight, text_range)
+  def SetFontStyle(self, style, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetFontStyle'](self.pI, style, text_range)
+  def SetFontStretch(self, stretch, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetFontStretch'](self.pI, stretch, text_range)
+  def SetFontSize(self, size, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetFontSize'](self.pI, size, text_range)
+  def SetUnderline(self, underline, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetUnderline'](self.pI, underline, text_range)
+  def SetStrikethrough(self, striketrhough, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetStrikethrough'](self.pI, striketrhough, text_range)
+  def SetCharacterSpacing(self, leading, trailing, min_advance, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetCharacterSpacing'](self.pI, leading, trailing, min_advance, text_range)
+  def SetPairKerning(self, enabled, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetPairKerning'](self.pI, enabled, text_range)
+  def SetDrawingEffect(self, effect, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetDrawingEffect'](self.pI, effect, text_range)
+  def SetInlineObject(self, inline, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetInlineObject'](self.pI, inline, text_range)
+  def SetLocaleName(self, locale, text_range=(0, 0xffffffff)):
+    return self.__class__._protos['SetLocaleName'](self.pI, locale, text_range)
+  def GetLineMetrics(self):
+    n = wintypes.UINT()
+    if (r := self.__class__._protos['GetLineMetrics'](self.pI, None, 0, n)) != 0x8007007a:
+      return None if ISetLastError(r) else ()
+    m = (DWLINEMETRICS * n.value)()
+    return None if ISetLastError(self.__class__._protos['GetLineMetrics'](self.pI, m, n.value, n)) else tuple(m[i].value for i in range(n.value))
+  def GetMetrics(self):
+    return self.__class__._protos['GetMetrics'](self.pI)
+  def GetOverhangMetrics(self):
+    return self.__class__._protos['GetOverhangMetrics'](self.pI)
+  def GetClusterMetrics(self):
+    n = wintypes.UINT()
+    if (r := self.__class__._protos['GetClusterMetrics'](self.pI, None, 0, n)) != 0x8007007a:
+      return None if ISetLastError(r) else ()
+    m = (DWCLUSTERMETRICS * n.value)()
+    return None if ISetLastError(self.__class__._protos['GetClusterMetrics'](self.pI, m, n.value, n)) else tuple(m[i].value for i in range(n.value))
+  def DetermineMinWidth(self):
+    return self.__class__._protos['DetermineMinWidth'](self.pI)
+IDWriteTextLayout1 = IDWriteTextLayout
+
+class IDWriteGdiInterop(IUnknown):
+  _lightweight = True
+  IID = GUID(0x1edd9491, 0x9853, 0x4299, 0x89, 0x8f, 0x64, 0x32, 0x98, 0x3b, 0x6f, 0x3a)
+  _protos['CreateFontFromLOGFONT'] = 3, (DWLOGFONT,), (wintypes.PLPVOID,)
+  def CreateFontFromLOGFONT(self, logfont):
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateFontFromLOGFONT'](self.pI, logfont)), IDWriteFont, self.factory)
+  def CreateTextFormatFromLOGFONT(self, logfont, dpi=96.0, size=None):
+    if not (factory := self.factory) or not dpi or (font := self.CreateFontFromLOGFONT(logfont)) is None or (family := font.GetFontFamily()) is None or (names := family.GetFamilyNames()) is None or (index := names.FindLocaleName(l := factory.GetLocale() or 'en-us')) is None or (name := names.GetString(index or 0)) is None:
+      return None
+    return factory.CreateTextFormat(name, None, font.GetWeight(), font.GetStyle(), font.GetStretch(), (abs(logfont.lfHeight) * 96.0 / dpi if size is None else size), l)
+
+class IDWriteInlineObject(IUnknown):
+  _lightweight = True
+  IID = GUID(0x8339fde3, 0x106f, 0x47ab, 0x83, 0x73, 0x1c, 0x62, 0x95, 0xeb, 0x10, 0xb3)
+
+class IDWriteFactory(IUnknown):
+  _lightweight = True
+  IID = GUID(0x30572f99, 0xdac6, 0x41db, 0xa1, 0x6e, 0x04, 0x86, 0x30, 0x7e, 0x60, 0x6a)
+  _protos['GetSystemFontCollection'] = 3, (wintypes.PLPVOID, wintypes.BOOL), ()
+  _protos['CreateTextFormat'] = 15, (wintypes.LPCWSTR, wintypes.LPVOID, DWFONTWEIGHT, DWFONTSTYLE, DWFONTSTRETCH, wintypes.FLOAT, wintypes.LPCWSTR), (wintypes.PLPVOID,)
+  _protos['GetGdiInterop'] = 17, (), (wintypes.PLPVOID,)
+  _protos['CreateTextLayout'] = 18, (wintypes.PWCHAR, wintypes.UINT, wintypes.LPVOID, wintypes.FLOAT, wintypes.FLOAT), (wintypes.PLPVOID,)
+  _protos['CreateEllipsisTrimmingSign'] = 20, (wintypes.LPVOID,), (wintypes.PLPVOID,)
+  def __new__(cls, clsid_component=False, factory=None):
+    if isinstance(clsid_component, str):
+      ftype = wintypes.DWORD(1 if clsid_component.lower().strip() == 'isolated' else 0)
+      clsid_component = False
+    else:
+      ftype = wintypes.DWORD()
+    if clsid_component is False:
+      pI = wintypes.LPVOID()
+      if ISetLastError(dwrite.DWriteCreateFactory(ftype, wintypes.LPCSTR(cls.IID), ctypes.byref(pI))):
+        return None
+    else:
+      pI = clsid_component
+    return IUnknown.__new__(cls, pI, factory)
+  def GetSystemFontCollection(self, check_update=False):
+    return None if self.__class__._protos['GetSystemFontCollection'](self.pI, (pI := wintypes.LPVOID()), check_update) is None else IDWriteFontCollection(pI, self)
+  def CreateTextFormat(self, family_name='', collection=None, weight=400, style=0, stretch=5, size=12, locale_name=None):
+    return IDWriteTextFormat(self.__class__._protos['CreateTextFormat'](self.pI, family_name, collection, weight, style, stretch, size, locale_name or self.GetLocale() or 'en-us'), self)
+  def CreateTextLayout(self, string, text_format, max_width, max_height):
+    if isinstance(string, str):
+      string = ctypes.create_unicode_buffer(string)
+    if isinstance(text_format, dict) and (text_format := self.CreateTextFormat(**text_format)) is None:
+      return None
+    return _IUtil.QueryInterface(IUnknown(self.__class__._protos['CreateTextLayout'](self.pI, string, len(string) - 1, text_format, max_width, max_height)), IDWriteTextLayout, self)
+  def GetGdiInterop(self):
+    return IDWriteGdiInterop(self.__class__._protos['GetGdiInterop'](self.pI), self)
+  def CreateEllipsisTrimmingSign(self, text_format):
+    if isinstance(text_format, dict) and (text_format := self.CreateTextFormat(**text_format)) is None:
+      return None
+    return IDWriteInlineObject(self.__class__._protos['CreateEllipsisTrimmingSign'](self.pI, text_format), self)
+  @classmethod
+  def GetLocale(cls):
+    return l.value if cls.GetUserDefaultLocaleName((l := ctypes.create_unicode_buffer(85)), 85) else None
+  GetUserDefaultLocaleName = _IUtil._wrap('GetUserDefaultLocaleName', (wintypes.INT, 0), (wintypes.LPWSTR, 1), (wintypes.INT, 1), p=kernel32)
+IDWriteFactory1 = IDWriteFactory
 
 D2D1ColorSpace = {'Custom': 0, 'sRGB': 1, 'scRGB': 2}
 D2D1COLORSPACE = type('D2D1COLORSPACE', (_BCode, wintypes.DWORD), {}, _dict=D2D1ColorSpace, _def=1)
@@ -6552,11 +7083,17 @@ D2D1PCOLORF = type('D2D1PCOLORF', (_BPStruct, ctypes.POINTER(D2D1COLORF)), {'_ty
 D2D1BitmapInterpolationMode = {'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'MultiSampleLinear': 3, 'Anisotropic': 4, 'HighQualityCubic': 5}
 D2D1BITMAPINTERPOLATIONMODE = type('D2D1BITMAPINTERPOLATIONMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1BitmapInterpolationMode)
 
+D2D1DrawTextOptions = {'None': 0, 'NoSnap': 0x1, 'Clip': 0x2, 'EnableColorFont': 0x4, 'DisableColorBitmapSnapping': 0x8}
+D2D1DRAWTEXTOPTIONS = type('D2D1DRAWTEXTOPTIONS', (_BCodeOr, wintypes.DWORD), {}, _dict=D2D1DrawTextOptions)
+
 D2D1InterpolationMode = {'NearestNeighbor': 0, 'Linear': 1, 'Cubic': 2, 'MultiSampleLinear': 3, 'Anisotropic': 4, 'HighQualityCubic': 5}
 D2D1INTERPOLATIONMODE = type('D2D1INTERPOLATIONMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1InterpolationMode)
 
 D2D1AntialiasMode = {'PerPrimitive': 0, 'Aliased': 1}
 D2D1ANTIALIASMODE = type('D2D1ANTIALIASMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1AntialiasMode)
+
+D2D1TextAntialiasMode = {'Default': 0, 'Cleartype': 1, 'Grayscale': 2, 'Aliased': 3}
+D2D1TEXTANTIALIASMODE = type('D2D1TEXTANTIALIASMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1TextAntialiasMode)
 
 D2D1PrimitiveBlend = {'SourceOver': 0, 'Copy': 1, 'Min': 2, 'Add': 3, 'Max': 4}
 D2D1PRIMITIVEBLEND = type('D2D1PRIMITIVEBLEND', (_BCode, wintypes.DWORD), {}, _dict=D2D1PrimitiveBlend)
@@ -6724,11 +7261,41 @@ D2D1EffectId = {
   'LuminanceToAlpha': GUID(0x41251ab7, 0x0beb, 0x46f8, 0x9d, 0xa7, 0x59, 0xe9, 0x3f, 0xcc, 0xe5, 0xde),
   'Opacity': GUID(0x811d79a4, 0xde28, 0x4454, 0x80, 0x94, 0xc6, 0x46, 0x85, 0xf8, 0xbd, 0x4c)
 }
-D2D1EFFECTID = _GMeta('D2D1EFFECTID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in D2D1EffectId.items()}, '_tab_gn': {g: n for n, g in D2D1EffectId.items()}, '_def': None})
+D2D1EFFECTID = _GMeta('D2D1EFFECTID', (_BGUID, wintypes.GUID), {}, _dict=D2D1EffectId)
 D2D1PEFFECTID = type('D2D1PEFFECTID', (_BPGUID, ctypes.POINTER(D2D1EFFECTID)), {'_type_': D2D1EFFECTID})
 
 D2D1CompositeMode = {'SourceOver': 0, 'DestinationOver': 1, 'SourceIn': 2, 'DestinationIn': 3, 'SourceOut': 4, 'DestinationOut': 5, 'SourceAtop': 6, 'DestinationAtop': 7, 'XOr': 8, 'Plus': 9, 'SourceCopy': 10, 'BoundedSourceCopy': 11, 'MaskInvert': 12}
 D2D1COMPOSITEMODE = type('D2D1COMPOSITEMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1CompositeMode)
+
+D2D1FillMode = {'Alternate': 0, 'Winding': 1}
+D2D1FILLMODE = type('D2D1FILLMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1FillMode)
+
+D2D1PathSegment = {'None': 0, 'Unstroked': 1, 'RoundLineJoin': 2}
+D2D1PATHSEGMENT = type('D2D1PATHSEGMENT', (_BCode, wintypes.DWORD), {}, _dict=D2D1PathSegment)
+
+D2D1FigureBegin = {'Filled': 0, 'Hollow': 1}
+D2D1FIGUREBEGIN = type('D2D1FIGUREBEGIN', (_BCode, wintypes.DWORD), {}, _dict=D2D1FigureBegin, _def=1)
+
+class D2D1BEZIERSEGMENT(_BTStruct, ctypes.Structure):
+  _fields_ = [('point1', D2D1POINT2F), ('point2', D2D1POINT2F), ('point3', D2D1POINT2F)]
+D2D1PBEZIERSEGMENT = type('D2D1PBEZIERSEGMENT', (_BPStruct, ctypes.POINTER(D2D1BEZIERSEGMENT)), {'_type_': D2D1BEZIERSEGMENT})
+
+class D2D1QUADRATICBEZIERSEGMENT(_BTStruct, ctypes.Structure):
+  _fields_ = [('point1', D2D1POINT2F), ('point2', D2D1POINT2F)]
+D2D1PQUADRATICBEZIERSEGMENT = type('D2D1PQUADRATICBEZIERSEGMENT', (_BPStruct, ctypes.POINTER(D2D1QUADRATICBEZIERSEGMENT)), {'_type_': D2D1QUADRATICBEZIERSEGMENT})
+
+D2D1SweepDirection = {'CounterClockwise': 0, 'Clockwise': 1}
+D2D1SWEEPDIRECTION = type('D2D1SWEEPDIRECTION', (_BCode, wintypes.DWORD), {}, _dict=D2D1SweepDirection)
+
+D2D1ArcSize = {'Small': 0, 'Large': 1}
+D2D1ARCSIZE = type('D2D1ARCSIZE', (_BCode, wintypes.DWORD), {}, _dict=D2D1ArcSize)
+
+class D2D1ARCSEGMENT(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('point', D2D1POINT2F), ('size', D2D1SIZEF), ('rotationAngle', wintypes.FLOAT), ('sweepDirection', D2D1SWEEPDIRECTION), ('arcSize', D2D1ARCSIZE)]
+D2D1PARCSEGMENT = type('D2D1PARCSEGMENT', (_BPStruct, ctypes.POINTER(D2D1ARCSEGMENT)), {'_type_': D2D1ARCSEGMENT})
+
+D2D1FigureEnd = {'Open': 0, 'Closed': 1}
+D2D1FIGUREEND = type('D2D1FIGUREEND', (_BCode, wintypes.DWORD), {}, _dict=D2D1FigureEnd)
 
 D2D1DeviceContextOptions = {'None': 0, 'Multithreaded': 1}
 D2D1DEVICECONTEXTOPTIONS = type('D2D1DEVICECONTEXTOPTIONS', (_BCode, wintypes.DWORD), {}, _dict=D2D1DeviceContextOptions)
@@ -7370,6 +7937,61 @@ class ID2D1StrokeStyle(ID2D1Resource):
     return self.__class__._protos['GetStrokeTransformType'](self.pI)
 ID2D1StrokeStyle1 = ID2D1StrokeStyle
 
+class ID2D1SimplifiedGeometrySink(IUnknown):
+  IID = GUID(0x2cd9069e, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
+  _protos['SetFillMode'] = 3, (D2D1FILLMODE,), (), None
+  _protos['SetSegmentFlags'] = 4, (D2D1PATHSEGMENT,), (), None
+  _protos['BeginFigure'] = 5, (D2D1POINT2F, D2D1FIGUREBEGIN), (), None
+  _protos['AddLines'] = 6, (D2D1PPOINT2F, wintypes.UINT), (), None
+  _protos['AddBeziers'] = 7, (D2D1PBEZIERSEGMENT, wintypes.UINT), (), None
+  _protos['EndFigure'] = 8, (D2D1FIGUREEND,), (), None
+  _protos['Close'] = 9, (), ()
+  def SetFillMode(self, mode=0):
+    self.__class__._protos['SetFillMode'](self.pI, mode)
+  def SetSegmentFlags(self, flags=0):
+    self.__class__._protos['SetSegmentFlags'](self.pI, flags)
+  def BeginFigure(self, start_point, hollow=1):
+    self.__class__._protos['BeginFigure'](self.pI, start_point, hollow)
+  def AddLines(self, points):
+    self.__class__._protos['AddLines'](self.pI, (points if points is None or (isinstance(points, ctypes.Array) and issubclass(points._type_, D2D1POINT2F)) else (D2D1POINT2F * len(points))(*points)), (0 if points is None else len(points)))
+  def AddBeziers(self, beziers):
+    self.__class__._protos['AddBeziers'](self.pI, (beziers if beziers is None or (isinstance(beziers, ctypes.Array) and issubclass(beziers._type_, D2D1BEZIERSEGMENT)) else (D2D1BEZIERSEGMENT * len(beziers))(*beziers)), (0 if beziers is None else len(beziers)))
+  def EndFigure(self, closed=0):
+    self.__class__._protos['EndFigure'](self.pI, closed)
+  def Close(self):
+    return self.__class__._protos['Close'](self.pI)
+
+class ID2D1GeometrySink(ID2D1SimplifiedGeometrySink):
+  IID = GUID(0x2cd9069f, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
+  _protos['AddLine'] = 10, (D2D1POINT2F,), (), None
+  _protos['AddBezier'] = 11, (D2D1PBEZIERSEGMENT,), (), None
+  _protos['AddQuadraticBezier'] = 12, (D2D1PQUADRATICBEZIERSEGMENT,), (), None
+  _protos['AddQuadraticBeziers'] = 13, (D2D1PQUADRATICBEZIERSEGMENT, wintypes.UINT), (), None
+  _protos['AddArc'] = 14, (D2D1PARCSEGMENT,), (), None
+  def AddLine(self, point):
+    self.__class__._protos['AddLine'](self.pI, point)
+  def AddBezier(self, bezier):
+    self.__class__._protos['AddBezier'](self.pI, bezier)
+  def AddQuadraticBezier(self, bezier):
+    self.__class__._protos['AddQuadraticBezier'](self.pI, bezier)
+  def AddQuadraticBeziers(self, beziers):
+    self.__class__._protos['AddQuadraticBeziers'](self.pI, (beziers if beziers is None or (isinstance(beziers, ctypes.Array) and issubclass(beziers._type_, D2D1QUADRATICBEZIERSEGMENT)) else (D2D1QUADRATICBEZIERSEGMENT * len(beziers))(*beziers)), (0 if beziers is None else len(beziers)))
+  def AddArc(self, arc):
+    self.__class__._protos['AddArc'](self.pI, arc)
+
+class ID2D1Geometry(ID2D1Resource):
+  IID = GUID(0x2cd906a1, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
+
+class ID2D1PathGeometry(ID2D1Geometry):
+  IID = GUID(0x62baa2d2, 0xab54, 0x41b7, 0xb8, 0x72, 0x78, 0x7e, 0x01, 0x06, 0xa4, 0x21)
+  _protos['Open'] = 17, (), (wintypes.PLPVOID,), None
+  _protos['Stream'] = 18, (wintypes.LPVOID,), (), None
+  def Open(self):
+    return ID2D1GeometrySink(self.__class__._protos['Open'](self.pI), self)
+  def Stream(self, sink):
+    return self.__class__._protos['Stream'](self.pI, sink)
+ID2D1PathGeometry1 = ID2D1PathGeometry
+
 class ID2D1DrawingStateBlock(ID2D1Resource):
   IID = GUID(0x689f1f85, 0xc72e, 0x4e33, 0x8f, 0x19, 0x85, 0x75, 0x4e, 0xfd, 0x5a, 0xce)
   _protos['GetDescription'] = 8, (), (D2D1PDRAWINGSTATEDESCRIPTION,), None
@@ -7398,11 +8020,17 @@ class ID2D1RenderTarget(ID2D1Resource):
   _protos['FillRoundedRectangle'] = 19, (D2D1PROUNDEDRECT, wintypes.LPVOID), (), None
   _protos['DrawEllipse'] = 20, (D2D1PELLIPSE, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
   _protos['FillEllipse'] = 21, (D2D1PELLIPSE, wintypes.LPVOID), (), None
+  _protos['DrawGeometry'] = 22, (wintypes.LPVOID, wintypes.LPVOID, wintypes.FLOAT, wintypes.LPVOID), (), None
+  _protos['FillGeometry'] = 23, (wintypes.LPVOID, wintypes.LPVOID, wintypes.LPVOID), (), None
   _protos['DrawBitmap'] = 26, (wintypes.LPVOID, D2D1PRECTF, wintypes.FLOAT, D2D1BITMAPINTERPOLATIONMODE, D2D1PRECTF), (), None
+  _protos['DrawText'] = 27, (wintypes.PWCHAR, wintypes.UINT, wintypes.LPVOID, D2D1PRECTF, wintypes.LPVOID, D2D1DRAWTEXTOPTIONS, DWMEASURINGMODE), (), None
+  _protos['DrawTextLayout'] = 28, (D2D1POINT2F, wintypes.LPVOID, wintypes.LPVOID, D2D1DRAWTEXTOPTIONS), (), None
   _protos['SetTransform'] = 30, (D2D1PMATRIX3X2F,), (), None
   _protos['GetTransform'] = 31, (), (D2D1PMATRIX3X2F,), None
   _protos['SetAntialiasMode'] = 32, (D2D1ANTIALIASMODE,), (), None
   _protos['GetAntialiasMode'] = 33, (), (), D2D1ANTIALIASMODE
+  _protos['SetTextAntialiasMode'] = 34, (D2D1TEXTANTIALIASMODE,), (), None
+  _protos['GetTextAntialiasMode'] = 35, (), (), D2D1TEXTANTIALIASMODE
   _protos['Flush'] = 42, (), (wintypes.PULARGE_INTEGER, wintypes.PULARGE_INTEGER)
   _protos['SaveDrawingState'] = 43, (wintypes.LPVOID,), (), None
   _protos['RestoreDrawingState'] = 44, (wintypes.LPVOID,), (), None
@@ -7471,6 +8099,10 @@ class ID2D1RenderTarget(ID2D1Resource):
     return self._protos['GetAntialiasMode'](self.pI)
   def SetAntialiasMode(self, antialias_mode=0):
     return self._protos['SetAntialiasMode'](self.pI, antialias_mode)
+  def GetTextAntialiasMode(self):
+    return self._protos['GetAntialiasMode'](self.pI)
+  def SetTextAntialiasMode(self, antialias_mode=0):
+    return self._protos['SetAntialiasMode'](self.pI, antialias_mode)
   def GetSize(self):
     return self._protos['GetSize'](self.pI)
   def GetPixelSize(self):
@@ -7512,10 +8144,19 @@ class ID2D1RenderTarget(ID2D1Resource):
     self._protos['RestoreDrawingState'](self.pI, block)
   def DrawBitmap(self, bitmap, destination_ltrb=None, opacity=1, interpolation_mode=0, source_ltrb=None):
     self.__class__._protos['DrawBitmap'](self.pI, bitmap, destination_ltrb, opacity, interpolation_mode, source_ltrb)
+  def DrawText(self, string, text_format, layout_rect, brush, text_options=0, measuring_mode=0):
+    if isinstance(string, str):
+      string = ctypes.create_unicode_buffer(string)
+    self.__class__._protos['DrawText'](self.pI, string, len(string) - 1, text_format, layout_rect, brush, text_options, measuring_mode)
+  def DrawTextLayout(self, origin, text_layout, default_brush, text_options=0):
+    self.__class__._protos['DrawTextLayout'](self.pI, origin, text_layout, default_brush, text_options)
+  def CreatePathGeometry(self):
+    if (factory := self.factory) is None and (factory := self.GetFactory()) is None:
+      return None
+    return factory.CreatePathGeometry()
   def CreateStrokeStyle(self, start_cap=0, end_cap=0, dash_cap=0, line_join=0, miter_limit=1, dash_style=0, dash_offset=0, transform_type=0, dashes=None):
-    if (factory := self.factory) is None:
-      if (factory := self.GetFactory()) is None:
-        return None
+    if (factory := self.factory) is None and (factory := self.GetFactory()) is None:
+      return None
     return factory.CreateStrokeStyle((start_cap, end_cap, dash_cap, line_join, miter_limit, dash_style, dash_offset, transform_type), dashes)
   def DrawLine(self, point0, point1, brush, stroke_width, stroke_style=None):
     self.__class__._protos['DrawLine'](self.pI, point0, point1, brush, stroke_width, stroke_style)
@@ -7531,6 +8172,10 @@ class ID2D1RenderTarget(ID2D1Resource):
     self.__class__._protos['DrawEllipse'](self.pI, ellipse, brush, stroke_width, stroke_style)
   def FillEllipse(self, ellipse, brush):
     self.__class__._protos['FillEllipse'](self.pI, ellipse, brush)
+  def DrawGeometry(self, geometry, brush, stroke_width, stroke_style=None):
+    self.__class__._protos['DrawGeometry'](self.pI, geometry, brush, stroke_width, stroke_style)
+  def FillGeometry(self, geometry, brush, opacity_brush=None):
+    self.__class__._protos['DrawGeometry'](self.pI, geometry, brush, opacity_brush)
   def CreateCompatibleRenderTarget(self, size=None, pixel_size=None, pixel_format=None, options=0):
     return ID2D1BitmapRenderTarget(self.__class__._protos['CreateCompatibleRenderTarget'](self.pI, size, pixel_size, pixel_format, options), self.factory)
   def GetDeviceContext(self):
@@ -7577,6 +8222,19 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
     return ID2D1Bitmap(self.__class__._protos['CreateBitmap'](self.pI, (width, height), source_data, source_pitch, properties), self.factory)
   def CreateBitmapFromWICBitmap(self, source, properties=None):
     return ID2D1Bitmap(self.__class__._protos['CreateBitmapFromWICBitmap'](self.pI, source, properties), self.factory)
+  def CreateBitmapFromStream(self, istream, readable=False, imaging_factory=None):
+    if (fact := (imaging_factory or IWICImagingFactory())) is None:
+      return None
+    bitmap = None
+    if (decoder := fact.CreateDecoderFromStream(istream)) is not None:
+      if (frame := decoder.GetFrame(0)) is not None:
+        if (conv := fact.CreateFormatConverter()) is not None:
+          if conv.Initialize(frame, '32bppPBGRA'):
+            bitmap = self.CreateBitmapFromWICBitmap(conv, {'pixelFormat': ('B8G8R8A8_UNORM', 'premultiplied'), 'bitmapOptions': ('CpuRead | CannotDraw' if readable else 'None')})
+          conv.Release()
+        frame.Release()
+      decoder.Release()
+    return bitmap
   def CreateBitmapFromDxgiSurface(self, surface, properties=None):
     return ID2D1Bitmap(self.__class__._protos['CreateBitmapFromDxgiSurface'](self.pI, surface, properties), self.factory)
   def CreateBitmapFromSwapChain(self, swapchain, index=0, properties=None):
@@ -7617,14 +8275,12 @@ class ID2D1DeviceContext(ID2D1RenderTarget):
       return self.CreateSharedBitmap(source, ((format, alpha_mode), dpiX, dpiY))
     else:
       return self.CreateBitmap(width, height, (((format or 'B8G8R8A8_UNORM'), (alpha_mode or 'Premultiplied')), dpiX, dpiY, 'None', color_context), source, source_pitch)
-  def CreateSwapChainAndBitmapFromHwnd(self, hwnd, format=0, width=0, height=0, alpha_mode=0, sample_count=1, sample_quality=0, buffer_count=1, swap_effect=0, flags=0, drawable=False):
+  def CreateSwapChainFromHwnd(self, hwnd, format=0, width=0, height=0, alpha_mode=0, sample_count=1, sample_quality=0, buffer_count=1, swap_effect=0, flags=0, drawable=False):
     if self.factory is None or (dxgi_device := getattr(self.factory, 'dxgi_device', None)) is None or dxgi_device.factory is None:
       return None
-    if (swap_chain := dxgi_device.factory.CreateSwapChainForHwnd(dxgi_device, hwnd, (width, height, (format or 'B8G8R8A8_UNORM'), False, (sample_count, sample_quality), ('BackBuffer | RenderTargetOutput | ShaderInput' if drawable else 'BackBuffer | RenderTargetOutput'), buffer_count, 'Stretch', swap_effect, alpha_mode, flags))) is None:
-      return None
-    if (surface := swap_chain.GetSurface()) is None:
-      return None
-    if (bitmap := self.CreateBitmapFromDxgiSurface(surface)) is None:
+    return dxgi_device.factory.CreateSwapChainForHwnd(dxgi_device, hwnd, (width, height, (format or 'B8G8R8A8_UNORM'), False, (sample_count, sample_quality), ('BackBuffer | RenderTargetOutput | ShaderInput' if drawable else 'BackBuffer | RenderTargetOutput'), buffer_count, 'Stretch', swap_effect, alpha_mode, flags))
+  def CreateSwapChainAndBitmapFromHwnd(self, hwnd, format=0, width=0, height=0, alpha_mode=0, sample_count=1, sample_quality=0, buffer_count=1, swap_effect=0, flags=0, drawable=False):
+    if (swap_chain := self.CreateSwapChainFromHwnd(self, hwnd, format, width, height, alpha_mode, sample_count, sample_quality, buffer_count, swap_effect, flags, drawable)) is None or (bitmap := self.CreateBitmapFromSwapChain(swap_chain)) is None:
       return None
     return swap_chain, bitmap
   def CreateEffect(self, effect):
@@ -7742,11 +8398,30 @@ class ID2D1Device(ID2D1Resource):
   def DXGIDevice(self):
     return self.GetDXGIDevice()
 
+class ID2D1Multithread(IUnknown):
+  _lightweight = True
+  IID = GUID(0x31e6e7bc, 0xe0ff, 0x4d46, 0x8c, 0x64, 0xa0, 0xa8, 0xc4, 0x1c, 0x15, 0xd3)
+  _protos['GetMultithreadProtected'] = 3, (), (), wintypes.BOOLE
+  _protos['Enter'] = 4, (), (), None
+  _protos['Leave'] = 5, (), (), None
+  def GetMultithreadProtected(self):
+    return self.__class__._protos['GetMultithreadProtected'](self.pI)
+  def Enter(self):
+    self.__class__._protos['Enter'](self.pI)
+  def Leave(self):
+    self.__class__._protos['Leave'](self.pI)
+  def __enter__(self):
+    self.Enter()
+    return self
+  def __exit__(self, et, ev, tb):
+    self.Leave()
+
 class ID2D1Factory(IUnknown):
   _lightweight = True
   IID = GUID(0xbb12d362, 0xdaee, 0x4b9a, 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f)
   _protos['ReloadSystemMetrics'] = 3, (), ()
   _protos['GetDesktopDpi'] = 4, (), (wintypes.PFLOAT, wintypes.PFLOAT), None
+  _protos['CreatePathGeometry'] = 10, (), (wintypes.PLPVOID,)
   _protos['CreateWicBitmapRenderTarget'] = 13, (wintypes.LPVOID, D2D1PRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateHwndRenderTarget'] = 14, (D2D1PRENDERTARGETPROPERTIES, D2D1PHWNDRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
   _protos['CreateDxgiSurfaceRenderTarget'] = 15, (wintypes.LPVOID, D2D1PRENDERTARGETPROPERTIES), (wintypes.PLPVOID,)
@@ -7756,16 +8431,21 @@ class ID2D1Factory(IUnknown):
   _protos['GetRegisteredEffects'] = 25, (D2D1PEFFECTID, wintypes.UINT), (wintypes.PUINT, wintypes.PUINT)
   _protos['GetEffectProperties'] = 26, (D2D1PEFFECTID,), (wintypes.PLPVOID,)
   def __new__(cls, clsid_component=False, factory=None):
+    if isinstance(clsid_component, str):
+      ftype = wintypes.DWORD(1 if clsid_component.lower().strip() in {'mt', 'multithreaded'} else 0)
+      clsid_component = False
+    else:
+      ftype = wintypes.DWORD(1 if getattr(_IUtil._local, 'multithreaded', False) else 0)
     if clsid_component is False:
       pI = wintypes.LPVOID()
-      if ISetLastError(d2d1.D2D1CreateFactory(wintypes.DWORD(1 if getattr(_IUtil._local, 'multithreaded', False) else 0), wintypes.LPCSTR(cls.IID), None, ctypes.byref(pI))):
+      if ISetLastError(d2d1.D2D1CreateFactory(ftype, wintypes.LPCSTR(cls.IID), None, ctypes.byref(pI))):
         return None
     else:
       pI = clsid_component
     return IUnknown.__new__(cls, pI, factory)
   def CreateDevice(self, dxgi_device='hardware'):
     if isinstance(dxgi_device, str):
-      if (d3d11_device := ID3D11Device(dxgi_device)) is None:
+      if (d3d11_device := ID3D11Device('%s%s' % (dxgi_device, '| mt' if self.IsMultithread else ''))) is None:
         return None
       if (dxgi_device := d3d11_device.GetDXGIDevice()) is None:
         return None
@@ -7795,8 +8475,10 @@ class ID2D1Factory(IUnknown):
     if (render_target := self.CreateDxgiSurfaceRenderTarget(surface, ('Hardware', (format, (alpha_mode or 'Premultiplied')), dpiX, dpiY, usage, 'Default'))) is None:
       return None
     return surface, render_target
+  def CreatePathGeometry(self):
+    return ID2D1PathGeometry(self.__class__._protos['CreatePathGeometry'](self.pI), self)
   def CreateStrokeStyle(self, properties, dashes=None):
-    return ID2D1StrokeStyle(self.__class__._protos['CreateStrokeStyle'](self.pI, properties, (dashes if dashes is None or (isinstance(dashes, ctypes.Array) and issubclass(dashes._type_, wintypes.FLOAT)) else (wintypes.FLOAT *  len(dashes))(*dashes)), (0 if dashes is None else len(dashes))), self)
+    return ID2D1StrokeStyle(self.__class__._protos['CreateStrokeStyle'](self.pI, properties, (dashes if dashes is None or (isinstance(dashes, ctypes.Array) and issubclass(dashes._type_, wintypes.FLOAT)) else (wintypes.FLOAT * len(dashes))(*dashes)), (0 if dashes is None else len(dashes))), self)
   def CreateDrawingStateBlock(self, description=None):
     return ID2D1DrawingStateBlock(self.__class__._protos['CreateDrawingStateBlock'](self.pI, description, None), self)
   def GetRegisteredEffects(self):
@@ -7814,6 +8496,11 @@ class ID2D1Factory(IUnknown):
     return self.__class__._protos['ReloadSystemMetrics'](self.pI)
   def GetDesktopDpi(self):
     return self.__class__._protos['GetDesktopDpi'](self.pI)
+  def GetMultithread(self):
+    return self.QueryInterface(ID2D1Multithread, self)
+  @property
+  def IsMultithread(self):
+    return None if (mt := self.GetMultithread()) is None else mt.GetMultithreadProtected()
   MakeIdentityMatrix = staticmethod(D2D1MATRIX3X2F)
   MakeRotateMatrix = staticmethod(lambda angle, center, _mrm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F, use_last_error=True)(('D2D1MakeRotateMatrix', d2d1), ((1,), (1,), (2,))): _mrm(angle, center))
   MakeSkewMatrix = staticmethod(lambda angleX, angleY, center, _msm=ctypes.WINFUNCTYPE(None, wintypes.FLOAT, wintypes.FLOAT, D2D1POINT2F, D2D1PMATRIX3X2F, use_last_error=True)(('D2D1MakeSkewMatrix', d2d1), ((1,), (1,), (1,), (2,))): _msm(angleX, angleY, center))
@@ -8230,22 +8917,6 @@ class WSFINDDATA(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
     return tuple(getattr(self, n) for n, t in self.__class__._fields_)
 WSPFINDDATA = type('WSPFINDDATA', (_BPStruct, ctypes.POINTER(WSFINDDATA)), {'_type_': WSFINDDATA})
 
-class _BDSStruct(_BDStruct):
-  def __init__(self, *args, **kwargs):
-    super().__init__(ctypes.sizeof(self.__class__), *args, **kwargs)
-  @classmethod
-  def from_param(cls, obj):
-    if obj is None or isinstance(obj, cls):
-      return obj
-    if isinstance(obj, dict):
-      next((f := iter(cls._fields_)), None)
-      return cls(*(obj.get(k[0], 0) for k in f))
-    else:
-      return cls(*(obj[i] for i in range(min(len(cls._fields_) - 1, len(obj)))))
-  def to_dict(self):
-    next((f := iter(self.__class__._fields_)), None)
-    return {k[0]: getattr(self, k[0]) for k in f}
-
 class WSBINDOPTS(_BDSStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('cbStruct', wintypes.DWORD), ('grfFlags', WSBINDFLAGS), ('grfMode', ISSTGM), ('dwTickCountDeadline', wintypes.DWORD), ('dwTrackFlags', wintypes.DWORD), ('dwClassContext', wintypes.DWORD), ('locale', wintypes.LCID), ('pServerInfo', wintypes.LPVOID), ('hwnd', wintypes.HWND)]
 WSPBINDOPTS = type('WSPBINDOPTS', (_BPStruct, ctypes.POINTER(WSBINDOPTS)),  {'_type_': WSBINDOPTS})
@@ -8391,6 +9062,10 @@ class WSCIDA(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
   @property
   def value(self):
     return self.to_tuple()
+  def __getitem__(self, key):
+    return self.value[key]
+  def __setitem__(self, key, value):
+    raise AttributeError()
 WSPCIDA = type('WSPCIDA', (_BPStruct, ctypes.POINTER(WSCIDA)),  {'_type_': WSCIDA})
 
 WSKeyState = {'LButton': 0x1, 'RButton': 0x2, 'MButton': 0x10, 'Shift': 0x4, 'Ctrl': 0x8, 'Control': 0x8, 'Alt': 0x20}
@@ -8410,7 +9085,7 @@ WSBhid = {
   'EnumItems': GUID(0x94f60519, 0x2850, 0x4924, 0xaa, 0x5a, 0xd1, 0x5e, 0x84, 0x86, 0x80, 0x39),
   'DataObject': GUID(0xb8c0bd9f, 0xed24, 0x455c, 0x83, 0xe6, 0xd5, 0x39, 0x0c, 0x4f, 0xe8, 0xc4)
 }
-WSBHID = _GMeta('WSBHID', (_BGUID, wintypes.GUID), {'_type_': ctypes.c_char, '_length_': 16, '_tab_ng': {n.lower(): g for n, g in WSBhid.items()}, '_tab_gn': {g: n for n, g in WSBhid.items()}, '_def': None})
+WSBHID = _GMeta('WSBHID', (_BGUID, wintypes.GUID), {}, _dict=WSBhid)
 WSPBHID = type('WSPBHID', (_BPGUID, ctypes.POINTER(WSBHID)), {'_type_': WSBHID})
 
 WSSiattribflags = {'And': 0x1, 'Or': 0x2, 'AppCompat': 0x3, 'AllItems': 0x4000}
@@ -9735,6 +10410,9 @@ WNDMONITORFLAG = type('WNDMONITORFLAG', (_BCode, wintypes.DWORD), {}, _dict=WNDM
 WNDRemoveMsg = {'NoRemove': 0, 'Remove': 1, 'NoYield': 2, 'Input': 0x1c070000, 'PostMessage': 0x980000, 'Paint': 0x200000, 'SendMessage': 0x400000}
 WNDREMOVEMSG = type('WNDREMOVEMSG', (_BCodeOr, wintypes.UINT), {}, _dict=WNDRemoveMsg)
 
+class WNDCREATESTRUCT(ctypes.Structure):
+  _fields_ = [('lpCreateParams', wintypes.LPVOID), ('hInstance', wintypes.HINSTANCE),  ('hMenu', wintypes.HMENU), ('hwndParent', wintypes.HWND), ('cy', wintypes.INT), ('cx', wintypes.INT), ('y', wintypes.INT), ('x', wintypes.INT), ('style', WNDWINDOWSTYLE), ('lpszName', wintypes.LPCWSTR), ('lpszClass', wintypes.LPCWSTR), ('dwExStyle', wintypes.DWORD)]
+
 class HWND(wintypes.HWND):
   def __new__(cls, hwnd, ml=None):
     return None if hwnd is None else wintypes.HWND.__new__(cls, getattr(hwnd, 'hwnd', hwnd))
@@ -9822,6 +10500,10 @@ class HWND(wintypes.HWND):
     rect = RECT.from_param(rect)
     ctypes.set_last_error(0)
     return None if not Window.MapWindowPoints(hwnd_from, self, ctypes.cast(PRECT(rect), PPOINT), 2) and ctypes.get_last_error() else rect
+  def InvalidateRect(self, ltrb=None, erase=False):
+    return Window.InvalidateRect(self, ltrb, erase)
+  def ValidateRect(self, ltrb=None):
+    return Window.ValidateRect(self, ltrb)
   def Update(self):
     return Window.UpdateWindow(self)
   @property
@@ -9835,6 +10517,12 @@ class HWND(wintypes.HWND):
   @Name.setter
   def Name(self, value):
     Window.SetWindowName(self, value)
+  @property
+  def UserAttribute(self):
+    return Window.GetUserAttribute(self)
+  @UserAttribute.setter
+  def UserAttribute(self, value):
+    return Window.SetUserAttribute(self, value)
   def GetScrollInfo(self, bar, mask):
     si = WNDSCROLLINFO(mask)
     return si.value if Window.GetScrollInfo(self, bar, si) else None
@@ -9847,6 +10535,9 @@ class HWND(wintypes.HWND):
     return bool(Window.ScrollWindowEx(self, dx, dy, None, None, None, None, flags))
   def SetFocus(self):
     return HWND(Window.SetFocus(self))
+  @property
+  def Dpi(self):
+    return Window.GetDpiForWindow(self)
   @property
   def ThreadProcessId(self):
     pid = wintypes.DWORD()
@@ -9967,26 +10658,31 @@ class _WndMeta(type):
 class Window(metaclass=_WndMeta):
   WindowProc = WNDPROC
   @classmethod
-  def RegisterWindowClass(cls, class_name, window_proc=None, class_style=0):
-    return cls.RegisterClassEx((class_style, window_proc or cls.DefWindowProc, 0,  0, cls.GetModuleHandle(None), 0, 0, 0, 0, class_name, 0))
+  def RegisterWindowClass(cls, class_name, window_proc=None, class_style=0, cursor=32512):
+    return cls.RegisterClassEx((class_style, window_proc or cls.DefWindowProc, 0,  0, cls.GetModuleHandle(None), None, (None if not cursor else (Window.LoadCursor(None, wintypes.LPCWSTR(cursor)) if isinstance(cursor, int) else cursor)), None, None, class_name, None))
   @classmethod
   def UnregisterWindowClass(cls, class_name):
     return cls.UnregisterClass((wintypes.LPCWSTR(class_name) if isinstance(class_name, (int, wintypes.ATOM)) else class_name), cls.GetModuleHandle(None))
-  def __new__(cls, class_name, window_name='', window_style=0, window_ex_style=0, window_position=(0, 0), window_size=(0, 0), window_parent=None, window_menu=None, message_loop=None):
+  def __new__(cls, class_name, window_name='', window_style=0, window_ex_style=0, window_position=(0, 0), window_size=(0, 0), window_parent=None, window_menu=None, create_param=None, message_loop=None):
     hwnd = None
     b = threading.Barrier(2)
     def _new():
       nonlocal message_loop, hwnd
       try:
-        hwnd = cls.CreateWindowEx(window_ex_style, (wintypes.LPCWSTR(class_name) if isinstance(class_name, (int, wintypes.ATOM)) else class_name), window_name, window_style, *window_position, *window_size, window_parent, window_menu, cls.GetModuleHandle(None), None)
+        hwnd = cls.CreateWindowEx(window_ex_style, (wintypes.LPCWSTR(class_name) if isinstance(class_name, (int, wintypes.ATOM)) else class_name), window_name, window_style, *window_position, *window_size, window_parent, window_menu, cls.GetModuleHandle(None), create_param)
       except:
         pass
+      if message_loop is not False:
+        b.wait()
+        if hwnd:
+          (message_loop or cls.DefMessageLoop)(hwnd)
+    if message_loop is False:
+      th = None
+      _new()
+    else:
+      th = threading.Thread(target=_new, daemon=True)
+      th.start()
       b.wait()
-      if hwnd:
-        (message_loop or cls.DefMessageLoop)(hwnd)
-    th = threading.Thread(target=_new, daemon=True)
-    th.start()
-    b.wait()
     return HWND(hwnd, th)
   @classmethod
   def ShutWindow(cls, hwnd):
@@ -10002,6 +10698,12 @@ class Window(metaclass=_WndMeta):
   @classmethod
   def SetWindowName(cls, hwnd, name=''):
     return cls.SetWindowText(hwnd, name)
+  @staticmethod
+  def SetUserAttribute(hwnd, value):
+    return DialogWindow.SetWindowLongPtr(hwnd, -21, value)
+  @staticmethod
+  def GetUserAttribute(hwnd):
+    return DialogWindow.GetWindowLongPtr(hwnd, -21)
   GetModuleHandle = _WndUtil._wrap('GetModuleHandleW', wintypes.HMODULE, wintypes.LPCWSTR, p=kernel32)
   RegisterClassEx = _WndUtil._wrap('RegisterClassExW', wintypes.ATOM, WNDPCLASS)
   UnregisterClass = _WndUtil._wrap('UnregisterClassW', wintypes.BOOLE, wintypes.LPCWSTR, wintypes.HINSTANCE)
@@ -10031,6 +10733,8 @@ class Window(metaclass=_WndMeta):
   MoveWindow = _WndUtil._wrap('MoveWindow', wintypes.BOOLE, wintypes.HWND, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.BOOL)
   SetWindowPos = _WndUtil._wrap('SetWindowPos', wintypes.BOOLE, wintypes.HWND, WNDPOSHWND, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, WNDPOSFLAGS)
   MapWindowPoints = _WndUtil._wrap('MapWindowPoints', wintypes.INT, wintypes.HWND, wintypes.HWND, PPOINT, wintypes.UINT)
+  InvalidateRect = _WndUtil._wrap('InvalidateRect', wintypes.BOOLE, wintypes.HWND, PRECT, wintypes.BOOL)
+  ValidateRect = _WndUtil._wrap('ValidateRect', wintypes.BOOLE, wintypes.HWND, PRECT)
   UpdateWindow = _WndUtil._wrap('UpdateWindow', wintypes.BOOLE, wintypes.HWND)
   GetClassName = _WndUtil._wrap('GetClassNameW', wintypes.INT, wintypes.HWND, wintypes.LPWSTR, wintypes.INT)
   GetWindowTextLength = _WndUtil._wrap('GetWindowTextLengthW', wintypes.INT, wintypes.HWND)
@@ -10041,6 +10745,8 @@ class Window(metaclass=_WndMeta):
   ScrollWindowEx = _WndUtil._wrap('ScrollWindowEx', wintypes.INT, wintypes.HANDLE, wintypes.INT, wintypes.INT, PRECT, PRECT, wintypes.HRGN, PRECT, WNDSCROLLFLAGS)
   GetFocus = _WndUtil._wrap('GetFocus', wintypes.HWND)
   SetFocus = _WndUtil._wrap('SetFocus', wintypes.HWND, wintypes.HWND)
+  GetDpiForWindow = _WndUtil._wrap('GetDpiForWindow', wintypes.UINT, wintypes.HWND)
+  LoadCursor = _WndUtil._wrap('LoadCursorW', wintypes.HCURSOR, wintypes.HINSTANCE, wintypes.LPCWSTR)
   GetWindowThreadProcessId = _WndUtil._wrap('GetWindowThreadProcessId', wintypes.DWORD, wintypes.HWND, wintypes.PDWORD)
   GetWindowLongPtr = _WndUtil._wrap('GetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX)
   SetWindowLongPtr = _WndUtil._wrap('SetWindowLongPtrW', wintypes.LPARAM, wintypes.HWND, WNDINDEX, wintypes.LPARAM)
@@ -10244,9 +10950,10 @@ class _COM_IShellExtInit(_COM_IUnknown):
 
 class _ISPSMeta(_COMMeta):
   def __init__(cls, *args, interfaces=None):
-    super().__init__(*args)
-    cls.DlgProc = DLGPROC(cls._DlgProc)
-    cls.CallbackProc = SPSFNPSPCALLBACK(cls._CallbackProc)
+    super().__init__(*args, interfaces=interfaces)
+    if interfaces is None:
+      cls.DlgProc = DLGPROC(cls._DlgProc)
+      cls.CallbackProc = SPSFNPSPCALLBACK(cls._CallbackProc)
 
 class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
   _iids.add(GUID('000214e9-0000-0000-c000-000000000046'))
@@ -10393,14 +11100,20 @@ class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
 class _COM_IShellPropSheetExt_impl(metaclass=_COMMeta, interfaces=(_COM_IShellExtInit, _COM_IShellPropSheetExt)):
   Exts = ()
   def _destroy(self):
-    if self.pdtobj:
-      self.pdtobj.Release()
+    if (pdtobj := self.pdtobj):
+      pdtobj.Release()
       self.pdtobj = None
       for i in range(self.nelts):
         self.ppsp[i].pResource = None
       self.ppsp = None
       self.nelts = 0
 _COM_IShellExtInit._impl = _COM_IShellPropSheetExt._impl = _COM_IShellPropSheetExt_impl
+
+class PROPERTYKEY(_BTStruct, ctypes.Structure, metaclass=_WSMeta):
+  _fields_ = [('fmtid', UUID), ('pid', wintypes.DWORD)]
+  def to_key(self):
+    return (GUID(self.fmtid), self.pid)
+PPROPERTYKEY = type('PPROPERTYKEY', (_BPStruct, ctypes.POINTER(PROPERTYKEY)),  {'_type_': PROPERTYKEY})
 
 PSCState = {'Normal': 0, 'NotInSource': 1, 'Dirty': 2, 'ReadOnly': 3}
 PSCSTATE = type('PSCSTATE', (_BCode, wintypes.INT), {}, _dict=PSCState)
@@ -10431,7 +11144,7 @@ class _PSUtil:
   kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, wintypes.PDWORD)
   kernel32.CloseHandle.restype = wintypes.BOOLE
   kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-  
+
 class IPropertyStore(IUnknown):
   IID = GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99)
   _protos['GetCount'] = 3, (), (wintypes.PDWORD,)
@@ -10480,6 +11193,18 @@ class IPropertyStoreFactory(IUnknown):
   _protos['GetPropertyStore'] = 3, (PSFACTORYFLAGS, wintypes.LPVOID, PUUID), (wintypes.PLPVOID,)
   def GetPropertyStore(self, flags=0):
     return IPropertyStore(self._protos['GetPropertyStore'](self.pI, flags, None, IPropertyStore.IID), self.factory)
+
+class IInitializeWithStream(IUnknown):
+  IID = GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f)
+  _protos['Initialize'] = 3, (wintypes.LPVOID, ISSTGM), ()
+  def Initialize(self, istream, mode=0):
+    return self.__class__._protos['Initialize'](self.pI, istream, mode)
+
+class IPropertyStoreCapabilities(IUnknown):
+  IID = GUID(0xc8e2d566, 0x186e, 0x4d49, 0xbf, 0x41, 0x69, 0x09, 0xea, 0xd5, 0x6a, 0xcc)
+  _protos['IsPropertyWritable'] = 3, (PPROPERTYKEY,), (), wintypes.ULONG
+  def IsPropertyWritable(self, key):
+    return None if (w := self.__class__._protos['IsPropertyWritable'](self.pI, key)) is None else w == 0
 
 class PCOMPROPERTYSTORE(PCOM):
   icls = IPropertyStore
@@ -10536,7 +11261,7 @@ class PCOMDESTINATIONSTREAMFACTORY(PCOM):
   def GetDestinationStream(self):
     return PCOMSTREAM(IDestinationStreamFactory._protos['GetDestinationStream'](self) if self else None)
 
-class _COM_IInitializeWithStream(_COM_IUnknown):
+class _COM_IInitializePropertyStoreWithStream(_COM_IUnknown):
   _iids.add(GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f))
   _vtbl['Initialize'] = (wintypes.ULONG, wintypes.LPVOID, PCOMSTREAM, wintypes.DWORD)
   _vars['writable'] = wintypes.BOOLEAN
@@ -10574,7 +11299,7 @@ class _COM_IInitializeWithStream(_COM_IUnknown):
         self.pcache = None
       else:
         self.loaded = r == 0
-      return r
+      return r if r & 0x80000000 else 0
 
 class _COM_IPropertyStoreDelegating(_COM_IUnknown):
   _iids.add(GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99))
@@ -10679,32 +11404,283 @@ class _COM_IPropertyStoreCapabilities(_COM_IUnknown):
         return 0x80004003
       return 0 if pKey.contents.to_key() not in cls.ReadOnly else 1
 
-class _COM_IPropertyHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializeWithStream, _COM_IPropertyStoreDelegating, _COM_IPropertyStoreCapabilities)):
+class _COM_IPropertyHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializePropertyStoreWithStream, _COM_IPropertyStoreDelegating, _COM_IPropertyStoreCapabilities)):
   Exts = ()
   ManualSafeSave = False
   def _destroy(self):
-    if self.pstream:
-      self.pstream.Release()
+    if (pstream := self.pstream):
+      pstream.Release()
       self.pstream = None
-    if self.pcache:
-      self.pcache.Release()
+    if (pcache := self.pcache):
+      pcache.Release()
       self.pcache = None
-_COM_IInitializeWithStream._impl = _COM_IPropertyStoreDelegating._impl = _COM_IPropertyStoreCapabilities._impl = _COM_IPropertyHandler_impl
+_COM_IInitializePropertyStoreWithStream._impl = _COM_IPropertyStoreDelegating._impl = _COM_IPropertyStoreCapabilities._impl = _COM_IPropertyHandler_impl
 
-class IInitializeWithStream(IUnknown):
-  IID = GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f)
-  _protos['Initialize'] = 3, (wintypes.LPVOID, ISSTGM), ()
-  def Initialize(self, istream, mode=0):
-    return self.__class__._protos['Initialize'](self.pI, istream, mode)
+class PHFRAMEINFO(_BDStruct, ctypes.Structure):
+  _fields_ = [('haccel', wintypes.HACCEL), ('cAccelEntries', wintypes.UINT)]
+PHPFRAMEINFO = type('PHPFRAMEINFO', (_BPStruct, ctypes.POINTER(PHFRAMEINFO)),  {'_type_': PHFRAMEINFO})
 
-class IPropertyStoreDelegating(IPropertyStore):
-  pass
+class IPreviewHandlerFrame(IUnknown):
+  IID = GUID(0xfec87aaf, 0x35f9, 0x447a, 0xad, 0xb7, 0x20, 0x23, 0x44, 0x91, 0x40, 0x1a)
+  _protos['GetWindowContext'] = 3, (), (PHPFRAMEINFO,)
+  _protos['TranslateAccelerator'] = 4, (wintypes.PMSG,), ()
+  _protos['_GetWindowContext'] = 3, (), (wintypes.LPVOID,), wintypes.ULONG
+  _protos['_TranslateAccelerator'] = 4, (wintypes.PMSG,), (), wintypes.ULONG
+  def GetWindowContext(self):
+    return self.__class__._protos['GetWindowContext'](self.pI)
+  def TranslateAccelerator(self, msg):
+    return self.__class__._protos['TranslateAccelerator'](self.pI, msg)
 
-class IPropertyStoreCapabilities(IUnknown):
-  IID = GUID(0xc8e2d566, 0x186e, 0x4d49, 0xbf, 0x41, 0x69, 0x09, 0xea, 0xd5, 0x6a, 0xcc)
-  _protos['IsPropertyWritable'] = 3, (PPROPERTYKEY,), (), wintypes.ULONG
-  def IsPropertyWritable(self, key):
-    return None if (w := self.__class__._protos['IsPropertyWritable'](self.pI, key)) is None else w == 0
+class PCOMPREVIEWHANDLERFRAME(PCOM):
+  icls = IPreviewHandlerFrame
+  def GetWindowContext(self):
+    return IPreviewHandlerFrame._protos['GetWindowContext'](self) if self else None
+  def TranslateAccelerator(self, msg):
+    return IPreviewHandlerFrame._protos['TranslateAccelerator'](self, msg) if self else None
+  def _GetWindowContext(self):
+    return IPreviewHandlerFrame._protos['_GetWindowContext'](self) if self else 0x8000ffff
+  def _TranslateAccelerator(self, pmsg):
+    return IPreviewHandlerFrame._protos['_TranslateAccelerator'](self, pmsg) if self else 0x8000ffff
+
+class _COM_IInitializePreviewHandlerWithStream(_COM_IUnknown):
+  _iids.add(GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f))
+  _vtbl['Initialize'] = (wintypes.ULONG, wintypes.LPVOID, PCOMSTREAM, wintypes.DWORD)
+  _vars['pstream'] = PCOMSTREAM
+  @classmethod
+  def Load(cls, self):
+    return 0
+  @classmethod
+  def _Initialize(cls, pI, pstream, grfMode):
+    with cls[pI] as self:
+      if not self or not pstream:
+        return 0x80004003
+      if self.pstream:
+        return 0x800704df
+      if grfMode & 3 != 0:
+        return 0x80070057
+      self.pstream = pstream
+      pstream.AddRef()
+      return r if (r := cls.Load(self)) & 0x80000000 else 0
+
+class _COM_IPreviewHandlerWithFrame(_COM_IUnknown):
+  _iids.add(GUID(0xfc4801a3, 0x2ba9, 0x11cf, 0xa2, 0x29, 0x00, 0xaa, 0x00, 0x3d, 0x73, 0x52))
+  _vtbl['SetSite'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.LPVOID)
+  _vtbl['GetSite'] = (wintypes.ULONG, wintypes.LPVOID, PRECT)
+  _vars['pframe'] = PCOMPREVIEWHANDLERFRAME
+  @classmethod
+  def _SetSite(cls, pI, pUnkSite):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      if (pframe := self.pframe):
+        pframe.Release()
+      self.pframe = PCOM(pUnkSite).QueryInterface(PCOMPREVIEWHANDLERFRAME)
+      return 0
+  @classmethod
+  def _GetSite(cls, pI, riid, ppvSite):
+    if not ppvSite:
+      return 0x80004003
+    with cls[pI] as self:
+      if not (self and riid):
+        ppvSite[0] = None
+        return 0x80004003
+      ppvSite[0] = (pframe := self.pframe).QueryInterface(riid)
+      return 0 if ppvSite.contents else (0x80004002 if pframe else 0x80004005)
+
+class _COM_IPreviewHandlerOleWindow(_COM_IUnknown):
+  _iids.add(GUID('00000114-0000-0000-C000-000000000046'))
+  _vtbl['GetWindow'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PHWND)
+  _vtbl['ContextSensitiveHelp'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.BOOL)
+  _vars['hwnd'] = HWND
+  @classmethod
+  def _GetWindow(cls, pI, phwnd):
+    if not phwnd:
+      return 0x80004003
+    with cls[pI] as self:
+      if not self:
+        phwnd[0] = 0
+        return 0x80004003
+      phwnd[0] = self.hwnd
+      return 0 if phwnd.contents else 0x80004005
+  @classmethod
+  def _ContextSensitiveHelp(cls, pI, fEnterMode):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      return 0x80004001
+
+class _COM_IPreviewHandlerVisuals(_COM_IUnknown):
+  _iids.add(GUID(0x196bf9a5, 0xb346, 0x4ef0, 0xaa, 0x1e, 0x5d, 0xcd, 0xb7, 0x67, 0x68, 0xb1))
+  _vtbl['SetBackgroundColor'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.DWORD)
+  _vtbl['SetFont'] = (wintypes.ULONG, wintypes.LPVOID, DWPLOGFONT)
+  _vtbl['SetTextColor'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.DWORD)
+  _vars['hwnd'] = HWND
+  _vars['backgroundcolor'] = wintypes.DWORD
+  _vars['font'] = DWLOGFONT
+  _vars['textcolor'] = wintypes.DWORD
+  @classmethod
+  def _SetBackgroundColor(cls, pI, color):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      self.backgroundcolor = color
+      if (hwnd := self.hwnd):
+        hwnd.InvalidateRect()
+      return 0
+  @classmethod
+  def _SetFont(cls, pI, plf):
+    with cls[pI] as self:
+      if not (self and plf):
+        return 0x80004003
+      self.font = plf.contents
+      return 0
+  @classmethod
+  def _SetTextColor(cls, pI, color):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      self.textcolor = color
+      if (hwnd := self.hwnd):
+        hwnd.InvalidateRect()
+      return 0
+
+class _ISPHMeta(_COMMeta):
+  def __init__(cls, *args, interfaces=None):
+    super().__init__(*args, interfaces=interfaces)
+    if interfaces is None:
+      cls.PreviewWnd = WNDPROC(cls._PreviewWnd)
+  def __del__(cls):
+    if getattr(cls, 'PreviewWndClassAtom', None) is not None:
+      Window.UnregisterWindowClass(cls.PreviewWndClassAtom)
+      cls.PreviewWndClassAtom = None
+
+class _COM_IPreviewHandler(_COM_IUnknown, metaclass=_ISPHMeta):
+  _iids.add(GUID(0x8895b1c6, 0xb41f, 0x4c1c, 0xa5, 0x62, 0x0d, 0x56, 0x42, 0x50, 0x83, 0x6f))
+  _vtbl['SetWindow'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.HWND, PRECT)
+  _vtbl['SetRect'] = (wintypes.ULONG, wintypes.LPVOID, PRECT)
+  _vtbl['DoPreview'] = (wintypes.ULONG, wintypes.LPVOID)
+  _vtbl['Unload'] = (wintypes.ULONG, wintypes.LPVOID)
+  _vtbl['SetFocus'] = (wintypes.ULONG, wintypes.LPVOID)
+  _vtbl['QueryFocus'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PHWND)
+  _vtbl['TranslateAccelerator'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PMSG)
+  _vars['pstream'] = PCOMSTREAM
+  _vars['pframe'] = PCOMPREVIEWHANDLERFRAME
+  _vars['parent'] = wintypes.HWND
+  _vars['area'] = RECT
+  _vars['hwnd'] = HWND
+  PreviewWndClassAtom = None
+  @classmethod
+  def Load(cls, self, pI):
+    return 0x80004001
+  @classmethod
+  def _SetWindow(cls, pI, hwndp, prc):
+    with cls[pI] as self:
+      if not (self and prc):
+        return 0x80004003
+      self.parent = hwndp
+      self.area = area = prc.contents
+      if (hwnd := self.hwnd):
+        hwnd.SetParent(hwndp)
+        hwnd.Move(area, True)
+      return 0
+  @classmethod
+  def _SetRect(cls, pI, prc):
+    with cls[pI] as self:
+      if not (self and prc):
+        return 0x80004003
+      self.area = area = prc.contents
+      if (hwnd := self.hwnd):
+        hwnd.Move(area, True)
+      return 0
+  @classmethod
+  def _PreviewWnd(cls, hWnd, Msg, wParam, lParam):
+    if Msg == 1:
+      if lParam:
+        Window.SetUserAttribute(hWnd, WNDCREATESTRUCT.from_address(lParam).lpCreateParams)
+    elif Msg == 5:
+      pass
+    elif Msg == 15:
+      pass
+    elif Msg == 20:
+      return 1
+    return Window.DefWindowProc(hWnd, Msg, wParam, lParam)
+  @classmethod
+  def _DoPreview(cls, pI):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      if not (self.pstream and self.parent):
+        return 0x8000ffff
+      area = self.area
+      if not (hwnd := self.hwnd):
+        if cls.PreviewWndClassAtom is None:
+          cls.PreviewWndClassAtom = Window.RegisterWindowClass('WICPy%s_Wnd' % cls.__name__, cls.PreviewWnd, 'HRedraw | VRedraw') or None
+          if cls.PreviewWndClassAtom is None:
+            return 0x80004005
+        self.hwnd = hwnd = Window(cls.PreviewWndClassAtom, 'PreviewWindow', 'Child | Visible | ClipSiblings', 0, (area.left, area.top), (area.right - area.left, area.bottom - area.top), self.parent, None, pI, message_loop=False)
+        if not hwnd:
+          return 0x80004005
+      if (r := cls.Load(self, pI)) == 0:
+        hwnd.InvalidateRect()
+        hwnd.Update()
+      return r if r & 0x80000000 else 0
+  @classmethod
+  def _Unload(cls, pI):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      self.parent = None
+      if (pframe := self.pframe):
+        pframe.Release()
+        self.pframe = None
+      if (pstream := self.pstream):
+        pstream.Release()
+        self.pstream = None
+      if not (hwnd := self.hwnd):
+        return 0x8000ffff
+      r = hwnd.Destroy()
+      self.hwnd = None
+      return 0 if r else 0x8000ffff
+  @classmethod
+  def _SetFocus(cls, pI):
+    with cls[pI] as self:
+      if not self:
+        return 0x80004003
+      if not (hwnd := self.hwnd):
+        return 0x8000ffff
+      return 0 if hwnd.SetFocus() else 0x80004005
+  @classmethod
+  def _QueryFocus(cls, pI, phwnd):
+    if not phwnd:
+      return 0x80004003
+    with cls[pI] as self:
+      if not self:
+        phwnd[0] = 0
+        return 0x80004003
+      if not (hwnd := self.hwnd):
+        phwnd[0] = 0
+        return 0x8000ffff
+      phwnd[0] = Window.Focus
+      return 0
+  @classmethod
+  def _TranslateAccelerator(cls, pI, pmsg):
+    with cls[pI] as self:
+      if not (self and pmsg):
+        return 0x80004003
+      if not (frame := self.frame):
+        return 0x8000ffff
+      return frame.TranslateAccelerator(pmsg)
+
+class _COM_IPreviewHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializePreviewHandlerWithStream, _COM_IPreviewHandlerWithFrame, _COM_IPreviewHandlerOleWindow, _COM_IPreviewHandlerVisuals, _COM_IPreviewHandler)):
+  Exts = ()
+  def _destroy(self):
+    if (pstream := self.pstream):
+      pstream.Release()
+      self.pstream = None
+    if (pframe := self.pframe):
+      pframe.Release()
+      self.pframe = None
+_COM_IInitializePreviewHandlerWithStream._impl = _COM_IPreviewHandlerWithFrame._impl = _COM_IPreviewHandlerOleWindow._impl = _COM_IPreviewHandlerVisuals._impl = _COM_IPreviewHandler._impl = _COM_IPreviewHandler_impl
 
 
 def Initialize(mode=6, ole=False):
@@ -11072,7 +12048,7 @@ class COMRegistration:
     clsid = ('{%s}' % GUID(clsid)).upper()
     r = True
     try:
-      key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Classes\CLSID\%s' % clsid)
+      key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Classes\CLSID\%s' % clsid, 0, winreg.KEY_WRITE)
       winreg.DeleteValue(key, 'ManualSafeSave')
       winreg.CloseKey(key)
     except:
@@ -11086,7 +12062,7 @@ class COMRegistration:
         r = False
       try:
         pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
-        key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % pid)
+        key = winreg.OpenKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % pid, 0, winreg.KEY_WRITE)
         for v in ('FullDetails', 'PreviewDetails', 'ContentViewModeLayoutPatternForBrowse', 'ContentViewModeForBrowse', 'ContentViewModeForSearch'):
           try:
             winreg.DeleteValue(key, v)
@@ -11110,7 +12086,65 @@ class COMRegistration:
     r = r.value if kernel32.WaitForSingleObject(hp, 0xffffffff) == 0 and kernel32.GetExitCodeProcess(hp, (r := wintypes.DWORD())) else None
     kernel32.CloseHandle(hp)
     return r
-    
+  @classmethod
+  def RegistryAddPreviewHandler(cls, clsid_impl, user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (clsid := getattr(impl, 'CLSID', None)) is None:
+      return False
+    clsid = ('{%s}' % GUID(clsid)).upper()
+    try:
+      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\CLSID\%s' % clsid)
+      winreg.SetValueEx(key, 'AppID', 0, winreg.REG_SZ, '{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}')
+      winreg.CloseKey(key)
+      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Microsoft\Windows\CurrentVersion\PreviewHandlers')
+      winreg.SetValueEx(key, clsid, 0, winreg.REG_SZ, 'WICPy.%s' % impl._cname)
+      winreg.CloseKey(key)
+    except:
+      return False
+    if (exts := getattr(impl, 'Exts', None)) is None:
+      return False
+    r = True
+    for ext in exts:
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+      except:
+        pid = ''
+      try:
+        if not pid:
+          winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
+        winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}' % pid, winreg.REG_SZ, clsid)
+      except:
+        r = False
+    return r
+  @classmethod
+  def RegistryRemovePreviewHandler(cls, clsid_impl, user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (clsid := getattr(impl, 'CLSID', None)) is None:
+      return False
+    clsid = ('{%s}' % GUID(clsid)).upper()
+    r = True
+    try:
+      key = winreg.OpenKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\CLSID\%s' % clsid, 0, winreg.KEY_WRITE)
+      winreg.DeleteValue(key, 'AppID')
+      winreg.CloseKey(key)
+    except:
+      r = False
+    try:
+      winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Microsoft\Windows\CurrentVersion\PreviewHandlers\%s' % clsid)
+    except:
+      r = False
+    if (exts := getattr(impl, 'Exts', None)) is None:
+      return False
+    for ext in exts:
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}' % pid)
+      except:
+        r = False
+    return r
+
 def DllRegisterServer():
   if (module := _IUtil._import_module(os.environ.get('WICPy_Module'))) is None:
     return ISetLastError(0x8000ffff)

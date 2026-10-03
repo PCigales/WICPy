@@ -1040,6 +1040,36 @@ if IPhoto:
 del ILibrary2
 del ILibrary
 
+#Creating a DWrite factory:
+DWFactory = IDWriteFactory()
+#Enumerating system fonts
+DWSystemFontCollection = DWFactory.GetSystemFontCollection()
+print(*(DWSystemFontCollection.GetFontFamily(i).GetFamilyNames().GetLocalizedStrings() for i in range(DWSystemFontCollection.GetFontFamilyCount())))
+#Retrieving the font family Calibri and displaying the number of its fonts
+DWFontFamily = DWSystemFontCollection.GetFontFamily(DWSystemFontCollection.FindFamilyName('Calibri'))
+print(DWFontFamily.GetFontCount())
+#Retrieving the best matching font and displaying its properties
+DWFont = DWFontFamily.GetFirstMatchingFont(weight='SemiBold', style='Italic')
+print(DWFont.GetWeight(), DWFont.GetStretch(), DWFont.GetStyle(), DWFont.IsSymbolFont(), DWFont.IsMonospacedFont(), DWFont.GetFaceNames().GetLocalizedStrings(), DWFont.GetSimulations(), DWFont.GetMetrics())
+print({n: s.GetLocalizedStrings() for n, i in DWInformationalStringId.items() if (s := DWFont.GetInformationalStrings(i))})
+print(DWFont.HasCharacter(31), DWFont.HasCharacter(32), DWFont.HasCharacter('€'))
+print(DWFont.GetUnicodeRanges())
+#Retrieving the rank ordered matching fonts and displaying their properties
+DWFontList = DWFontFamily.GetMatchingFonts(weight='SemiBold', style='Italic')
+print(*((DWFont.GetFaceNames().GetLocalizedStrings(), DWFont.GetWeight(), DWFont.GetStretch(), DWFont.GetStyle()) for i in range(DWFontList.GetFontCount()) if (DWFont := DWFontList.GetFont(i))))
+#Creating a DWriteTextFormat and displaying / modifying its properties
+DWTextFormat = DWFactory.CreateTextFormat('Calibri')
+print(DWTextFormat.GetLocaleName(), DWTextFormat.GetFontSize(), DWTextFormat.GetFontStretch(), DWTextFormat.GetFontStyle(), DWTextFormat.GetFontWeight(), DWTextFormat.GetFontFamilyName(), DWTextFormat.GetReadingDirection(), DWTextFormat.GetFlowDirection(), DWTextFormat.GetIncrementalTabStop(), DWTextFormat.GetWordWrapping(), DWTextFormat.GetParagraphAlignment(), DWTextFormat.GetTextAlignment())
+DWTextFormat.SetTextAlignment('Center')
+DWTextFormat.SetParagraphAlignment('Center')
+DWTextFormat.SetWordWrapping('NoWrap')
+print(DWTextFormat.GetWordWrapping(), DWTextFormat.GetParagraphAlignment(), DWTextFormat.GetTextAlignment())
+#Creating a DWriteTextLayout and displaying its properties
+DWTextLayout = DWFactory.CreateTextLayout('WICPy Direct Write', DWTextFormat, 200, 20)
+print(DWTextLayout.GetMaxWidth(), DWTextLayout.GetMaxHeight(), DWTextLayout.GetFontFamilyName(), DWTextLayout.GetFontWeight(), DWTextLayout.GetFontStyle(), DWTextLayout.GetFontStretch(), DWTextLayout.GetFontSize(), DWTextLayout.GetUnderline(), DWTextLayout.GetStrikethrough(), DWTextLayout.GetCharacterSpacing(), DWTextLayout.GetLocaleName(), DWTextLayout.GetLineMetrics(), DWTextLayout.GetMetrics(), DWTextLayout.GetOverhangMetrics(), DWTextLayout.GetClusterMetrics(), DWTextLayout.DetermineMinWidth())
+#Releasing the interfaces
+tuple(map(IUnknown.Release, (DWTextFormat, DWFontList, DWFont, DWFontFamily, DWSystemFontCollection, DWFactory)))
+
 #Creating a D3D11 device and getting the underlying DXGI device
 D3D11Device = ID3D11Device()
 DXGIDevice = D3D11Device.GetDXGIDevice()
@@ -1238,6 +1268,8 @@ D2D1DeviceContext.SetTarget(D2D1Bitmap)
 #Drawing the command list
 D2D1DeviceContext.BeginDraw()
 D2D1DeviceContext.DrawImage(D2D1CommandList)
+#Drawing the text
+D2D1DeviceContext.DrawTextLayout((100, 180), DWTextLayout, D2D1LinearGradientBrush)
 D2D1DeviceContext.EndDraw()
 #Copying the target of the D2D1 device context in this D2D1 bitmap
 D2D1Bitmap2.CopyFromRenderTarget(D2D1DeviceContext)
@@ -1256,7 +1288,7 @@ IBitmapFrameEncode.SetPixelFormat('24bppBGR')
 IImageEncoder.WriteFrame(D2D1Bitmap2, IBitmapFrameEncode)
 IBitmapFrameEncode.Commit()
 IEncoder.Commit()
-tuple(map(IUnknown.Release, (D2D1Bitmap3, IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext, D2D1StrokeStyle, D2D1ColorBrush, D2D1LinearGradientBrush, D2D1GradientStopCollection, D2D1RadialGradientBrush, D2D1BitmapBrush, D2D1Effect, D2D1Effect2, D2D1Effect3, D2D1BitmapB, IScaler, D2D1CommandList)))
+tuple(map(IUnknown.Release, (DWTextLayout, D2D1Bitmap3, IEncoder, IBitmapFrameEncode, IEncoderOptions, Stream, IImageEncoder, IColorContext, D2D1StrokeStyle, D2D1ColorBrush, D2D1LinearGradientBrush, D2D1GradientStopCollection, D2D1RadialGradientBrush, D2D1BitmapBrush, D2D1Effect, D2D1Effect2, D2D1Effect3, D2D1BitmapB, IScaler, D2D1CommandList)))
 D2D1Device.ClearResources()
 
 #Creating a software D2D1 device
