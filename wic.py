@@ -12136,7 +12136,9 @@ class COMRegistration:
     except:
       r = False
     try:
-      winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Microsoft\Windows\CurrentVersion\PreviewHandlers\%s' % clsid)
+      key = winreg.CreateKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Microsoft\Windows\CurrentVersion\PreviewHandlers')
+      winreg.DeleteValue(key, clsid)
+      winreg.CloseKey(key)
     except:
       r = False
     if (exts := getattr(impl, 'Exts', None)) is None:
