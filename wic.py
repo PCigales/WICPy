@@ -2529,10 +2529,9 @@ class _BDStruct:
     except AttributeError:
       return self.value[key]
   def __setitem__(self, key, value):
-    if hasattr(self, key):
-      return setattr(self, key, value)
-    else:
+    if (n_t := next(((n, t) for n, t in self.__class__._fields_ if n == key), None)) is None:
       raise AttributeError()
+    return setattr(self, key, t.from_param(value) if issubclass((t := n_t[1]), ctypes.Structure) else value)
   def __ctypes_from_outparam__(self):
     return self.to_dict()
   _for_json = value
@@ -2606,6 +2605,10 @@ class _BDBStruct(_BDStruct):
       return cls(*(((t.from_param(obj[n]) if n in obj else t()) if issubclass(t, ctypes.Structure) else obj.get(n, 0)) for n, t, *b in cls._fields_))
     else:
       return cls(*((t.from_param(o) if issubclass(t, ctypes.Structure) else o) for (n, t, *b), o in zip(cls._fields_, obj)))
+  def __setitem__(self, key, value):
+    if (n_t := next(((n, t) for n, t, *b in self.__class__._fields_ if n == key), None)) is None:
+      raise AttributeError()
+    return setattr(self, key, t.from_param(value) if issubclass((t := n_t[1]), ctypes.Structure) else value)
   def to_dict(self):
     return {n: (getattr((v := getattr(self, n)), 'value', v) if issubclass(t, (ctypes.Structure, _BPStruct)) else getattr(self, n)) for n, t, *b in self.__class__._fields_}
 
@@ -6505,7 +6508,7 @@ DWInformationalStringId = {'None': 0, 'CopyrightNotice': 1, 'VersionStrings': 2,
 DWINFORMATIONALSTRINGID = type('DWINFORMATIONALSTRINGID', (_BCode, wintypes.INT), {}, _dict=DWInformationalStringId)
 
 DWFontSimulations = {'None': 0, 'Bold': 1, 'Oblique': 2}
-DWFONTSIMULATIONS = type('DWFONTSIMULATIONS', (_BCodeOr, wintypes.INT), {}, _dict=DWFontSimulations, _def=5)
+DWFONTSIMULATIONS = type('DWFONTSIMULATIONS', (_BCodeOr, wintypes.INT), {}, _dict=DWFontSimulations)
 
 class DWFONTMETRICS(_BDStruct, ctypes.Structure):
   _fields_ = [('designUnitsPerEm', wintypes.USHORT), ('ascent', wintypes.USHORT), ('descent', wintypes.USHORT), ('lineGap', wintypes.SHORT), ('capHeight', wintypes.USHORT), ('xHeight', wintypes.USHORT), ('underlinePosition', wintypes.SHORT), ('underlineThickness', wintypes.USHORT), ('strikethroughPosition', wintypes.SHORT), ('strikethroughThickness', wintypes.USHORT), ('glyphBoxLeft', wintypes.SHORT), ('glyphBoxTop', wintypes.SHORT), ('glyphBoxRight', wintypes.SHORT), ('glyphBoxBottom', wintypes.SHORT), ('subscriptPositionX', wintypes.SHORT), ('subscriptPositionY', wintypes.SHORT), ('subscriptSizeX', wintypes.SHORT), ('subscriptSizeY', wintypes.SHORT), ('superscriptPositionX', wintypes.SHORT), ('superscriptPositionY', wintypes.SHORT), ('superscriptSizeX', wintypes.SHORT), ('superscriptSizeY', wintypes.SHORT), ('hasTypographicMetrics', wintypes.BOOL)]
@@ -6639,6 +6642,7 @@ class IDWriteFontFamily(IDWriteFontList):
     return IDWriteFontList(self.__class__._protos['GetMatchingFonts'](self.pI, weight, stretch, style), self.factory)
 
 class IDWriteFontCollection(IUnknown):
+  _lightweight = True
   IID = GUID(0xa84cee02, 0x3eea, 0x4eee, 0xa8, 0x27, 0x87, 0xc1, 0xa0, 0x2a, 0x0f, 0xcc)
   _protos['GetFontFamilyCount'] = 3, (), (), wintypes.UINT
   _protos['GetFontFamily'] = 4, (wintypes.UINT,), (wintypes.PLPVOID,)
@@ -7271,7 +7275,7 @@ D2D1FillMode = {'Alternate': 0, 'Winding': 1}
 D2D1FILLMODE = type('D2D1FILLMODE', (_BCode, wintypes.DWORD), {}, _dict=D2D1FillMode)
 
 D2D1PathSegment = {'None': 0, 'Unstroked': 1, 'RoundLineJoin': 2}
-D2D1PATHSEGMENT = type('D2D1PATHSEGMENT', (_BCode, wintypes.DWORD), {}, _dict=D2D1PathSegment)
+D2D1PATHSEGMENT = type('D2D1PATHSEGMENT', (_BCodeOr, wintypes.DWORD), {}, _dict=D2D1PathSegment)
 
 D2D1FigureBegin = {'Filled': 0, 'Hollow': 1}
 D2D1FIGUREBEGIN = type('D2D1FIGUREBEGIN', (_BCode, wintypes.DWORD), {}, _dict=D2D1FigureBegin, _def=1)
