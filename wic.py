@@ -2480,6 +2480,15 @@ class _PS_IEnumInterfaceFactory_impl(metaclass=_PSImplMeta, ps_interfaces=((_COM
 _PS_IEnumInterfaceFactory_impl.proxy_impl.iiid = property(lambda self: self._iiid if any(self._iiid) else ((setattr(self, '_iiid', wintypes.BYTES16()) or self._iiid) if _COM_IEnumInterface_Proxy._offsetted[_PS_IEnumInterfaceFactory_impl.proxy_impl._iids[IEnumInterface.IID]]._call(self, 7, (ctypes.pointer(self._iiid),)) else self._iiid))
 _COM_IEnumInterface._ps_impl = _PS_IEnumInterfaceFactory_impl
 
+class _WSUtil:
+  _mul_cache = {}
+  @staticmethod
+  def _asitem(arr, key, value):
+    return arr.__class__.__bases__[0].__setitem__(arr, key, arr.__class__.__bases__[0]._type_.from_param(value) if isinstance(key, int) else [arr.__class__.__bases__[0]._type_.from_param(v) for v in value])
+  @staticmethod
+  def _avalue(arr):
+    return tuple(s.value for s in arr)
+
 class _WSMeta(ctypes.Structure.__class__):
   def __setattr__(cls, name, value):
     r = super().__setattr__(name, value)
@@ -3051,15 +3060,6 @@ class PCOMSTREAM(PCOM):
     pdeststream = pstreamfactory.GetDestinationStream()
     pstreamfactory.Release()
     return pdeststream
-
-class _WSUtil:
-  _mul_cache = {}
-  @staticmethod
-  def _asitem(arr, key, value):
-    return arr.__class__.__bases__[0].__setitem__(arr, key, arr.__class__.__bases__[0]._type_.from_param(value) if isinstance(key, int) else [arr.__class__.__bases__[0]._type_.from_param(v) for v in value])
-  @staticmethod
-  def _avalue(arr):
-    return tuple(s.value for s in arr)
 
 class _BLOBUtil:
   _mul_cache = {}
@@ -8859,6 +8859,28 @@ class IWMPCore(IDispatch):
 IWMPCore3 = IWMPCore
 
 
+WSKnownFolderId = {
+  'Windows': GUID('f38bf404-1d43-42f2-9305-67de0b28fc23'),
+  'System': GUID('1ac14e77-02e7-4e5d-b744-2eb1ae5198b7'),
+  'ProgramFiles': GUID('905e63b6-c1bf-494e-b29c-65b732d3d21a'),
+  'ProgramFilesX64': GUID('6d809377-6af0-444b-8957-a3773f02200e'),
+  'ProgramFilesX86': GUID('7c5a40ef-a0fb-4bfc-874a-c0f2e0b9fa8e'),
+  'ProgramData': GUID('62ab5d82-fdc1-4dc3-a9dd-070d1d495d97'),
+  'UserProfiles': GUID('0762d272-c50a-4bb0-a382-697dcd729b80'),
+  'Profile': GUID('5e6c858f-0e22-4760-9afe-ea3317b67173'),
+  'LocalAppData': GUID('f1b32785-6fba-4fcf-9d55-7b8e7f157091'),
+  'LocalAppDataLow': GUID('a520a1a4-1780-4ff6-bd18-167343c5af16'),
+  'RoamingAppData': GUID('3eb685db-65f9-4cf6-a03a-e3ef65729f3d'),
+  'Desktop': GUID('b4bfcc3a-db2c-424c-b029-7fe99a87c641'),
+  'Downloads': GUID('374de290-123f-4565-9164-39c4925e467b'),
+  'Documents': GUID('fdd39ad0-238f-46af-adb4-6c85480369c7'),
+  'Music': GUID('4bd8d571-6d19-48d3-be97-422220080e43'),
+  'Pictures': GUID('33e28130-4e1e-4676-835a-98395c3bc3bb'),
+  'Videos': GUID('18989b1d-99b5-455b-841c-ab7c74e4ddfc')
+}
+WSKNOWNFOLDERID = _GMeta('WSKNOWNFOLDERID', (_BGUID, wintypes.GUID), {}, _dict=WSKnownFolderId)
+WSPKNOWNFOLDERID = type('WSPKNOWNFOLDERID', (_BPGUID, ctypes.POINTER(WSKNOWNFOLDERID)), {'_type_': WSKNOWNFOLDERID})
+
 class _WShUtil:
   @staticmethod
   def _wrap(n, *a, p=sh32):
@@ -8890,11 +8912,17 @@ class _WShUtil:
     s = pwstr.value
     _IUtil.CoTaskMemFree(pwstr)
     return s
+  @classmethod
+  def GetKnownFolderPath(cls, fid):
+    p = None if cls.SHGetKnownFolderPath(fid, 0, None, (pp := wintypes.LPWSTR())) & 0x80000000 else pp.value
+    _IUtil.CoTaskMemFree(pp)
+    return p
   GlobalLock = _IUtil._wrap('GlobalLock', (wintypes.LPVOID, 0), (wintypes.HGLOBAL, 1), p=kernel32)
   GlobalUnlock = _IUtil._wrap('GlobalUnlock', (wintypes.BOOLE, 0), (wintypes.HGLOBAL, 1), p=kernel32)
   RegisterClipboardFormat = _IUtil._wrap('RegisterClipboardFormatW', (wintypes.UINT, 0), (wintypes.LPCWSTR, 1), p=user32)
   GetClipboardFormatName = _IUtil._wrap('GetClipboardFormatNameW', (wintypes.UINT, 0), (wintypes.UINT, 1), (wintypes.LPWSTR, 1), (wintypes.UINT, 0), p=user32)
   DragQueryFile = _wrap('DragQueryFileW', (wintypes.UINT, 0), (wintypes.HDROP, 1), (wintypes.UINT, 1), (wintypes.LPWSTR, 1), (wintypes.UINT, 1))
+  SHGetKnownFolderPath = _wrap('SHGetKnownFolderPath', (wintypes.ULONG, 0), (WSPKNOWNFOLDERID, 1), (wintypes.DWORD, 1), (wintypes.HANDLE, 1), (wintypes.PLPWSTR, 1))
 
 WSBindFlags = {'MayBotherUser': 1, 'JustTestExistence': 2}
 WSBINDFLAGS = type('WSBINDFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=WSBindFlags)
@@ -11770,7 +11798,7 @@ class COMRegistration:
   def RevokeWholeClass(cls, tokens):
     return tuple(map(_IUtil.CoRevokeClassObject, tokens))
   @staticmethod
-  def _RegistryAddFactory(clsid, name, user, file, local=False):
+  def _RegistryAddFactory(clsid, name, user, file, local=False, model='Both'):
     if clsid is None:
       return False
     clsid = ('{%s}' % GUID(clsid)).upper()
@@ -11780,7 +11808,7 @@ class COMRegistration:
       winreg.SetValue(key, '', winreg.REG_SZ, qname)
       skey = winreg.CreateKey(key, 'InprocServer32')
       winreg.SetValue(skey, '', winreg.REG_SZ, os.path.join(os.path.dirname(os.path.abspath(wfile := globals().get('__file__', 'wic.py'))), "comserver.dll"))
-      winreg.SetValueEx(skey, 'ThreadingModel', 0, winreg.REG_SZ, 'Both')
+      winreg.SetValueEx(skey, 'ThreadingModel', 0, winreg.REG_SZ, model)
       if file != wfile:
         winreg.SetValueEx(skey, 'PyModule', 0, winreg.REG_SZ, os.path.abspath(file))
       else:
@@ -11801,15 +11829,15 @@ class COMRegistration:
     except:
       return False
   @classmethod
-  def RegistryAddCOMFactory(cls, icls_impl, user=True, local=False):
+  def RegistryAddCOMFactory(cls, icls_impl, user=True, local=False, model='Both'):
     if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), impl._cname, user, getattr(sys.modules.get(icls_impl.__module__), '__file__', 'wic.py'), local)
+    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), impl._cname, user, getattr(sys.modules.get(icls_impl.__module__), '__file__', 'wic.py'), local, model)
   @classmethod
-  def RegistryAddPSFactory(cls, icls_ps_impl, user=True):
+  def RegistryAddPSFactory(cls, icls_ps_impl, user=True, model='Both'):
     if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl), _PSImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ps_impl._cname + 'ProxyStub', user, getattr(sys.modules.get(icls_ps_impl.__module__), '__file__', 'wic.py'))
+    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ps_impl._cname + 'ProxyStub', user, getattr(sys.modules.get(icls_ps_impl.__module__), '__file__', 'wic.py'), model=model)
   @staticmethod
   def _RegistryRemoveFactory(clsid, user):
     if clsid is None:
