@@ -570,7 +570,7 @@ class _COMMeta(type):
       return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       raise ValueError('an invalid or more than one base class has been provided in the declaration of %s' % name)
-    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_locks', '_iids', '_siids', '_aggregatable', 'CLSID', '_pvtbls', '_fields_', '_destroy', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
+    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_locks', '_iids', '_siids', '_aggregatable', 'CLSID', 'ThreadingModel', '_pvtbls', '_fields_', '_destroy', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
       raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     cls = super().__new__(mcls, name, bases, namespace)
     for iid in cls._iids:
@@ -592,7 +592,7 @@ class _COMMeta(type):
       v[i] = ctypes.cast(f, wintypes.LPVOID)
   def __getitem__(cls, pI):
     return cls.__class__._none if not pI else cls.__class__._refs.get(pI - getattr(cls, '_ovtbl', 0), cls.__class__._none)
-      
+
 
 class _COM_IUnknown(metaclass=_COMMeta):
   _iids.add(GUID('00000000-0000-0000-c000-000000000046'))
@@ -11130,6 +11130,7 @@ class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
       return 0x80004001
 
 class _COM_IShellPropSheetExt_impl(metaclass=_COMMeta, interfaces=(_COM_IShellExtInit, _COM_IShellPropSheetExt)):
+  ThreadingModel = 'Apartment'
   Exts = ()
   def _destroy(self):
     if (pdtobj := self.pdtobj):
@@ -11437,6 +11438,7 @@ class _COM_IPropertyStoreCapabilities(_COM_IUnknown):
       return 0 if pKey.contents.to_key() not in cls.ReadOnly else 1
 
 class _COM_IPropertyHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializePropertyStoreWithStream, _COM_IPropertyStoreDelegating, _COM_IPropertyStoreCapabilities)):
+  ThreadingModel = 'Apartment'
   Exts = ()
   ManualSafeSave = False
   def _destroy(self):
@@ -11704,6 +11706,7 @@ class _COM_IPreviewHandler(_COM_IUnknown, metaclass=_ISPHMeta):
       return frame.TranslateAccelerator(pmsg)
 
 class _COM_IPreviewHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializePreviewHandlerWithStream, _COM_IPreviewHandlerWithFrame, _COM_IPreviewHandlerOleWindow, _COM_IPreviewHandlerVisuals, _COM_IPreviewHandler)):
+  ThreadingModel = 'Apartment'
   Exts = ()
   def _destroy(self):
     if (pstream := self.pstream):
@@ -11829,15 +11832,15 @@ class COMRegistration:
     except:
       return False
   @classmethod
-  def RegistryAddCOMFactory(cls, icls_impl, user=True, local=False, model='Both'):
+  def RegistryAddCOMFactory(cls, icls_impl, user=True, local=False):
     if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), impl._cname, user, getattr(sys.modules.get(icls_impl.__module__), '__file__', 'wic.py'), local, model)
+    return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), impl._cname, user, getattr(sys.modules.get(icls_impl.__module__), '__file__', 'wic.py'), local=local, model=getattr(impl, 'ThreadingModel', 'Both'))
   @classmethod
-  def RegistryAddPSFactory(cls, icls_ps_impl, user=True, model='Both'):
+  def RegistryAddPSFactory(cls, icls_ps_impl, user=True):
     if not isinstance((ps_impl := icls_ps_impl._ps_impl if isinstance(icls_ps_impl, (_IMeta, _COMMeta)) else icls_ps_impl), _PSImplMeta):
       return False
-    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ps_impl._cname + 'ProxyStub', user, getattr(sys.modules.get(icls_ps_impl.__module__), '__file__', 'wic.py'), model=model)
+    return cls._RegistryAddFactory(getattr(ps_impl, 'CLSID', None), ps_impl._cname + 'ProxyStub', user, getattr(sys.modules.get(icls_ps_impl.__module__), '__file__', 'wic.py'), model=getattr(ps_impl, 'ThreadingModel', 'Both'))
   @staticmethod
   def _RegistryRemoveFactory(clsid, user):
     if clsid is None:
