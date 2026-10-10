@@ -10885,7 +10885,8 @@ class DLGHWND(HWND):
     l = n = Window.GetWindowTextLength(hwnd) or 1023
     while n >= l:
       v = ctypes.create_unicode_buffer(l + 1)
-      if (n := DialogWindow.GetDlgItemText(self, ctrl, v, l + 1)) == 0:
+      ctypes.set_last_error(0)
+      if (n := DialogWindow.GetDlgItemText(self, ctrl, v, l + 1)) == 0 and ctypes.get_last_error():
         return None
       l += 4096
     return v.value
