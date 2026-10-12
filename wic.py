@@ -14,7 +14,8 @@ wintypes.PLPOLESTR = ctypes.POINTER(wintypes.LPOLESTR)
 wintypes.BOOLE = type('BOOLE', (wintypes.BOOL,), {'value': property(lambda s: bool(wintypes.BOOL.value.__get__(s)), wintypes.BOOL.value.__set__), '__ctypes_from_outparam__': lambda s: s.value})
 wintypes.PBOOLE = ctypes.POINTER(wintypes.BOOLE)
 wintypes.SIZE_T = ctypes.c_size_t
-wintypes.ULONG_PTR = ctypes.c_size_t
+wintypes.ULONG_PTR = wintypes.UINT_PTR = ctypes.c_size_t
+wintypes.LONG_PTR = wintypes.INT_PTR = ctypes.c_ssize_t
 wintypes.PHWND = ctypes.POINTER(wintypes.HWND)
 wintypes.GUID = ctypes.c_char * 16
 wintypes.PGUID = ctypes.POINTER(wintypes.GUID)
@@ -10732,10 +10733,10 @@ class Window(metaclass=_WndMeta):
     return cls.SetWindowText(hwnd, name)
   @staticmethod
   def SetUserAttribute(hwnd, value):
-    return DialogWindow.SetWindowLongPtr(hwnd, -21, value)
+    return Window.SetWindowLongPtr(hwnd, -21, value)
   @staticmethod
   def GetUserAttribute(hwnd):
-    return DialogWindow.GetWindowLongPtr(hwnd, -21)
+    return Window.GetWindowLongPtr(hwnd, -21)
   GetModuleHandle = _WndUtil._wrap('GetModuleHandleW', wintypes.HMODULE, wintypes.LPCWSTR, p=kernel32)
   RegisterClassEx = _WndUtil._wrap('RegisterClassExW', wintypes.ATOM, WNDPCLASS)
   UnregisterClass = _WndUtil._wrap('UnregisterClassW', wintypes.BOOLE, wintypes.LPCWSTR, wintypes.HINSTANCE)
@@ -10817,10 +10818,13 @@ class DLGITEMTEMPLATE(_BDStruct, ctypes.Structure, metaclass=_WSMeta):
   _fields_ = [('style', DLGCONTROLSTYLE), ('dwExtendedStyle', wintypes.DWORD), ('x', wintypes.SHORT), ('y', wintypes.SHORT), ('cx', wintypes.SHORT), ('cy', wintypes.SHORT), ('id', wintypes.WORD)]
 DLGPITEMTEMPLATE = type('DLGPITEMTEMPLATE', (_BPStruct, ctypes.POINTER(DLGITEMTEMPLATE)),  {'_type_': DLGITEMTEMPLATE})
 
-DLGPROC = ctypes.WINFUNCTYPE(wintypes.ULONG_PTR, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+DLGPROC = ctypes.WINFUNCTYPE(wintypes.INT_PTR, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 class DLGNMHDR(ctypes.Structure):
-  _fields_ = [('hwndFrom', wintypes.HWND), ('idFrom', wintypes.ULONG_PTR), ('code', wintypes.UINT)]
+  _fields_ = [('hwndFrom', wintypes.HWND), ('idFrom', wintypes.UINT_PTR), ('code', wintypes.UINT)]
+
+DLGBackgroundMode = {'Transparent': 1, 'Opaque': 2}
+DLGBACKGROUNDMODE = type('DLGBACKGROUNDMODE', (_BCode, wintypes.INT), {}, _dict=DLGBackgroundMode, _def=1)
 
 DLGTaskDialogFlags = {'Default': 0, 'EnableHyperlinks': 0x1, 'UseHIconMain': 0x2, 'UseHIconFooter': 0x4, 'AllowDialogCancellation': 0x8, 'UseCommandLinks': 0x10, 'UseCommandLinksNoIcon': 0x20, 'ExpandFooterArea': 0x40, 'ExpandedByDefault': 0x80, 'VerificationFlagChecked': 0x100, 'ShowProgressBar': 0x200, 'ShowMarqueeProgressBar': 0x400, 'CallbackTimer': 0x800, 'PositionRelativeToWindow': 0x1000, 'RtLLayout': 0x2000, 'NoDefaultRadioButton': 0x4000, 'CanBeMinimized': 0x8000, 'SizeToContent': 0x1000000}
 DLGTASKDIALOGFLAGS = type('DLGTASKDIALOGFLAGS', (_BCodeOr, wintypes.INT), {}, _dict=DLGTaskDialogFlags)
@@ -10848,6 +10852,12 @@ class DialogWindow(Window):
   SetDlgItemText = _WndUtil._wrap('SetDlgItemTextW', wintypes.BOOLE, wintypes.HWND, wintypes.INT, wintypes.LPCWSTR)
   GetDlgItemText = _WndUtil._wrap('GetDlgItemTextW', wintypes.UINT, wintypes.HWND, wintypes.INT, wintypes.LPCWSTR, wintypes.INT)
   MapDialogRect = _WndUtil._wrap('MapDialogRect', wintypes.BOOLE, wintypes.HWND, PRECT)
+  SetTextColor = _WndUtil._wrap('SetTextColor', wintypes.COLORREF, wintypes.HDC, wintypes.COLORREF, p=gdi32)
+  GetTextColor = _WndUtil._wrap('GetTextColor', wintypes.COLORREF, wintypes.HDC, p=gdi32)
+  SetBkColor = _WndUtil._wrap('SetBkColor', wintypes.COLORREF, wintypes.HDC, wintypes.COLORREF, p=gdi32)
+  GetBkColor = _WndUtil._wrap('GetBkColor', wintypes.COLORREF, wintypes.HDC, p=gdi32)
+  SetBkMode = _WndUtil._wrap('SetBkMode', DLGBACKGROUNDMODE, wintypes.HDC, DLGBACKGROUNDMODE, p=gdi32)
+  GetBkMode = _WndUtil._wrap('GetBkMode', DLGBACKGROUNDMODE, wintypes.HDC, p=gdi32)
   try:
     TaskDialogIndirect = _WndUtil._wrap('TaskDialogIndirect', wintypes.ULONG, DLGPTASKDIALOGCONFIG, wintypes.PINT, wintypes.PINT, wintypes.PBOOLE, p=comctl32)
   except:
@@ -10878,7 +10888,7 @@ class DLGHWND(HWND):
   def GetItemID(hwnd_ctrl):
     return DialogWindow.GetDlgCtrlID(hwnd_ctrl)
   def SetItemText(self, ctrl, value):
-    return False if isinstance(ctrl, int) and not (ctrl := self.GetItem(ctrl)) else bool(DialogWindow.SetDlgItemText(self, ctrl, value))
+    return False if not ((hwnd := self.GetItem(ctrl)) if isinstance(ctrl, int) else (ctrl := self.GetItemID(hwnd := ctrl))) else bool(DialogWindow.SetDlgItemText(self, ctrl, value))
   def GetItemText(self, ctrl):
     if not ((hwnd := self.GetItem(ctrl)) if isinstance(ctrl, int) else (ctrl := self.GetItemID(hwnd := ctrl))):
       return None
@@ -11546,13 +11556,13 @@ class _COM_IPreviewHandlerOleWindow(_COM_IUnknown):
 
 class _COM_IPreviewHandlerVisuals(_COM_IUnknown):
   _iids.add(GUID(0x196bf9a5, 0xb346, 0x4ef0, 0xaa, 0x1e, 0x5d, 0xcd, 0xb7, 0x67, 0x68, 0xb1))
-  _vtbl['SetBackgroundColor'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.DWORD)
+  _vtbl['SetBackgroundColor'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.COLORREF)
   _vtbl['SetFont'] = (wintypes.ULONG, wintypes.LPVOID, DWPLOGFONT)
-  _vtbl['SetTextColor'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.DWORD)
+  _vtbl['SetTextColor'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.COLORREF)
   _vars['hwnd'] = HWND
-  _vars['backgroundcolor'] = wintypes.DWORD
+  _vars['backgroundcolor'] = wintypes.COLORREF
   _vars['font'] = DWLOGFONT
-  _vars['textcolor'] = wintypes.DWORD
+  _vars['textcolor'] = wintypes.COLORREF
   @classmethod
   def _SetBackgroundColor(cls, pI, color):
     with cls[pI] as self:
