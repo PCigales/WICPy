@@ -14,4 +14,5 @@ Besides, the module facilitates the creation of custom COM interfaces, implement
 The DLL comserver.dll can be compiled from the source code comserver.c for example with MINGW64 with the command (the args must be set according to the path and installed version of python):  
   gcc -shared comserver.c -o comserver.dll -I "C:\Program Files\Python\include" -L "C:\Program Files\Python\libs" -lpython3 -lole32
 
-The script test.py illustrates how to use the module through various applications.
+The script test.py illustrates how to use the module through various applications.  
+The library GPXShellExt (https://github.com/PCigales/GPXShellExt) relies on the module to implement COM extensions for the Windows file explorer and indexing engine.
