@@ -3018,6 +3018,8 @@ class PCOMSTREAM(PCOM):
     return IStream._protos['SetSize'](self, size) and size if self else None
   def Commit(self, flags=0):
     return IStream._protos['Commit'](self, flags) if self else None
+  def GetNamePtr(self):
+    return None if not self or IStream._protos['Stat'](self, (stat := ISSTATSTG()), 0) is None else wintypes.LPCWSTR.from_buffer(stat, stat.__class__.pwcsName.offset)
   @staticmethod
   def CreateOnFile(file_name, desired_access=0x20):
     if isinstance(desired_access, str):
@@ -8570,7 +8572,7 @@ class DISPPARAMS(ctypes.Structure):
 DISPPPARAMS = type('DISPPPARAMS', (_BPStruct, ctypes.POINTER(DISPPARAMS)),  {'_type_': DISPPARAMS})
 
 class IDispatch(IUnknown):
-  IID = GUID('00020400-0000-0000-C000-000000000046')
+  IID = GUID('00020400-0000-0000-c000-000000000046')
   _protos['GetIDsOfNames'] = 5, (wintypes.PGUID, wintypes.PLPOLESTR, wintypes.UINT, wintypes.LCID, DISPPID), (), wintypes.ULONG
   _protos['Invoke'] = 6, (DISPID, wintypes.PGUID, wintypes.LCID, DISPFLAGS, DISPPPARAMS, PVARIANT, wintypes.LPVOID, wintypes.LPVOID), ()
   def GetIDsOfNames(self, member_name, param_names=None, lcid=0):
@@ -8909,8 +8911,7 @@ class _WShUtil:
   def _get_str(pwstr):
     if not pwstr:
       return None
-    pwstr = ctypes.cast(pwstr, wintypes.LPWSTR)
-    s = pwstr.value
+    s = ctypes.cast(pwstr, wintypes.LPWSTR).value
     _IUtil.CoTaskMemFree(pwstr)
     return s
   @classmethod
@@ -11533,7 +11534,7 @@ class _COM_IPreviewHandlerWithFrame(_COM_IUnknown):
       return 0 if ppvSite.contents else (0x80004002 if pframe else 0x80004005)
 
 class _COM_IPreviewHandlerOleWindow(_COM_IUnknown):
-  _iids.add(GUID('00000114-0000-0000-C000-000000000046'))
+  _iids.add(GUID('00000114-0000-0000-c000-000000000046'))
   _vtbl['GetWindow'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PHWND)
   _vtbl['ContextSensitiveHelp'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.BOOL)
   _vars['hwnd'] = HWND
@@ -11727,6 +11728,87 @@ class _COM_IPreviewHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitialize
       pframe.Release()
       self.pframe = None
 _COM_IInitializePreviewHandlerWithStream._impl = _COM_IPreviewHandlerWithFrame._impl = _COM_IPreviewHandlerOleWindow._impl = _COM_IPreviewHandlerVisuals._impl = _COM_IPreviewHandler._impl = _COM_IPreviewHandler_impl
+
+TIFlags = {'Default': 0, 'UseName': 0x1, 'LinkNoTarget': 0x2, 'LinkUseTarget': 0x4, 'UseSlowTip': 0x8, 'SingleLine': 0x10}
+TIFLAGS = type('TIFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=TIFlags)
+
+class _TIUtil:
+  _get_str = _WShUtil._get_str
+  shl.SHStrDupW.restype = wintypes.ULONG
+  shl.SHStrDupW.argtypes = (wintypes.LPCWSTR, wintypes.PLPWSTR)
+
+class IQueryInfo(IUnknown):
+  IID = GUID('00021500-0000-0000-c000-000000000046')
+  _protos['GetInfoTip'] = 3, (TIFLAGS,), (wintypes.PLPVOID,)
+  _protos['GetInfoFlags'] = 4, (), (wintypes.PDWORD,)
+  def GetInfoTip(self, flags=0):
+    return _TIUtil._get_str(self.__class__._protos['GetInfoTip'](self.pI, flags))
+  def GetInfoFlags(self):
+    return self.__class__._protos['GetInfoFlags'](self.pI)
+
+class _COM_IInitializeTipInfoWithStream(_COM_IUnknown):
+  _iids.add(GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f))
+  _vtbl['Initialize'] = (wintypes.ULONG, wintypes.LPVOID, PCOMSTREAM, wintypes.DWORD)
+  _vars['loaded'] = wintypes.BOOLEAN
+  _vars['pstream'] = PCOMSTREAM
+  @classmethod
+  def Load(cls, self):
+    return 1
+  @classmethod
+  def _Initialize(cls, pI, pstream, grfMode):
+    with cls[pI] as self:
+      if not self or not pstream:
+        return 0x80004003
+      if self.pstream:
+        return 0x800704df
+      self.pstream = pstream
+      pstream.AddRef()
+      self.loaded = (r := cls.Load(self)) == 0
+      return r if r & 0x80000000 else 0
+
+class _COM_IQueryTipInfo(_COM_IUnknown):
+  _iids.add(GUID('00021500-0000-0000-c000-000000000046'))
+  _vtbl['GetInfoTip'] = (wintypes.ULONG, wintypes.LPVOID, TIFLAGS, wintypes.PLPWSTR)
+  _vtbl['GetInfoFlags'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PDWORD)
+  _vars['loaded'] = wintypes.BOOLEAN
+  _vars['pstream'] = PCOMSTREAM
+  _vars['tip'] = wintypes.LPCWSTR
+  @classmethod
+  def LazyLoad(cls, self, slow=False):
+    return 0x80004001
+  @classmethod
+  def _GetInfoFlags(cls, pI, pdwFlags):
+    with cls[pI] as self:
+      if not (self and pdwFlags):
+        return 0x80004003
+      return 0x80004001
+  @classmethod
+  def _GetInfoTip(cls, pI, dwFlags, ppwszTip):
+    with cls[pI] as self:
+      if not (self and ppwszTip):
+        return 0x80004003
+      if not self.pstream:
+        return 0x8000ffff
+      if dwFlags & 'LinkNoTarget':
+        return 0x80070057
+      if dwFlags & 'UseName':
+        ppwszTip[0] = pname = self.pstream.GetNamePtr()
+        return 0 if pname else 0x80004005
+      if not self.loaded:
+        if (r := cls.LazyLoad(self, bool(dwFlags & 'UseSlowTip'))) & 0x80000000:
+          ppwszTip[0] = self.tip = None
+          return r
+        self.loaded = r == 0
+      return shl.SHStrDupW(ctypes.create_unicode_buffer(' | '.join(self.tip.splitlines())) if dwFlags & 'SingleLine' else wintypes.LPCWSTR.from_buffer(self, self.__class__.tip.offset), ppwszTip)
+
+class _COM_ITipInfoHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializeTipInfoWithStream, _COM_IQueryTipInfo)):
+  ThreadingModel = 'Apartment'
+  Exts = ()
+  def _destroy(self):
+    if (pstream := self.pstream):
+      pstream.Release()
+      self.pstream = None
+_COM_IInitializeTipInfoWithStream._impl = _COM_IQueryTipInfo._impl = _COM_ITipInfoHandler_impl
 
 
 def Initialize(mode=6, ole=False):
@@ -12009,7 +12091,7 @@ class COMRegistration:
       try:
         if not pid:
           winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
-        winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers\%s' % (pid, name), winreg.REG_SZ, clsid)
+        winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\ShellEx\PropertySheetHandlers\%s' % (pid, name), winreg.REG_SZ, clsid)
       except:
         r = False
     return r
@@ -12023,9 +12105,9 @@ class COMRegistration:
     for ext in exts:
       try:
         pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
-        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers\%s' % (pid, name))
+        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\ShellEx\PropertySheetHandlers\%s' % (pid, name))
         try:
-          winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\PropertySheetHandlers' % pid)
+          winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\ShellEx\PropertySheetHandlers' % pid)
         except:
           pass
       except:
@@ -12038,7 +12120,7 @@ class COMRegistration:
   def RegistryRemovePropertySchema(cls, path):
     return bool(_PSUtil.PSUnregisterPropertySchema(path))
   @classmethod
-  def RegistryAddPropertyHandler(cls, clsid_impl, full_details='+', preview_details='+', content_layout='', content_mode_browse='', content_mode_search='', user=True):
+  def RegistryAddPropertyHandler(cls, clsid_impl, full_details='+', preview_details='+', info_tip='+', content_layout='', content_mode_browse='', content_mode_search='', user=True):
     if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
       return False
     if (clsid := getattr(impl, 'CLSID', None)) is None:
@@ -12056,6 +12138,7 @@ class COMRegistration:
       return False
     full_details = ('prop:%s%s' % (('System.PropGroup.FileSystem;System.ItemNameDisplay;System.ItemTypeText;System.ItemFolderPathDisplay;System.Size;System.DateCreated;System.DateModified;System.FileAttributes;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;*System.FileOwner;*System.ComputerName;' if full_details.startswith('+') else ''), v)) if (v := full_details.lstrip('+;')) else ''
     preview_details = ('prop:%s%s' % (('System.DateModified;System.Size;System.DateCreated;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith;' if preview_details.startswith('+') else ''), v)) if (v := preview_details.lstrip('+;')) else ''
+    info_tip = ('prop:%s%s' % (('System.ItemTypeText;System.Size;System.DateModified;' if info_tip.startswith('+') else ''), v)) if (v := info_tip.lstrip('+;')) else ''
     content_mode_browse = ('prop:%s' % v) if (v := content_mode_browse.lstrip(';')) else ''
     content_mode_search = ('prop:%s' % v) if (v := content_mode_search.lstrip(';')) else ''
     for ext in exts:
@@ -12075,6 +12158,8 @@ class COMRegistration:
           winreg.SetValueEx(key, 'FullDetails', 0, winreg.REG_SZ, full_details)
         if preview_details:
           winreg.SetValueEx(key, 'PreviewDetails', 0, winreg.REG_SZ, preview_details)
+        if info_tip:
+          winreg.SetValueEx(key, 'InfoTip', 0, winreg.REG_SZ, info_tip)
         if content_layout:
           winreg.SetValueEx(key, 'ContentViewModeLayoutPatternForBrowse', 0, winreg.REG_SZ, content_layout)
         if content_mode_browse:
@@ -12159,7 +12244,7 @@ class COMRegistration:
       try:
         if not pid:
           winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
-        winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}' % pid, winreg.REG_SZ, clsid)
+        winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}' % pid, winreg.REG_SZ, clsid)
       except:
         r = False
     return r
@@ -12188,7 +12273,42 @@ class COMRegistration:
     for ext in exts:
       try:
         pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
-        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}' % pid)
+        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}' % pid)
+      except:
+        r = False
+    return r
+  @classmethod
+  def RegistryAddTipInfoHandler(cls, clsid_impl, user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
+      return False
+    clsid = ('{%s}' % GUID(clsid)).upper()
+    r = True
+    for ext in exts:
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+      except:
+        pid = ''
+      try:
+        if not pid:
+          winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s' % ext, winreg.REG_SZ, (pid := '%sFile' % ext.lstrip('.').upper()))
+        winreg.SetValue((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\ShellEx\{00021500-0000-0000-c000-000000000046}' % pid, winreg.REG_SZ, clsid)
+      except:
+        r = False
+    return r
+  @classmethod
+  def RegistryRemoveTipInfoHandler(cls, clsid_impl, user=True):
+    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+      return False
+    if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
+      return False
+    clsid = ('{%s}' % GUID(clsid)).upper()
+    r = True
+    for ext in exts:
+      try:
+        pid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+        winreg.DeleteKey((winreg.HKEY_CURRENT_USER if user else winreg.HKEY_LOCAL_MACHINE), r'SOFTWARE\Classes\%s\ShellEx\{00021500-0000-0000-c000-000000000046}' % pid)
       except:
         r = False
     return r
