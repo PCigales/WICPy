@@ -11729,8 +11729,8 @@ class _COM_IPreviewHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitialize
       self.pframe = None
 _COM_IInitializePreviewHandlerWithStream._impl = _COM_IPreviewHandlerWithFrame._impl = _COM_IPreviewHandlerOleWindow._impl = _COM_IPreviewHandlerVisuals._impl = _COM_IPreviewHandler._impl = _COM_IPreviewHandler_impl
 
-TIFlags = {'Default': 0, 'UseName': 0x1, 'LinkNoTarget': 0x2, 'LinkUseTarget': 0x4, 'UseSlowTip': 0x8, 'SingleLine': 0x10}
-TIFLAGS = type('TIFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=TIFlags)
+ITFlags = {'Default': 0, 'UseName': 0x1, 'LinkNoTarget': 0x2, 'LinkUseTarget': 0x4, 'UseSlowTip': 0x8, 'SingleLine': 0x10}
+ITFLAGS = type('ITFLAGS', (_BCodeOr, wintypes.DWORD), {}, _dict=ITFlags)
 
 class _TIUtil:
   _get_str = _WShUtil._get_str
@@ -11739,14 +11739,14 @@ class _TIUtil:
 
 class IQueryInfo(IUnknown):
   IID = GUID('00021500-0000-0000-c000-000000000046')
-  _protos['GetInfoTip'] = 3, (TIFLAGS,), (wintypes.PLPVOID,)
+  _protos['GetInfoTip'] = 3, (ITFLAGS,), (wintypes.PLPVOID,)
   _protos['GetInfoFlags'] = 4, (), (wintypes.PDWORD,)
   def GetInfoTip(self, flags=0):
     return _TIUtil._get_str(self.__class__._protos['GetInfoTip'](self.pI, flags))
   def GetInfoFlags(self):
     return self.__class__._protos['GetInfoFlags'](self.pI)
 
-class _COM_IInitializeTipInfoWithStream(_COM_IUnknown):
+class _COM_IInitializeInfoTipWithStream(_COM_IUnknown):
   _iids.add(GUID(0xb824b49d, 0x22ac, 0x4161, 0xac, 0x8a, 0x99, 0x16, 0xe8, 0xfa, 0x3f, 0x7f))
   _vtbl['Initialize'] = (wintypes.ULONG, wintypes.LPVOID, PCOMSTREAM, wintypes.DWORD)
   _vars['loaded'] = wintypes.BOOLEAN
@@ -11766,9 +11766,9 @@ class _COM_IInitializeTipInfoWithStream(_COM_IUnknown):
       self.loaded = (r := cls.Load(self)) == 0
       return r if r & 0x80000000 else 0
 
-class _COM_IQueryTipInfo(_COM_IUnknown):
+class _COM_IQueryInfoTip(_COM_IUnknown):
   _iids.add(GUID('00021500-0000-0000-c000-000000000046'))
-  _vtbl['GetInfoTip'] = (wintypes.ULONG, wintypes.LPVOID, TIFLAGS, wintypes.PLPWSTR)
+  _vtbl['GetInfoTip'] = (wintypes.ULONG, wintypes.LPVOID, ITFLAGS, wintypes.PLPWSTR)
   _vtbl['GetInfoFlags'] = (wintypes.ULONG, wintypes.LPVOID, wintypes.PDWORD)
   _vars['loaded'] = wintypes.BOOLEAN
   _vars['pstream'] = PCOMSTREAM
@@ -11801,14 +11801,14 @@ class _COM_IQueryTipInfo(_COM_IUnknown):
         self.loaded = r == 0
       return shl.SHStrDupW(ctypes.create_unicode_buffer(' | '.join(self.tip.splitlines())) if dwFlags & 'SingleLine' else wintypes.LPCWSTR.from_buffer(self, self.__class__.tip.offset), ppwszTip)
 
-class _COM_ITipInfoHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializeTipInfoWithStream, _COM_IQueryTipInfo)):
+class _COM_IInfoTipHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializeInfoTipWithStream, _COM_IQueryInfoTip)):
   ThreadingModel = 'Apartment'
   Exts = ()
   def _destroy(self):
     if (pstream := self.pstream):
       pstream.Release()
       self.pstream = None
-_COM_IInitializeTipInfoWithStream._impl = _COM_IQueryTipInfo._impl = _COM_ITipInfoHandler_impl
+_COM_IInitializeInfoTipWithStream._impl = _COM_IQueryInfoTip._impl = _COM_IInfoTipHandler_impl
 
 
 def Initialize(mode=6, ole=False):
@@ -12278,7 +12278,7 @@ class COMRegistration:
         r = False
     return r
   @classmethod
-  def RegistryAddTipInfoHandler(cls, clsid_impl, user=True):
+  def RegistryAddInfoTipHandler(cls, clsid_impl, user=True):
     if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
       return False
     if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
@@ -12298,7 +12298,7 @@ class COMRegistration:
         r = False
     return r
   @classmethod
-  def RegistryRemoveTipInfoHandler(cls, clsid_impl, user=True):
+  def RegistryRemoveInfoTipHandler(cls, clsid_impl, user=True):
     if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
       return False
     if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
