@@ -1,0 +1,42 @@
+[build-system]
+requires = [
+    "setuptools>=78",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "WICPy"
+version = "1.3.3"
+authors = [{name = "PCigales"}]
+license = "GPL-3.0-or-later"
+description = "A module in Python3 providing a bridge with the Windows Imaging Component (WIC) framework and helping the creation, marshaling and registration of custom COM interfaces"
+readme = "README.md"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows",
+  "Development Status :: 5 - Production/Stable",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Multimedia :: Graphics :: Graphics Conversion"
+]
+keywords = ["wic", "windows-imaging-component", "image", "metadata", "direct2d", "windows-shell", "com"]
+requires-python = ">=3.8"
+
+[project.urls]
+Homepage = "https://github.com/PCigales/WICPy"
+Repository = "https://github.com/PCigales/WICPy"
+"Bug Tracker" = "https://github.com/PCigales/WICPy/issues"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"WICPy" = ["*.md", "*.c", "*.dll"] 
+"WICPy.test" = ["*.*"]
+
+[tool.distutils.bdist_wheel]
+plat-name = "win_amd64"
