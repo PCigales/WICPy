@@ -2,6 +2,8 @@
 # Copyright © 2024 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
+import sys
+sys.modules.setdefault('wic', sys.modules.get(__name__))
 import ctypes, ctypes.wintypes as wintypes
 vars(ctypes).setdefault('CArgObject', ctypes.byref(ctypes.c_byte()).__class__)
 vars(ctypes).setdefault('_Pointer', ctypes.POINTER(ctypes.c_byte).__mro__[1])
@@ -29,7 +31,6 @@ import math
 from fractions import Fraction
 import datetime
 from hashlib import md5
-import sys
 import importlib.util
 import os, os.path
 import winreg
@@ -452,6 +453,82 @@ class _IMeta(type):
   def _ps_impl(cls):
     return getattr(getattr(sys.modules.get(cls.__module__), (n := '_COM_' + cls.__name__), globals().get(n)), '_ps_impl', None)
 
+class _COMImplMeta(ctypes.Structure.__class__):
+  _psize = ctypes.sizeof(wintypes.LPVOID)
+  _refs = {}
+  _locks = [0]
+  _clsids = {}
+  class _COMThreadUnsafe:
+    def __init__(self, obj=None):
+      object.__setattr__(self, '_obj', obj)
+    def __bool__(self):
+      return bool(getattr(self._obj, 'refs', False))
+    def __enter__(self):
+      return self._obj
+    def __exit__(self, et, ev, tb):
+      pass
+    def __getattr__(self, name):
+      return getattr(self._obj, name) if self._obj else None
+    def __setattr__(self, name, value):
+      return setattr(self._obj, name, value) if hasattr(self._obj, name) else object.__setattr__(self, name, value)
+    def __repr__(self):
+      return '<%s.%s(%s) object at 0x%016X>' % (self.__class__.__module__, self.__class__.__qualname__, self._obj, id(self))
+  class _COMThreadSafe(_COMThreadUnsafe):
+    def __init__(self, obj=None):
+      super().__init__(obj)
+      object.__setattr__(self, '_lock', threading.RLock())
+    def __enter__(self):
+      self._lock.acquire()
+      return self._obj
+    def __exit__(self, et, ev, tb):
+      self._lock.release()
+  @property
+  def _cname(cls):
+    return cls.__name__[slice((5 if cls.__name__.upper().startswith('_COM_') else 0), (-5 if cls.__name__.lower().endswith('_impl') else None))]
+  @classmethod
+  def __prepare__(mcls, name, bases, interfaces=None):
+    return {} if not interfaces else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new}
+  def mro(cls):
+    return (cls, *vars(cls)['__base'].__mro__)
+  def __new__(mcls, name, bases, namespace, interfaces=None):
+    if len(bases) > 1:
+      raise ValueError('more than one base class has been provided in the declaration of %s' % name)
+    if not interfaces or any(hasattr(interface, '_ovtbl') for interface in interfaces):
+      raise ValueError('an invalid value has been provided for the \'interfaces\' argument of the declaration of %s' % name)
+    fs = {}
+    if any(fs.setdefault(n, t) != t for interface in interfaces for n, t in interface._vars.items()):
+      raise AttributeError('a conflict between variables has been detected among the \'_vars\' declarations of the interfaces tied to %s' % name)
+    if (v := namespace.get('_vars')):
+      fs.update(v)
+    namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
+    if (clsid := namespace.get('CLSID')):
+      namespace['CLSID'] = clsid = GUID.from_name(name) if clsid is True else GUID(clsid)
+    namespace['__base'] = bases[0] if bases else ctypes.Structure
+    cls = super().__new__(mcls, name, (ctypes.Structure,), namespace)
+    delattr(cls, '__base')
+    if clsid:
+      mcls._clsids[clsid] = cls
+    return cls
+  @staticmethod
+  def _is_mta():
+    return None if (atq := _IUtil.CoGetApartmentType()) is None else atq[0] == 1 or (atq[0] == 2 and atq[1] in (2, 4))
+  @staticmethod
+  def _new(cls, iid=0, isize=None, **kwargs):
+    if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
+      ISetLastError(0x80004002)
+      return None
+    cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if (mt if (mt := getattr(_IUtil._local, 'multithreaded', None)) is not None else cls.__class__._is_mta()) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
+    self.pvtbls[:] = cls._pvtbls
+    self.refs = 1
+    self.__init__(**kwargs)
+    ISetLastError(0)
+    return pI + ind * cls.__class__._psize
+  def __init__(cls, *args, interfaces=None):
+    super().__init__(*args)
+    if interfaces:
+      cls._pvtbls = tuple(ctypes.addressof(interface._offsetted[i].vtbl) for i, interface in enumerate(interfaces))
+      cls._aggregatable = all(issubclass(interface, (_COM_IUnknown if i == 0 else  _COM_IUnknown_aggregatable)) for i, interface in enumerate(interfaces)) and hasattr(cls, 'pUnkOuter')
+
 class _COMMeta(type):
   class _Offsetted(dict):
     def __set_name__(self, interface, name):
@@ -459,77 +536,6 @@ class _COMMeta(type):
     def __missing__(self, offset):
       self[offset] = cls = (interface := self[0]).__class__('%s_offset_%d' % (interface.__name__, offset), (interface,), {'_ovtbl': offset * interface.__class__._psize})
       return cls
-  class _COMImplMeta(ctypes.Structure.__class__):
-    _psize = ctypes.sizeof(wintypes.LPVOID)
-    _refs = {}
-    _locks = [0]
-    _clsids = {}
-    class _COMThreadUnsafe:
-      def __init__(self, obj=None):
-        object.__setattr__(self, '_obj', obj)
-      def __bool__(self):
-        return bool(getattr(self._obj, 'refs', False))
-      def __enter__(self):
-        return self._obj
-      def __exit__(self, et, ev, tb):
-        pass
-      def __getattr__(self, name):
-        return getattr(self._obj, name) if self._obj else None
-      def __setattr__(self, name, value):
-        return setattr(self._obj, name, value) if hasattr(self._obj, name) else object.__setattr__(self, name, value)
-      def __repr__(self):
-        return '<%s.%s(%s) object at 0x%016X>' % (self.__class__.__module__, self.__class__.__qualname__, self._obj, id(self))
-    class _COMThreadSafe(_COMThreadUnsafe):
-      def __init__(self, obj=None):
-        super().__init__(obj)
-        object.__setattr__(self, '_lock', threading.RLock())
-      def __enter__(self):
-        self._lock.acquire()
-        return self._obj
-      def __exit__(self, et, ev, tb):
-        self._lock.release()
-    @property
-    def _cname(cls):
-      return cls.__name__[slice((5 if cls.__name__.upper().startswith('_COM_') else 0), (-5 if cls.__name__.lower().endswith('_impl') else None))]
-    @classmethod
-    def __prepare__(mcls, name, bases, interfaces=None):
-      return {} if not interfaces else {'_iids': {iid: i for i, interface in reversed(tuple(enumerate(interfaces))) for iid in interface._iids}, '__new__': mcls._new}
-    def __new__(mcls, name, bases, namespace, interfaces=None):
-      if not interfaces or any(hasattr(interface, '_ovtbl') for interface in interfaces):
-        raise ValueError('an invalid value has been provided for the \'interfaces\' argument of the declaration of %s' % name)
-      if bases:
-        raise ValueError('a base class has been provided in the declaration of %s' % name)
-      fs = {}
-      if any(fs.setdefault(n, t) != t for interface in interfaces for n, t in interface._vars.items()):
-        raise AttributeError('a conflict between variables has been detected among the \'_vars\' declarations of the interfaces tied to %s' % name)
-      if (v := namespace.get('_vars')):
-        fs.update(v)
-      namespace['_fields_'] = [('pvtbls', wintypes.LPVOID * len(interfaces)), ('refs', wintypes.ULONG), *fs.items()]
-      if (clsid := namespace.get('CLSID')):
-        namespace['CLSID'] = clsid = GUID.from_name(name) if clsid is True else GUID(clsid)
-      cls = super().__new__(mcls, name, (ctypes.Structure,), namespace)
-      if clsid:
-        mcls._clsids[clsid] = cls
-      return cls
-    @staticmethod
-    def _is_mta():
-      return None if (atq := _IUtil.CoGetApartmentType()) is None else atq[0] == 1 or (atq[0] == 2 and atq[1] in (2, 4))
-    @staticmethod
-    def _new(cls, iid=0, isize=None, **kwargs):
-      if ((ind := iid) >= len(cls._pvtbls)) if isinstance(iid, int) else ((ind := cls._iids.get(GUID(iid))) is None):
-        ISetLastError(0x80004002)
-        return None
-      cls.__class__._refs[pI := ctypes.addressof(self)] = (cls.__class__._COMThreadSafe if (mt if (mt := getattr(_IUtil._local, 'multithreaded', None)) is not None else cls.__class__._is_mta()) else cls.__class__._COMThreadUnsafe)(self := (ctypes.Structure.__new__(cls) if isize is None else cls.from_buffer(ctypes.create_string_buffer(isize))))
-      self.pvtbls[:] = cls._pvtbls
-      self.refs = 1
-      self.__init__(**kwargs)
-      ISetLastError(0)
-      return pI + ind * cls.__class__._psize
-    def __init__(cls, *args, interfaces=None):
-      super().__init__(*args)
-      if interfaces:
-        cls._pvtbls = tuple(ctypes.addressof(interface._offsetted[i].vtbl) for i, interface in enumerate(interfaces))
-        cls._aggregatable = all(issubclass(interface, (_COM_IUnknown if i == 0 else  _COM_IUnknown_aggregatable)) for i, interface in enumerate(interfaces)) and hasattr(cls, 'pUnkOuter')
   _psize = _COMImplMeta._psize
   _refs = _COMImplMeta._refs
   _locks = _COMImplMeta._locks
@@ -546,10 +552,10 @@ class _COMMeta(type):
   class _impl:
     def __get__(self, cls, mcls=None):
       if (impl := vars(cls).get('_impl_') or getattr(sys.modules.get(cls.__module__), (n := cls.__name__ + '_impl'), globals().get(n))) is None:
-        cls._impl_ = impl = _COMMeta._COMImplMeta(n, (), _COMMeta._COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
+        cls._impl_ = impl = _COMImplMeta(n, (), _COMImplMeta.__prepare__(n, (), interfaces=(cls,)), interfaces=(cls,))
       return impl
     def __set__(self, cls, value):
-      if not isinstance(value, _COMMeta._COMImplMeta):
+      if not isinstance(value, _COMImplMeta):
         raise ValueError('value must be a COM implementation class')
       cls._impl_ = value
   _impl = _impl()
@@ -564,14 +570,14 @@ class _COMMeta(type):
   @classmethod
   def __prepare__(mcls, name, bases, interfaces=None):
     if interfaces:
-      return mcls._COMImplMeta.__prepare__(name, bases, interfaces=interfaces)
+      return _COMImplMeta.__prepare__(name, bases, interfaces=interfaces)
     return {'_iids': {*bases[0]._iids}, '_vtbl': {**bases[0]._vtbl}, '_vars': {**bases[0]._vars}, '_offsetted': mcls._Offsetted()} if bases else {'_iids': set(), '_vtbl': {}, '_vars': {}, '_offsetted': mcls._Offsetted(), '__new__': mcls._new}
   def __new__(mcls, name, bases, namespace, interfaces=None):
     if interfaces:
-      return mcls._COMImplMeta(name, bases, namespace, interfaces=interfaces)
+      return _COMImplMeta(name, bases, namespace, interfaces=interfaces)
     if bases and (len(bases) > 1 or hasattr(bases[0], '_ovtbl')):
       raise ValueError('an invalid or more than one base class has been provided in the declaration of %s' % name)
-    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_locks', '_iids', '_siids', '_aggregatable', 'CLSID', 'ThreadingModel', '_pvtbls', '_fields_', '_destroy', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock'} for n in v):
+    if (v := namespace.get('_vars')) and any(n in {'_psize', '_refs', '_locks', '_iids', '_siids', '_aggregatable', 'CLSID', 'ThreadingModel', '_pvtbls', '_fields_', '_destroy', 'pvtbls', 'refs', 'iid', 'isize', '_obj', '_lock', '__base'} for n in v):
       raise AttributeError('a reserved identifier has been used as a variable name in the \'_vars\' declarations of %s' % name)
     cls = super().__new__(mcls, name, bases, namespace)
     for iid in cls._iids:
@@ -633,7 +639,7 @@ class _COM_IUnknown(metaclass=_COMMeta):
           d()
       return self.refs
 
-class _COM_IUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IUnknown,)):
+class _COM_IUnknown_impl(metaclass=_COMImplMeta, interfaces=(_COM_IUnknown,)):
   CLSID = True
 
 class IUnknown(metaclass=_IMeta):
@@ -648,7 +654,7 @@ class IUnknown(metaclass=_IMeta):
         return None
       if (clsid_component := getattr(cls, 'CLSID', cls._impl)) is None:
         raise TypeError('%s does not have an implicit constructor' % cls.__name__)
-    if isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
+    if isinstance(clsid_component, (_COMMeta, _COMImplMeta)):
       if not (pI := wintypes.LPVOID(clsid_component(cls.IID))):
         return None
       lw = True
@@ -840,7 +846,7 @@ class _COM_IUnknown_aggregator(_COM_IUnknown):
       PCOM.Release(wintypes.LPVOID(outer.pUnkInners[index]))
       outer.pUnkInners[index] = None
       if kwargs:
-        if not isinstance(impl, _COMMeta._COMImplMeta) or not impl._aggregatable:
+        if not isinstance(impl, _COMImplMeta) or not impl._aggregatable:
           return False
         outer.pUnkInners[index] = pUnkInner = impl(_COMMeta._iid_iunknown, **kwargs)
         with _COM_IUnknown[pUnkInner] as inner:
@@ -893,7 +899,7 @@ class _COM_IClassFactory(_COM_IUnknown):
       return 0x80004003
     return 0
 
-class _COM_IClassFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IClassFactory,)):
+class _COM_IClassFactory_impl(metaclass=_COMImplMeta, interfaces=(_COM_IClassFactory,)):
   def __new__(cls, iid=0, *, _bnew=__new__, impl=0):
     return _bnew(cls, iid, constr=impl)
   def __init__(self, *, constr):
@@ -912,7 +918,7 @@ class IClassFactory(IUnknown):
         return None
     elif isinstance(clsid_component, _IMeta) and (clsid_component := getattr((icls := clsid_component), 'CLSID', icls._impl)) is None:
         raise TypeError('%s does not have an implicit constructor' % icls.__name__)
-    if clsid_component == 0 or isinstance(clsid_component, (_COMMeta, _COMMeta._COMImplMeta)):
+    if clsid_component == 0 or isinstance(clsid_component, (_COMMeta, _COMImplMeta)):
       if not (pI := wintypes.LPVOID(_COM_IClassFactory(cls.IID, impl=clsid_component))):
         return None
       lw = True
@@ -998,7 +1004,7 @@ class _COM_IPSFactoryBuffer(_COM_IUnknown):
         return e
       return 0
 
-class _COM_IPSFactoryBuffer_impl(metaclass=_COMMeta, interfaces=(_COM_IPSFactoryBuffer,)):
+class _COM_IPSFactoryBuffer_impl(metaclass=_COMImplMeta, interfaces=(_COM_IPSFactoryBuffer,)):
   def __new__(cls, iid=0, *, _bnew=__new__, ps_impl=None):
     return _bnew(cls, iid, constr_p=ps_impl.proxy_impl, constr_s=ps_impl.stub_impl)
   def __init__(self, *, constr_p, constr_s):
@@ -2110,10 +2116,10 @@ class _PSImplMeta(type):
     if not all(issubclass(p_interface, _COM_IUnknown_aggregatable) for p_interface in p_interfaces) or not all(issubclass(s_interface, _COM_IRpcStubBuffer) for s_interface in s_interfaces):
       raise ValueError('an invalid value has been provided for the \'ps_interfaces\' argument of the declaration of %s' % name)
     _piids = {iid: i for i, p_interface in reversed(tuple(enumerate(p_interfaces))) for iid in p_interface._iids if iid != _COMMeta._iid_iunknown}
-    class _COM_IRpcProxy_impl(metaclass=_COMMeta, interfaces=((_COM_IRpcInProcProxyBuffer if any(issubclass(p_interface, _COM_IRpcInProcProxy) for p_interface in p_interfaces) else _COM_IRpcProxyBuffer), *(p_interfaces[i] for i in _piids.values()))):
+    class _COM_IRpcProxy_impl(metaclass=_COMImplMeta, interfaces=((_COM_IRpcInProcProxyBuffer if any(issubclass(p_interface, _COM_IRpcInProcProxy) for p_interface in p_interfaces) else _COM_IRpcProxyBuffer), *(p_interfaces[i] for i in _piids.values()))):
       _iids = {_COMMeta._iid_iunknown: 0, _COMMeta._iid_irpcproxybuffer: 0, **{iid: i + 1 for i, iid in enumerate(_piids)}}
       _siids = {i + 1: iid for i, iid in enumerate(_piids)}
-    class _COM_IRpcStub_impl(metaclass=_COMMeta, interfaces=tuple(s_interfaces[i] for i in _piids.values())):
+    class _COM_IRpcStub_impl(metaclass=_COMImplMeta, interfaces=tuple(s_interfaces[i] for i in _piids.values())):
       _siids = {iid: i for i, iid in enumerate(_piids)}, dict(enumerate(_piids))
       _vars = {'pIntServers': wintypes.LPVOID * len(_siids[0])}
       def __new__(cls, iid=0, *, _bnew=__new__):
@@ -2123,7 +2129,7 @@ class _PSImplMeta(type):
     namespace['__new__'] = mcls._new
     cls = super().__new__(mcls, name, (), namespace)
     if clsid:
-      _COMMeta._COMImplMeta._clsids[clsid] = cls
+      _COMImplMeta._clsids[clsid] = cls
     cls.proxy_impl = _COM_IRpcProxy_impl
     cls.proxy_impl.__qualname__ = '%s.%s' % (cls.__qualname__, '_COM_IRpcProxy_impl')
     cls.stub_impl = _COM_IRpcStub_impl
@@ -2213,7 +2219,7 @@ class _COM_IEnumUnknown(_COM_IUnknown):
       ppenum[0] = self.__class__(GUID('00000100-0000-0000-c000-000000000046'), items=self.items, index=self.index, container=self.container)
       return 0
 
-class _COM_IEnumUnknown_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumUnknown,)):
+class _COM_IEnumUnknown_impl(metaclass=_COMImplMeta, interfaces=(_COM_IEnumUnknown,)):
   def __new__(cls, iid=0, *, _bnew=__new__, items=(), index=0, container=None):
     return _bnew(cls, iid, cls._items.offset + len(items) * _COMMeta._psize, items=items, index=index, container=container)
   def __init__(self, *, items, index, container):
@@ -2299,7 +2305,7 @@ class _COM_IEnumInterface(_COM_IUnknown_aggregatable):
         return 0x80004003
       return 0 if pobj in self.items else 1
 
-class _COM_IEnumInterface_impl(metaclass=_COMMeta, interfaces=(_COM_IUnknown, _COM_IEnumInterface)):
+class _COM_IEnumInterface_impl(metaclass=_COMImplMeta, interfaces=(_COM_IUnknown, _COM_IEnumInterface)):
   def __new__(cls, iid=0, *, _bnew=__new__, iiid=_COMMeta._iid_iunknown, items=(), index=0, container=None):
     return _bnew(cls, iid, cls._items.offset + len(items) * _COMMeta._psize, iiid=GUID(iiid), items=items, index=index, container=container)
   def __init__(self, *, iiid, items, index, container):
@@ -2364,7 +2370,7 @@ class _COM_IEnumInterfaceFactory(_COM_IUnknown_aggregator):
   def _LockServer(cls, pI, fLock):
     return 0x80004001 if cls[pI] else 0x80004003
 
-class _COM_IEnumInterfaceFactory_impl(metaclass=_COMMeta, interfaces=(_COM_IEnumInterfaceFactory,)):
+class _COM_IEnumInterfaceFactory_impl(metaclass=_COMImplMeta, interfaces=(_COM_IEnumInterfaceFactory,)):
   CLSID = True
   def __new__(cls, iid=0, *, _bnew=__new__, iiid=_COMMeta._iid_iunknown, items=(), container=None):
     return _bnew(cls, iid, iiid=iiid, items=items, container=container)
@@ -9189,7 +9195,7 @@ class _COM_IFileSystemBindData(_COM_IUnknown):
       pjclsid[0] = self.jclsid
       return 0
 
-class _COM_IFileSystemBindData_impl(metaclass=_COMMeta, interfaces=(_COM_IFileSystemBindData,)):
+class _COM_IFileSystemBindData_impl(metaclass=_COMImplMeta, interfaces=(_COM_IFileSystemBindData,)):
   CLSID = True
 _COM_IFileSystemBindData._impl = _COM_IFileSystemBindData_impl
 
@@ -11141,7 +11147,7 @@ class _COM_IShellPropSheetExt(_COM_IUnknown, metaclass=_ISPSMeta):
         return 0x80004003
       return 0x80004001
 
-class _COM_IShellPropSheetExt_impl(metaclass=_COMMeta, interfaces=(_COM_IShellExtInit, _COM_IShellPropSheetExt)):
+class _COM_IShellPropSheetExt_impl(metaclass=_COMImplMeta, interfaces=(_COM_IShellExtInit, _COM_IShellPropSheetExt)):
   ThreadingModel = 'Apartment'
   Exts = ()
   def _destroy(self):
@@ -11449,7 +11455,7 @@ class _COM_IPropertyStoreCapabilities(_COM_IUnknown):
         return 0x80004003
       return 0 if pKey.contents.to_key() not in cls.ReadOnly else 1
 
-class _COM_IPropertyHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializePropertyStoreWithStream, _COM_IPropertyStoreDelegating, _COM_IPropertyStoreCapabilities)):
+class _COM_IPropertyHandler_impl(metaclass=_COMImplMeta, interfaces=(_COM_IInitializePropertyStoreWithStream, _COM_IPropertyStoreDelegating, _COM_IPropertyStoreCapabilities)):
   ThreadingModel = 'Apartment'
   Exts = ()
   ManualSafeSave = False
@@ -11717,7 +11723,7 @@ class _COM_IPreviewHandler(_COM_IUnknown, metaclass=_ISPHMeta):
         return 0x8000ffff
       return frame.TranslateAccelerator(pmsg)
 
-class _COM_IPreviewHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializePreviewHandlerWithStream, _COM_IPreviewHandlerWithFrame, _COM_IPreviewHandlerOleWindow, _COM_IPreviewHandlerVisuals, _COM_IPreviewHandler)):
+class _COM_IPreviewHandler_impl(metaclass=_COMImplMeta, interfaces=(_COM_IInitializePreviewHandlerWithStream, _COM_IPreviewHandlerWithFrame, _COM_IPreviewHandlerOleWindow, _COM_IPreviewHandlerVisuals, _COM_IPreviewHandler)):
   ThreadingModel = 'Apartment'
   Exts = ()
   def _destroy(self):
@@ -11801,7 +11807,7 @@ class _COM_IQueryInfoTip(_COM_IUnknown):
         self.loaded = r == 0
       return shl.SHStrDupW(ctypes.create_unicode_buffer(' | '.join(self.tip.splitlines())) if dwFlags & 'SingleLine' else wintypes.LPCWSTR.from_buffer(self, self.__class__.tip.offset), ppwszTip)
 
-class _COM_IInfoTipHandler_impl(metaclass=_COMMeta, interfaces=(_COM_IInitializeInfoTipWithStream, _COM_IQueryInfoTip)):
+class _COM_IInfoTipHandler_impl(metaclass=_COMImplMeta, interfaces=(_COM_IInitializeInfoTipWithStream, _COM_IQueryInfoTip)):
   ThreadingModel = 'Apartment'
   Exts = ()
   def _destroy(self):
@@ -11839,7 +11845,7 @@ def DllGetClassObject(rclsid, riid, ppv):
   if not rclsid or not riid:
     arg = None
     ISetLastError(0x80004003)
-  elif (arg := _COMMeta._COMImplMeta._clsids.get(GUID(UUID.from_address(rclsid)))) is None:
+  elif (arg := _COMImplMeta._clsids.get(GUID(UUID.from_address(rclsid)))) is None:
     ISetLastError(0x80040154)
   wintypes.LPVOID.from_address(ppv).value = arg and (_COM_IPSFactoryBuffer_impl(iid, ps_impl=arg) if (iid := UUID.from_address(riid)) == _COMMeta._iid_ipsfactorybuffer else _COM_IClassFactory_impl(iid, impl=arg))
   return ctypes.get_last_error()
@@ -11858,7 +11864,7 @@ class COMRegistration:
     return token
   @classmethod
   def RegisterCOMFactory(cls, icls_impl, context=1):
-    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta) or (clsid := getattr(impl, 'CLSID', None)) is None:
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMImplMeta) or (clsid := getattr(impl, 'CLSID', None)) is None:
       ISetLastError(0x80040154)
       return None
     return cls._RegisterFactory(clsid, PCOM(_COM_IClassFactory_impl(_COMMeta._iid_iunknown, impl=impl)), context)
@@ -11879,7 +11885,7 @@ class COMRegistration:
     return _IUtil.CoRegisterPSClsid(icls_ps_impl.IID, clsid) if isinstance(icls_ps_impl, _IMeta) else ({iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in icls_ps_impl._iids if iid != _COMMeta._iid_iunknown} if isinstance(icls_ps_impl, _COMMeta) else {iid: _IUtil.CoRegisterPSClsid(iid, clsid) for iid in icls_ps_impl.stub_impl._siids[0]})
   @classmethod
   def RegisterWholeClass(cls, clsid_impl, context=1):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return None
     if (to := COMRegistration.RegisterCOMFactory(impl, context)) is None:
       return None
@@ -11926,7 +11932,7 @@ class COMRegistration:
       return False
   @classmethod
   def RegistryAddCOMFactory(cls, icls_impl, user=True, local=False):
-    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMImplMeta):
       return False
     return cls._RegistryAddFactory(getattr(impl, 'CLSID', None), impl._cname, user, getattr(sys.modules.get(icls_impl.__module__), '__file__', 'wic.py'), local=local, model=getattr(impl, 'ThreadingModel', 'Both'))
   @classmethod
@@ -11958,7 +11964,7 @@ class COMRegistration:
       return False
   @classmethod
   def RegistryRemoveCOMFactory(cls, icls_impl, user=True):
-    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMMeta._COMImplMeta):
+    if not isinstance((impl := icls_impl._impl if isinstance(icls_impl, (_IMeta, _COMMeta)) else icls_impl), _COMImplMeta):
       return False
     return cls._RegistryRemoveFactory(getattr(impl, 'CLSID', None), user)
   @classmethod
@@ -12003,7 +12009,7 @@ class COMRegistration:
     return r[iid] if isinstance(icls_ps_impl, _IMeta) else r
   @classmethod
   def RegistryAddWholeClass(cls, clsid_impl, user=True, local=False):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if not COMRegistration.RegistryAddCOMFactory(impl, user, local):
       return False
@@ -12024,7 +12030,7 @@ class COMRegistration:
     return True
   @classmethod
   def RegistryRemoveWholeClass(cls, clsid_impl, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     r = COMRegistration.RegistryRemoveCOMFactory(impl, user)
     ps = set()
@@ -12043,7 +12049,7 @@ class COMRegistration:
   @classmethod
   def _get_module(cls):
     if (f := getattr(sys, '_getframemodulename', None)) is None:
-      return None if (f := getattr(sys, '_getframe', None)) is None or (f := getattr(f(2), 'f_globals', None)) is None else f.get('__name__') or cls.__module__ or '__main__'
+      return (None if (f := getattr(sys, '_getframe', None)) is None or (f := getattr(f(2), 'f_globals', None)) is None else f.get('__name__')) or cls.__module__ or '__main__'
     else:
       return f(2) or cls.__module__ or '__main__'
   @classmethod
@@ -12053,7 +12059,7 @@ class COMRegistration:
         return None
     elif not isinstance(module, str):
       module = getattr(module, '__name__', None) or '__main__'
-    return {clsid: impl for clsid, impl in _COMMeta._COMImplMeta._clsids.items() if isinstance(impl, _COMMeta._COMImplMeta) and impl.__module__ == module}
+    return {clsid: impl for clsid, impl in _COMImplMeta._clsids.items() if isinstance(impl, _COMImplMeta) and impl.__module__ == module}
   @classmethod
   def RegisterModuleClasses(cls, module=None, context=1):
     if (module is None and (module := cls._get_module()) is None) or (rc := cls.GetModuleRegisterableClasses(module)) is None:
@@ -12077,7 +12083,7 @@ class COMRegistration:
       return {clsid: cls.RegistryRemoveWholeClass(impl, user) for clsid, impl in rc.items()}
   @classmethod
   def RegistryAddShellPropSheetHandler(cls, clsid_impl, name, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
       return False
@@ -12097,7 +12103,7 @@ class COMRegistration:
     return r
   @classmethod
   def RegistryRemoveShellPropSheetHandler(cls, clsid_impl, name, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (exts := getattr(impl, 'Exts', None)) is None:
       return False
@@ -12121,7 +12127,7 @@ class COMRegistration:
     return bool(_PSUtil.PSUnregisterPropertySchema(path))
   @classmethod
   def RegistryAddPropertyHandler(cls, clsid_impl, full_details='+', preview_details='+', info_tip='+', content_layout='', content_mode_browse='', content_mode_search='', user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (clsid := getattr(impl, 'CLSID', None)) is None:
       return False
@@ -12172,7 +12178,7 @@ class COMRegistration:
     return r
   @classmethod
   def RegistryRemovePropertyHandler(cls, clsid_impl, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (clsid := getattr(impl, 'CLSID', None)) is None:
       return False
@@ -12210,16 +12216,21 @@ class COMRegistration:
     adm = adm.value if advapi32.CheckTokenMembership(None, pag, (adm := wintypes.BOOLE())) else None
     advapi32.FreeSid(pag)
     return adm
-  @staticmethod
-  def RunAsAdmin():
-    if not (sh32.ShellExecuteExW(exinf := WSEXECUTEINFO('NoCloseProcess | NoUI | NoConsole', Window.GetConsoleWindow(), 'runas', sys.executable, ' '.join('"%s"' % a.replace('"', '"""') for a in sys.argv))) and (hp := exinf.hProcess)):
+  @classmethod
+  def RunAsAdmin(cls):
+    if (module := sys.modules.get(cls._get_module())) and getattr(module, '__name__', None) != '__main__' and (file := getattr(module, '__file__', None)):
+      argv = sys.argv.copy()
+      argv[0] = os.path.abspath(file)
+    else:
+      argv = sys.argv
+    if not (sh32.ShellExecuteExW(exinf := WSEXECUTEINFO('NoCloseProcess | NoUI | NoConsole', Window.GetConsoleWindow(), 'runas', sys.executable, ' '.join('"%s"' % a.replace('"', '"""') for a in argv))) and (hp := exinf.hProcess)):
       return None
     r = r.value if kernel32.WaitForSingleObject(hp, 0xffffffff) == 0 and kernel32.GetExitCodeProcess(hp, (r := wintypes.DWORD())) else None
     kernel32.CloseHandle(hp)
     return r
   @classmethod
   def RegistryAddPreviewHandler(cls, clsid_impl, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (clsid := getattr(impl, 'CLSID', None)) is None:
       return False
@@ -12250,7 +12261,7 @@ class COMRegistration:
     return r
   @classmethod
   def RegistryRemovePreviewHandler(cls, clsid_impl, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (clsid := getattr(impl, 'CLSID', None)) is None:
       return False
@@ -12279,7 +12290,7 @@ class COMRegistration:
     return r
   @classmethod
   def RegistryAddInfoTipHandler(cls, clsid_impl, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
       return False
@@ -12299,7 +12310,7 @@ class COMRegistration:
     return r
   @classmethod
   def RegistryRemoveInfoTipHandler(cls, clsid_impl, user=True):
-    if not isinstance((impl := clsid_impl), _COMMeta._COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(clsid_impl)), _COMMeta._COMImplMeta)):
+    if not isinstance((impl := clsid_impl), _COMImplMeta) and ((clsid_impl := GUID.from_try(clsid_impl)) is None or not isinstance((impl := _COMImplMeta._clsids.get(clsid_impl)), _COMImplMeta)):
       return False
     if (exts := getattr(impl, 'Exts', None)) is None or (clsid := getattr(impl, 'CLSID', None)) is None:
       return False
@@ -12686,7 +12697,7 @@ class COMSharing:
     Initialize()
     lpMsg = ctypes.byref(wintypes.MSG())
     Window.PeekMessage(lpMsg, None, 0, 0, 0)
-    if isinstance(icls_impl, _COMMeta._COMImplMeta):
+    if isinstance(icls_impl, _COMImplMeta):
       if (tokens := COMRegistration.RegisterWholeClass(icls_impl, 4)) is None:
         Uninitialize()
         sys.exit(1)
@@ -12709,10 +12720,13 @@ class COMSharing:
   MapViewOfFile = _IUtil._wrap('MapViewOfFile', (wintypes.LPVOID, 0), (wintypes.HANDLE, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.DWORD, 1), (wintypes.SIZE_T, 1), p=kernel32)
   UnmapViewOfFile = _IUtil._wrap('UnmapViewOfFile', (wintypes.BOOLE, 0), (wintypes.LPVOID, 1), p=kernel32)
 
+
+__all__ = tuple(n for n in dir() if not n.startswith('__'))
+
 if len(sys.argv) == 3 and sys.argv[-1] == '-Embedding':
   if __name__ != '__main__':
     sys.modules['__main__'].__loader__.exec_module(sys.modules['__main__'])
-  if not isinstance((impl := _COMMeta._COMImplMeta._clsids.get(GUID(sys.argv[1]))), _COMMeta._COMImplMeta):
+  if not isinstance((impl := _COMImplMeta._clsids.get(GUID(sys.argv[1]))), _COMImplMeta):
     sys.exit(1)
   COMSharing.LocalServer(impl)
   sys.exit(0)
