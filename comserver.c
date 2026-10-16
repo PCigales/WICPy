@@ -7,180 +7,91 @@
 PyObject *py_wmod = NULL;
 INT py_ini = 1;
 
-HRESULT DLLEXPORT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv) {
-  LPOLESTR pclsid;
-  if (! py_wmod || StringFromCLSID(rclsid, &pclsid)) {return E_FAIL;}
-  if (wcslen(pclsid) != 38) {
-    CoTaskMemFree(pclsid);
-    return E_FAIL;
-  }
-  WCHAR rpath[60] = L"CLSID\\                                      \\InprocServer32";
-  wcsncpy(rpath + 6, pclsid, 38);
-  CoTaskMemFree(pclsid);
-  WCHAR *mpath = NULL;
-  DWORD msize = 0;
-  if (! RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, NULL, &msize) && msize) {
-    if (mpath = (WCHAR*) malloc(msize)) {
-      if (RegGetValueW(HKEY_CLASSES_ROOT, rpath, L"PyModule", RRF_RT_REG_SZ, NULL, mpath, &msize)) {
-        free(mpath);
-        return E_FAIL;
-      }
-    } else {return E_FAIL;}
-  }
-  PyGILState_STATE state = PyGILState_Ensure();
-  PyObject *py_mod = NULL;
-  if (mpath) {
-    WCHAR *mname = wcsrchr(mpath, L'\\');
-    if (mname) {
-      *(mname++) = 0;
-    } else {
-      mname = mpath;
-    }
-    WCHAR *mext = wcsrchr(mname, L'.');
-    if (mext && ! _wcsicmp(mext, L".py")) {
-      *mext = 0;
-    }
-    PyObject *py_mname = PyUnicode_FromWideChar(mname, -1);
-    if (py_mname && ! (py_mod = PyImport_GetModule(py_mname)) && ! PyErr_Occurred()) {
-      if (mname != mpath) {
-        PyObject *py_path = PySys_GetObject("path");
-        PyObject *py_mpath = PyUnicode_FromWideChar(mpath, -1);
-        if (py_path && py_mpath) {
-          if (! PySequence_Contains(py_path, py_mpath)) {
-            PyList_Append(py_path, py_mpath);
-          }
-          py_mod = PyImport_Import(py_mname);
-        }
-        Py_XDECREF(py_mpath);
-      } else {
-        py_mod = PyImport_Import(py_mname);
-      }
-    }
-    free(mpath);
-    if (! py_mod) {
-      PyErr_Clear();
-      PyGILState_Release(state);
-      return E_FAIL;
-    }
-  }
-  Py_XDECREF(py_mod);
-  PyObject *py_func = PyObject_GetAttrString(py_wmod, "DllGetClassObject");
-  if (! (py_func )) {
-    PyErr_Clear();
-    PyGILState_Release(state);
-    return E_FAIL;
-  }
+#define FUNC1(name) \
+  if (! py_wmod) {return E_FAIL;} \
+  PyGILState_STATE state = PyGILState_Ensure(); \
+  PyObject *py_func = PyObject_GetAttrString(py_wmod, name); \
+  if (! (py_func )) { \
+    PyErr_Clear(); \
+    PyGILState_Release(state); \
+    return E_FAIL; \
+  } \
   long res = E_FAIL;
+
+#define FUNC_ \
+  if (py_res) { \
+    res = PyLong_AsLong(py_res); \
+    if (PyErr_Occurred()) { \
+      PyErr_Clear(); \
+      res = E_FAIL; \
+    } \
+    Py_DECREF(py_res); \
+  }
+
+#define FUNC2 \
+    FUNC_ \
+  } else { \
+    PyErr_Clear(); \
+  } \
+  Py_DECREF(py_func); \
+
+#define FUNC3 \
+  PyGILState_Release(state); \
+  return res;
+
+#define FUNC4 \
+  FUNC_ \
+  Py_DECREF(py_func); \
+  FUNC3
+
+HRESULT DLLEXPORT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv) {
+  FUNC1("DllGetClassObject")
   PyObject *py_rclsid = PyLong_FromVoidPtr((void*) rclsid);
   PyObject *py_riid = PyLong_FromVoidPtr((void*) riid);
   PyObject *py_ppv = PyLong_FromVoidPtr(ppv);
   if (py_rclsid && py_riid && py_ppv) {
     PyObject *py_res = PyObject_CallFunctionObjArgs(py_func, py_rclsid, py_riid, py_ppv, NULL);
-    if (py_res) {
-      res = PyLong_AsLong(py_res);
-      if (PyErr_Occurred()) {
-        PyErr_Clear();
-        res = E_FAIL;
-      }
-      Py_DECREF(py_res);
-    }
-  } else {
-    PyErr_Clear();
-  }
-  Py_DECREF(py_func);
+    FUNC2
   Py_XDECREF(py_rclsid);
   Py_XDECREF(py_riid);
   Py_XDECREF(py_ppv);
-  PyGILState_Release(state);
-  return res;
+  FUNC3
+}
+
+HRESULT WINAPI _call(const CHAR *name) {
+  FUNC1(name)
+  PyObject *py_res = PyObject_CallNoArgs(py_func);
+  FUNC4
 }
 
 HRESULT DLLEXPORT WINAPI DllCanUnloadNow(void) {
-  if (! py_wmod) {return E_FAIL;}
-  PyGILState_STATE state = PyGILState_Ensure();
-  PyObject *py_func = PyObject_GetAttrString(py_wmod, "DllCanUnloadNow");
-  if (! py_func) {
-    PyErr_Clear();
-    PyGILState_Release(state);
-    return E_FAIL;
-  }
-  long res = E_FAIL;
+  FUNC1("DllCanUnloadNow")
   PyObject *py_res = PyObject_CallNoArgs(py_func);
-  if (py_res) {
-    res = PyLong_AsLong(py_res);
-    if (PyErr_Occurred()) {
-      PyErr_Clear();
-      res = E_FAIL;
-    }
-    Py_DECREF(py_res);
-  }
-  Py_DECREF(py_func);
-  PyGILState_Release(state);
-  return res;
-}
-
-HRESULT WINAPI _dll_ru(const CHAR *name) {
-  if (! py_wmod) {return E_FAIL;}
-  PyGILState_STATE state = PyGILState_Ensure();
-  PyObject *py_func = PyObject_GetAttrString(py_wmod, name);
-  if (! (py_func )) {
-    PyErr_Clear();
-    PyGILState_Release(state);
-    return E_FAIL;
-  }
-  long res = E_FAIL;
-  PyObject *py_res = PyObject_CallFunctionObjArgs(py_func, NULL);
-  if (py_res) {
-    res = PyLong_AsLong(py_res);
-    if (PyErr_Occurred()) {
-      PyErr_Clear();
-      res = E_FAIL;
-    }
-    Py_DECREF(py_res);
-  }
-  Py_DECREF(py_func);
-  PyGILState_Release(state);
-  return res;
+  FUNC4
 }
 
 HRESULT DLLEXPORT WINAPI DllRegisterServer() {
-  return _dll_ru("DllRegisterServer");
+  FUNC1("DllRegisterServer")
+  PyObject *py_res = PyObject_CallNoArgs(py_func);
+  FUNC4
 }
 
 HRESULT DLLEXPORT WINAPI DllUnregisterServer() {
-  return _dll_ru("DllUnregisterServer");
+  FUNC1("DllUnregisterServer")
+  PyObject *py_res = PyObject_CallNoArgs(py_func);
+  FUNC4
 }
 
 HRESULT DLLEXPORT WINAPI DllInstall(BOOL bInstall, PCWSTR pszCmdLine) {
-  if (! py_wmod) {return E_FAIL;}
-  PyGILState_STATE state = PyGILState_Ensure();
-  PyObject *py_func = PyObject_GetAttrString(py_wmod, "DllInstall");
-  if (! (py_func )) {
-    PyErr_Clear();
-    PyGILState_Release(state);
-    return E_FAIL;
-  }
-  long res = E_FAIL;
+  FUNC1("DllInstall")
   PyObject *py_bInstall = PyLong_FromInt32(bInstall);
   PyObject *py_pszCmdLine = PyLong_FromVoidPtr((void*) pszCmdLine);
   if (py_bInstall && py_pszCmdLine) {
     PyObject *py_res = PyObject_CallFunctionObjArgs(py_func, py_bInstall, py_pszCmdLine, NULL);
-    if (py_res) {
-      res = PyLong_AsLong(py_res);
-      if (PyErr_Occurred()) {
-        PyErr_Clear();
-        res = E_FAIL;
-      }
-      Py_DECREF(py_res);
-    }
-  } else {
-    PyErr_Clear();
-  }
-  Py_DECREF(py_func);
+    FUNC2
   Py_XDECREF(py_bInstall);
   Py_XDECREF(py_pszCmdLine);
-  PyGILState_Release(state);
-  return res;
+  FUNC3
 }
 
 BOOL WINAPI DllMain(const HINSTANCE hinstDLL, const DWORD fdwReason, const LPVOID lpvReserved ) {

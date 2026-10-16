@@ -11845,8 +11845,23 @@ def DllGetClassObject(rclsid, riid, ppv):
   if not rclsid or not riid:
     arg = None
     ISetLastError(0x80004003)
-  elif (arg := _COMImplMeta._clsids.get(GUID(UUID.from_address(rclsid)))) is None:
-    ISetLastError(0x80040154)
+  elif (arg := _COMImplMeta._clsids.get(clsid := GUID(UUID.from_address(rclsid)))) is None:
+    try:
+      key = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r'CLSID\{%s}\InprocServer32' % clsid)
+      mpath = winreg.QueryValueEx(key, 'PyModule')[0]
+      if (mname := os.path.splitext(os.path.split(mpath)[1])[0]) and mname not in sys.modules:
+        spec = importlib.util.spec_from_file_location(mname, mpath)
+        spec.loader.exec_module(sys.modules.setdefault(mname, importlib.util.module_from_spec(spec)))
+        arg = _COMImplMeta._clsids.get(clsid)
+    except:
+      pass
+    finally:
+      try:
+        winreg.CloseKey(key)
+      except:
+        pass
+    if arg is None:
+      ISetLastError(0x80040154)
   wintypes.LPVOID.from_address(ppv).value = arg and (_COM_IPSFactoryBuffer_impl(iid, ps_impl=arg) if (iid := UUID.from_address(riid)) == _COMMeta._iid_ipsfactorybuffer else _COM_IClassFactory_impl(iid, impl=arg))
   return ctypes.get_last_error()
 def DllCanUnloadNow():
