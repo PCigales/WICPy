@@ -39,7 +39,9 @@ INT py_ini = 1;
   PyGILState_Release(state); \
   return res;
 
-#define FUNC4 \
+#define FUNC4(name) \
+  FUNC1(name) \
+  PyObject *py_res = PyObject_CallNoArgs(py_func); \
   FUNC_ \
   Py_DECREF(py_func); \
   FUNC3
@@ -58,28 +60,16 @@ HRESULT DLLEXPORT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID 
   FUNC3
 }
 
-HRESULT WINAPI _call(const CHAR *name) {
-  FUNC1(name)
-  PyObject *py_res = PyObject_CallNoArgs(py_func);
-  FUNC4
-}
-
 HRESULT DLLEXPORT WINAPI DllCanUnloadNow(void) {
-  FUNC1("DllCanUnloadNow")
-  PyObject *py_res = PyObject_CallNoArgs(py_func);
-  FUNC4
+  FUNC4("DllCanUnloadNow")
 }
 
 HRESULT DLLEXPORT WINAPI DllRegisterServer() {
-  FUNC1("DllRegisterServer")
-  PyObject *py_res = PyObject_CallNoArgs(py_func);
-  FUNC4
+  FUNC4("DllRegisterServer")
 }
 
 HRESULT DLLEXPORT WINAPI DllUnregisterServer() {
-  FUNC1("DllUnregisterServer")
-  PyObject *py_res = PyObject_CallNoArgs(py_func);
-  FUNC4
+  FUNC4("DllUnregisterServer")
 }
 
 HRESULT DLLEXPORT WINAPI DllInstall(BOOL bInstall, PCWSTR pszCmdLine) {
